@@ -1,0 +1,234 @@
+@import "tailwindcss";
+
+:root {
+  --background: 3 8 20;
+  --foreground: 255 255 255;
+
+  --card: 7 13 28;
+  --card-soft: 10 18 38;
+
+  --gold: 212 175 55;
+  --gold-soft: 252 198 106;
+  --navy: 3 8 20;
+  --navy-soft: 9 17 35;
+
+  --muted: 148 163 184;
+  --border-gold: 212 175 55;
+}
+
+@font-face {
+  font-family: "Eagle Horizon";
+  src: url("/fonts/EagleHorizon.ttf") format("truetype");
+  font-weight: normal;
+  font-style: normal;
+}
+
+body {
+  background:
+    radial-gradient(circle at top right, rgba(212, 175, 55, 0.12), transparent 32%),
+    radial-gradient(circle at top left, rgba(252, 198, 106, 0.06), transparent 28%),
+    rgb(var(--background));
+  color: rgb(var(--foreground));
+}
+
+.gold-gradient-text {
+  background: linear-gradient(135deg, #fcd36a, #d4af37, #fff2b8);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.gold-glow {
+  box-shadow: 0 0 35px rgba(212, 175, 55, 0.16);
+}
+
+.luxe-card {
+  border: 1px solid rgba(212, 175, 55, 0.22);
+  background:
+    radial-gradient(circle at top right, rgba(212, 175, 55, 0.1), transparent 35%),
+    rgba(7, 13, 28, 0.88);
+}
+.hajj-focus-mode body {
+  background: #000;
+}
+
+.hajj-focus-mode main > *:not(:has(#guided-mode)) {
+  opacity: 0.28;
+  filter: blur(1px);
+}
+
+@media print {
+  .fixed {
+    display: none !important;
+  }
+}
+
+.umrah-focus-mode body {
+  background: #000;
+}
+
+.umrah-focus-mode main > *:not(:has(#guided-umrah)) {
+  opacity: 0.28;
+  filter: blur(1px);
+}
+
+@media print {
+  .fixed {
+    display: none !important;
+  }
+}
+
+html {
+  background: #020826;
+}
+
+body {
+  background:
+    radial-gradient(circle at top, rgba(212, 175, 55, 0.08), transparent 30%),
+    #020826;
+}
+
+.luxe-card {
+  border: 1px solid rgba(212, 175, 55, 0.22);
+  background:
+    radial-gradient(circle at top right, rgba(212, 175, 55, 0.1), transparent 35%),
+    rgba(6, 21, 58, 0.72);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 0 40px rgba(212, 175, 55, 0.08);
+}
+
+.luxe-card-soft {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(2, 8, 38, 0.5);
+  backdrop-filter: blur(14px);
+}
+
+.luxe-button {
+  border-radius: 1rem;
+  background: linear-gradient(90deg, #d4af37, #f7d774);
+  padding: 0.75rem 1.25rem;
+  font-weight: 700;
+  color: #050505;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease;
+}
+
+.luxe-button:hover {
+  transform: scale(1.02);
+  box-shadow: 0 0 25px rgba(255, 215, 0, 0.35);
+}
+
+.luxe-button-outline {
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  border-radius: 1rem;
+  background: rgba(2, 8, 38, 0.55);
+  padding: 0.75rem 1.25rem;
+  font-weight: 700;
+  color: #facc15;
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+}
+
+.luxe-button-outline:hover {
+  border-color: rgba(250, 204, 21, 0.75);
+  background: rgba(212, 175, 55, 0.1);
+  color: #fde68a;
+}
+
+.gold-gradient-text {
+  background: linear-gradient(135deg, #fcd36a, #d4af37, #fff2b8);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #020826;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.5);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 175, 55, 0.8);
+}
+
+.white-soft-glow {
+  text-shadow:
+    0 0 10px rgba(255,255,255,0.15),
+    0 0 30px rgba(255,255,255,0.08),
+    0 0 60px rgba(212,175,55,0.10);
+}
+
+.dashboard-hero-glow {
+  text-shadow:
+    0 0 10px rgba(255,255,255,0.08),
+    0 0 24px rgba(255,255,255,0.05),
+    0 0 40px rgba(212,175,55,0.08);
+}
+
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  header,
+  nav,
+  footer,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  section {
+    border: none !important;
+    background: white !important;
+    color: black !important;
+    box-shadow: none !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 10px !important;
+  }
+
+  th,
+  td {
+    border: 1px solid #222 !important;
+    padding: 5px !important;
+    color: black !important;
+    background: white !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tr {
+    break-inside: avoid !important;
+  }
+
+  .luxe-card,
+  .luxe-card-soft {
+    background: white !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+}

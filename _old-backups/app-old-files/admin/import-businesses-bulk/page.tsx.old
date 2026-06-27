@@ -1,0 +1,11 @@
+import BulkImportBusinessesPanel from "@/components/BulkImportBusinessesPanel";
+
+export const revalidate = 0;
+
+export default function ImportBusinessesBulkPage() {
+  return (
+    <div className="space-y-8">
+      <BulkImportBusinessesPanel />
+    </div>
+  );
+}
