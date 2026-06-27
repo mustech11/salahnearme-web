@@ -7,3 +7,7 @@ dist/
 *.log
 .vercel/
 .DS_Store
+_old-backups/
+*.bak
+type-errors.txt
+tsconfig.tsbuildinfo
