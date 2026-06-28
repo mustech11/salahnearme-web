@@ -67,23 +67,11 @@ type CityRow = {
   longitude?: number | null;
 };
 
-type PrayerTimesRow = PrayerTimesResult;
-
-type PrayerTimesOverrideRow = PrayerTimesRow & {
+type PrayerTimesOverrideRow = Partial<PrayerTimesResult> & {
   created_at?: string | null;
 };
 
-type HadithRow = {
-  id: string;
-  collection?: string | null;
-  provider?: string | null;
-  external_id?: string | null;
-  arabic_text?: string | null;
-  english_text?: string | null;
-  text?: string | null;
-  translation_text?: string | null;
-  source?: string | null;
-};
+type HadithRecord = Record<string, unknown>;
 
 type StatCardProps = {
   label: string;
@@ -91,56 +79,110 @@ type StatCardProps = {
   helper: string;
 };
 
-function getHadithText(hadith: HadithRow | null) {
-  if (!hadith) {
-    return null;
-  }
-
-  return (
-    hadith.english_text ||
-    hadith.translation_text ||
-    hadith.text ||
-    hadith.arabic_text ||
-    null
-  );
+function cleanString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
-function getHadithSource(hadith: HadithRow | null) {
-  if (!hadith) {
+function getFirstTextValue(record: HadithRecord | null, keys: string[]) {
+  if (!record) {
     return null;
   }
 
-  if (hadith.source) {
-    return hadith.source;
+  for (const key of keys) {
+    const value = cleanString(record[key]);
+
+    if (value) {
+      return value;
+    }
   }
 
-  const collection = hadith.collection?.replace(/_/g, " ");
+  return null;
+}
 
-  if (collection && hadith.external_id) {
-    return `${collection} · ${hadith.external_id}`;
+function getHadithText(hadith: HadithRecord | null) {
+  return getFirstTextValue(hadith, [
+    "english_text",
+    "translation_text",
+    "translation",
+    "english",
+    "hadith",
+    "body",
+    "content",
+    "narration",
+    "arabic_text",
+    "arabic",
+  ]);
+}
+
+function getHadithSource(hadith: HadithRecord | null) {
+  if (!hadith) {
+    return "Hadith";
+  }
+
+  const source = cleanString(hadith.source);
+  const reference = cleanString(hadith.reference);
+  const book = cleanString(hadith.book);
+  const collection = cleanString(hadith.collection).replace(/_/g, " ");
+  const provider = cleanString(hadith.provider);
+  const externalId = cleanString(hadith.external_id);
+
+  if (source) {
+    return source;
+  }
+
+  if (reference) {
+    return reference;
+  }
+
+  if (book && externalId) {
+    return `${book} · ${externalId}`;
+  }
+
+  if (collection && externalId) {
+    return `${collection} · ${externalId}`;
+  }
+
+  if (book) {
+    return book;
   }
 
   if (collection) {
     return collection;
   }
 
-  if (hadith.provider) {
-    return hadith.provider;
+  if (provider) {
+    return provider;
   }
 
   return "Hadith";
 }
 
+function isValidCityRow(value: unknown): value is CityRow {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const row = value as Partial<CityRow>;
+
+  return (
+    typeof row.id === "number" &&
+    typeof row.slug === "string" &&
+    row.slug.trim().length > 0 &&
+    typeof row.name === "string" &&
+    row.name.trim().length > 0
+  );
+}
+
 function StatCard({ label, value, helper }: StatCardProps) {
   return (
-    <div className="rounded-3xl border border-yellow-500/20 bg-[#050B1A]/80 p-6">
+    <div className="rounded-3xl border border-yellow-500/20 bg-[#050B1A]/80 p-6 shadow-xl shadow-black/20">
       <div className="text-xs font-bold uppercase tracking-[0.35em] text-yellow-400">
         {label}
       </div>
 
       <div className="mt-4 text-4xl font-black text-white">{value}</div>
 
-      <p className="mt-2 text-sm text-white/60">{helper}</p>
+      <p className="mt-2 text-sm leading-6 text-white/60">{helper}</p>
     </div>
   );
 }
@@ -153,7 +195,7 @@ function FeatureCard({
   description: string;
 }) {
   return (
-    <div className="rounded-3xl border border-yellow-500/20 bg-[#050B1A]/80 p-6">
+    <div className="rounded-3xl border border-yellow-500/20 bg-[#050B1A]/80 p-6 shadow-xl shadow-black/20">
       <h3 className="text-xl font-black text-yellow-400">{title}</h3>
 
       <p className="mt-3 text-sm leading-7 text-white/70">{description}</p>
@@ -161,10 +203,7 @@ function FeatureCard({
   );
 }
 
-async function getSelectedCity(
-  cities: CityRow[],
-  selectedCitySlug: string | null
-) {
+function getSelectedCity(cities: CityRow[], selectedCitySlug: string | null) {
   if (!selectedCitySlug) {
     return null;
   }
@@ -205,12 +244,12 @@ async function getPrayerTimesForSelectedCity(selectedCity: CityRow | null) {
 
     return {
       prayerTimes: {
-        fajr_start: override.fajr_start,
-        sunrise: override.sunrise,
-        dhuhr_start: override.dhuhr_start,
-        asr_start: override.asr_start,
-        maghrib_start: override.maghrib_start,
-        isha_start: override.isha_start,
+        fajr_start: override.fajr_start ?? null,
+        sunrise: override.sunrise ?? null,
+        dhuhr_start: override.dhuhr_start ?? null,
+        asr_start: override.asr_start ?? null,
+        maghrib_start: override.maghrib_start ?? null,
+        isha_start: override.isha_start ?? null,
       },
       prayerTimesSource: "manual_override" as const,
       prayerTimesUpdatedAt: override.created_at ?? null,
@@ -235,9 +274,7 @@ async function getDailyHadith() {
 
   const { data: hadithRows, error } = await supabase
     .from("hadiths")
-    .select(
-      "id,collection,provider,external_id,arabic_text,english_text,text,translation_text,source"
-    )
+    .select("*")
     .limit(200);
 
   if (error) {
@@ -245,14 +282,21 @@ async function getDailyHadith() {
     return null;
   }
 
-  if (!hadithRows || hadithRows.length === 0) {
+  const rows = (hadithRows ?? []) as HadithRecord[];
+
+  if (rows.length === 0) {
     return null;
   }
 
-  const rows = hadithRows as HadithRow[];
+  const usableRows = rows.filter((row) => Boolean(getHadithText(row)));
+
+  if (usableRows.length === 0) {
+    return null;
+  }
+
   const todayIndex = Math.floor(Date.now() / 86400000);
 
-  return rows[todayIndex % rows.length] ?? null;
+  return usableRows[todayIndex % usableRows.length] ?? null;
 }
 
 export default async function Home() {
@@ -277,11 +321,9 @@ export default async function Home() {
     );
   }
 
-  const cityList = ((cities ?? []) as CityRow[]).filter((city) => {
-    return Boolean(city.slug && city.name);
-  });
+  const cityList = ((cities ?? []) as unknown[]).filter(isValidCityRow);
 
-  const selectedCity = await getSelectedCity(cityList, selectedCitySlug);
+  const selectedCity = getSelectedCity(cityList, selectedCitySlug);
 
   const { prayerTimes, prayerTimesSource, prayerTimesUpdatedAt } =
     await getPrayerTimesForSelectedCity(selectedCity);
@@ -502,9 +544,7 @@ export default async function Home() {
             : "Daily hadith will appear here soon."}
         </p>
 
-        <div className="mt-4 text-sm text-white/60">
-          {hadithSource ?? "Hadith"}
-        </div>
+        <div className="mt-4 text-sm text-white/60">{hadithSource}</div>
       </section>
 
       <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
