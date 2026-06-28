@@ -1,26 +1,43 @@
 import "./globals.css";
+
 import type { Metadata, Viewport } from "next";
-import Link from "next/link";
-import Nav from "@/components/Nav";
-import InstallAppPrompt from "@/components/InstallAppPrompt";
-import { supabasePublic } from "@/lib/supabaseServer";
 import { Sora } from "next/font/google";
+import Link from "next/link";
+import type { ReactNode } from "react";
+
+import InstallAppPrompt from "@/components/InstallAppPrompt";
+import Nav from "@/components/Nav";
+import { supabasePublic } from "@/lib/supabaseServer";
 
 const siteName = "SalahNearMe";
-const siteDescription =
-  "Find mosques, halal businesses, prayer times, Hajj guides, Umrah guides, and Muslim travel essentials.";
 
-  const sora = Sora({
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ||
+  process.env.NEXT_PUBLIC_APP_URL ||
+  "https://www.salahnearme.com";
+
+const cleanSiteUrl = siteUrl.replace(/\/+$/, "");
+
+const siteDescription =
+  "Find mosques near you, prayer times, iqamah times, halal businesses, Hajj guides, Umrah guides, and Muslim travel essentials with SalahNearMe.";
+
+const sora = Sora({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700", "800"],
   variable: "--font-sora",
+  display: "swap",
 });
 
+type CityNavRow = {
+  slug: string;
+  name: string;
+};
+
 export const metadata: Metadata = {
-  metadataBase: new URL("https://www.salahnearme.com"),
+  metadataBase: new URL(cleanSiteUrl),
 
   title: {
-    default: siteName,
+    default: "SalahNearMe | Mosques, Prayer Times & Halal Businesses Near You",
     template: `%s | ${siteName}`,
   },
 
@@ -28,18 +45,63 @@ export const metadata: Metadata = {
 
   keywords: [
     "mosques near me",
-    "halal businesses",
-    "prayer times",
+    "mosque near me",
+    "masjid near me",
+    "prayer times near me",
     "iqamah times",
-    "Islamic travel",
+    "jamaat times",
+    "halal restaurants near me",
+    "halal businesses",
+    "Muslim travel",
     "Hajj guide",
     "Umrah guide",
     "Islamic directory",
+    "SalahNearMe",
   ],
+
+  authors: [
+    {
+      name: siteName,
+      url: cleanSiteUrl,
+    },
+  ],
+
+  creator: siteName,
+  publisher: siteName,
+  applicationName: siteName,
+  generator: "Next.js",
+
+  alternates: {
+    canonical: "/",
+  },
 
   manifest: "/manifest.json",
 
-  applicationName: siteName,
+  icons: {
+    icon: [
+      {
+        url: "/favicon.ico",
+      },
+      {
+        url: "/icon-192.png",
+        sizes: "192x192",
+        type: "image/png",
+      },
+      {
+        url: "/icon-512.png",
+        sizes: "512x512",
+        type: "image/png",
+      },
+    ],
+    apple: [
+      {
+        url: "/icon-192.png",
+        sizes: "192x192",
+        type: "image/png",
+      },
+    ],
+    shortcut: ["/favicon.ico"],
+  },
 
   appleWebApp: {
     capable: true,
@@ -47,34 +109,20 @@ export const metadata: Metadata = {
     statusBarStyle: "black-translucent",
   },
 
-  icons: {
-    icon: [
-      {
-        url: "/icon-192.png",
-        sizes: "192x192",
-        type: "image/png",
-      },
-
-      {
-        url: "/icon-512.png",
-        sizes: "512x512",
-        type: "image/png",
-      },
-    ],
-
-    apple: [
-      {
-        url: "/icon-192.png",
-      },
-    ],
+  formatDetection: {
+    telephone: true,
+    address: true,
+    email: true,
   },
 
   robots: {
     index: true,
     follow: true,
+    nocache: false,
     googleBot: {
       index: true,
       follow: true,
+      noimageindex: false,
       "max-image-preview": "large",
       "max-video-preview": -1,
       "max-snippet": -1,
@@ -84,26 +132,23 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "en_GB",
-    url: "https://www.salahnearme.com",
+    url: cleanSiteUrl,
     siteName,
-
-    title: siteName,
-
+    title: "SalahNearMe | Find Mosques, Prayer Times & Halal Places",
     description: siteDescription,
-
     images: [
       {
         url: "/social-icon.png",
         width: 1200,
         height: 630,
-        alt: "SalahNearMe",
+        alt: "SalahNearMe - Find mosques, prayer times and halal places near you",
       },
     ],
   },
 
   twitter: {
     card: "summary_large_image",
-    title: siteName,
+    title: "SalahNearMe | Mosques, Prayer Times & Halal Businesses",
     description: siteDescription,
     images: ["/social-icon.png"],
   },
@@ -113,32 +158,86 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: "#D4AF37",
+  colorScheme: "dark",
   width: "device-width",
   initialScale: 1,
+  maximumScale: 5,
 };
+
+async function getNavCities(): Promise<CityNavRow[]> {
+  try {
+    const supabase = supabasePublic();
+
+    const { data, error } = await supabase
+      .from("cities")
+      .select("slug,name")
+      .eq("is_active", true)
+      .not("slug", "is", null)
+      .order("name", { ascending: true });
+
+    if (error) {
+      console.error("RootLayout cities error:", error.message);
+      return [];
+    }
+
+    return ((data ?? []) as CityNavRow[]).filter((city) => {
+      return Boolean(city.slug && city.name);
+    });
+  } catch (error) {
+    console.error("RootLayout cities exception:", error);
+    return [];
+  }
+}
 
 export default async function RootLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
-  const supabase = supabasePublic();
+  const cities = await getNavCities();
 
-  const { data: cities, error } = await supabase
-    .from("cities")
-    .select("slug,name")
-    .eq("is_active", true)
-    .order("name", { ascending: true });
+  const organizationJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: siteName,
+    url: cleanSiteUrl,
+    logo: `${cleanSiteUrl}/logo-horizontal.png`,
+    sameAs: [],
+  };
 
-  if (error) {
-    console.error("Failed to load cities:", error.message);
-  }
+  const websiteJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: siteName,
+    url: cleanSiteUrl,
+    description: siteDescription,
+    potentialAction: {
+      "@type": "SearchAction",
+      target: `${cleanSiteUrl}/businesses?q={search_term_string}`,
+      "query-input": "required name=search_term_string",
+    },
+  };
 
   return (
-    <html lang="en" suppressHydrationWarning>
-  <body
-  suppressHydrationWarning
-  className={`${sora.variable} min-h-screen overflow-x-hidden bg-[#020826] text-white antialiased`}>
+    <html lang="en-GB" suppressHydrationWarning>
+      <body
+        suppressHydrationWarning
+        className={`${sora.variable} min-h-screen overflow-x-hidden bg-[#020826] font-sans text-white antialiased`}
+      >
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(organizationJsonLd),
+          }}
+        />
+
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(websiteJsonLd),
+          }}
+        />
+
         <div className="fixed inset-0 -z-10 overflow-hidden">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(212,175,55,0.12),transparent_32%),linear-gradient(135deg,#020826_0%,#06153A_45%,#01030D_100%)]" />
 
@@ -161,14 +260,13 @@ export default async function RootLayout({
         </div>
 
         <div className="relative flex min-h-screen flex-col">
-          <Nav cities={cities ?? []} />
+          <Nav cities={cities} />
 
           <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8">
             {children}
           </main>
 
           <footer className="border-t border-yellow-500/20 bg-[#020826]/90 backdrop-blur-xl">
-      
             <div className="mx-auto max-w-7xl px-4 py-6">
               <div className="flex flex-col gap-4 text-xs text-white/60 md:flex-row md:items-center md:justify-between">
                 <div>
@@ -207,4 +305,3 @@ export default async function RootLayout({
     </html>
   );
 }
-
