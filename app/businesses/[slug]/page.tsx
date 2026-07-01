@@ -75,6 +75,25 @@ type SponsorMosqueRow = {
   city: string | null;
 };
 
+type PublicMediaItem = {
+  url: string;
+  type: "image" | "video";
+  label: string;
+};
+
+const SITE_URL = "https://www.salahnearme.com";
+
+const IMAGE_EXTENSIONS = [
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".webp",
+  ".gif",
+  ".avif",
+];
+
+const VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".m4v"];
+
 function formatLabel(value: string | null | undefined) {
   if (!value) {
     return null;
@@ -113,14 +132,80 @@ function normaliseExternalUrl(value: string | null | undefined) {
     return null;
   }
 
-  if (
-    trimmed.startsWith("http://") ||
-    trimmed.startsWith("https://")
-  ) {
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
     return trimmed;
   }
 
   return `https://${trimmed}`;
+}
+
+function cleanUrl(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function getUrlPathname(value: string) {
+  try {
+    return new URL(value).pathname.toLowerCase();
+  } catch {
+    return value.toLowerCase().split("?")[0] ?? value.toLowerCase();
+  }
+}
+
+function isImageUrl(value: string) {
+  const pathname = getUrlPathname(value);
+
+  return IMAGE_EXTENSIONS.some((extension) => pathname.endsWith(extension));
+}
+
+function isVideoUrl(value: string) {
+  const pathname = getUrlPathname(value);
+
+  return VIDEO_EXTENSIONS.some((extension) => pathname.endsWith(extension));
+}
+
+function buildPublicMediaItems(
+  galleryUrls: string[] | null | undefined,
+  businessName: string | null
+): PublicMediaItem[] {
+  if (!Array.isArray(galleryUrls)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const cleaned = galleryUrls
+    .map((item) => cleanUrl(item))
+    .filter((item): item is string => Boolean(item))
+    .filter((item) => {
+      if (seen.has(item)) {
+        return false;
+      }
+
+      seen.add(item);
+      return true;
+    })
+    .slice(0, 18);
+
+  return cleaned
+    .map((url, index) => {
+      const type = isVideoUrl(url) ? "video" : "image";
+
+      if (type === "image" && !isImageUrl(url)) {
+        return null;
+      }
+
+      return {
+        url,
+        type,
+        label: `${businessName ?? "Business"} media ${index + 1}`,
+      } satisfies PublicMediaItem;
+    })
+    .filter((item): item is PublicMediaItem => Boolean(item));
 }
 
 function buildPlaceQuery(
@@ -201,9 +286,7 @@ function buildAppleMapsUrl(
     )}&ll=${business.latitude},${business.longitude}`;
   }
 
-  return query
-    ? `https://maps.apple.com/?q=${encodeURIComponent(query)}`
-    : null;
+  return query ? `https://maps.apple.com/?q=${encodeURIComponent(query)}` : null;
 }
 
 function buildEmbedMapUrl(business: BusinessRow) {
@@ -223,12 +306,16 @@ function buildEmbedMapUrl(business: BusinessRow) {
     : null;
 }
 
-function getGalleryImages(value: string[] | null | undefined) {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.filter((item) => typeof item === "string" && item.trim());
+function getPrimaryImage(
+  business: Pick<BusinessRow, "cover_image_url" | "logo_url">,
+  mediaItems: PublicMediaItem[]
+) {
+  return (
+    cleanUrl(business.cover_image_url) ||
+    cleanUrl(business.logo_url) ||
+    mediaItems.find((item) => item.type === "image")?.url ||
+    null
+  );
 }
 
 export async function generateStaticParams() {
@@ -255,36 +342,56 @@ export async function generateMetadata({
 
   const { data } = await supabase
     .from("businesses")
-    .select("name,category,city,description,slug,cover_image_url,logo_url")
+    .select("name,category,city,description,slug,cover_image_url,logo_url,gallery_urls")
     .eq("slug", slug)
     .maybeSingle();
 
   if (!data) {
     return {
       title: "Business Not Found | SalahNearMe",
+      robots: {
+        index: false,
+        follow: false,
+      },
     };
   }
 
-  const title = `${data.name}${data.city ? ` | ${data.city}` : ""} | SalahNearMe`;
+  const mediaItems = buildPublicMediaItems(
+    data.gallery_urls as string[] | null | undefined,
+    data.name
+  );
+
+  const image = getPrimaryImage(data, mediaItems);
+
+  const title = `${data.name ?? "Halal Business"}${
+    data.city ? ` | ${data.city}` : ""
+  } | SalahNearMe`;
 
   const description =
     data.description ||
-    `View ${data.name}${data.city ? ` in ${data.city}` : ""}: halal business profile, map, contact details, opening hours, sponsorship, and nearby listings.`;
-
-  const image = data.cover_image_url || data.logo_url || undefined;
+    `View ${data.name ?? "this halal business"}${
+      data.city ? ` in ${data.city}` : ""
+    }: halal business profile, media, map, contact details, opening hours, and nearby listings.`;
 
   return {
     title,
     description,
     alternates: {
-      canonical: `/business/${slug}`,
+      canonical: `/businesses/${slug}`,
     },
     openGraph: {
       title,
       description,
-      url: `/business/${slug}`,
+      url: `/businesses/${slug}`,
       type: "website",
-      images: image ? [{ url: image }] : undefined,
+      images: image
+        ? [
+            {
+              url: image,
+              alt: data.name ?? "SalahNearMe business",
+            },
+          ]
+        : undefined,
     },
     twitter: {
       card: "summary_large_image",
@@ -347,7 +454,29 @@ export default async function BusinessPage({ params }: PageProps) {
     .maybeSingle();
 
   if (error) {
-    return <pre className="text-white/80">{error.message}</pre>;
+    console.error("Business profile load error:", error.message);
+
+    return (
+      <section className="luxe-card rounded-3xl p-8">
+        <div className="text-sm uppercase tracking-[0.25em] text-red-300">
+          Business profile error
+        </div>
+
+        <h1 className="mt-4 text-3xl font-black text-white">
+          We could not load this business.
+        </h1>
+
+        <p className="mt-3 text-white/70">
+          Please try again shortly or return to all halal businesses.
+        </p>
+
+        <div className="mt-6">
+          <Link href="/businesses" className="luxe-button text-sm">
+            View businesses
+          </Link>
+        </div>
+      </section>
+    );
   }
 
   const business = businessRaw as BusinessRow | null;
@@ -441,7 +570,15 @@ export default async function BusinessPage({ params }: PageProps) {
   const embedMapUrl = buildEmbedMapUrl(business);
   const websiteUrl = normaliseExternalUrl(business.website);
   const paidActive = isPaidActive(business.paid_until);
-  const galleryImages = getGalleryImages(business.gallery_urls);
+
+  const mediaItems = buildPublicMediaItems(
+    business.gallery_urls,
+    business.name
+  );
+
+  const imageItems = mediaItems.filter((item) => item.type === "image");
+  const videoItems = mediaItems.filter((item) => item.type === "video");
+  const primaryImage = getPrimaryImage(business, mediaItems);
 
   const premiumActive =
     paidActive &&
@@ -452,17 +589,15 @@ export default async function BusinessPage({ params }: PageProps) {
         business.sponsorship_active
     );
 
+  const businessUrl = `${SITE_URL}/businesses/${business.slug}`;
+
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "LocalBusiness",
     name: business.name ?? "Business",
     description: business.description ?? undefined,
-    image:
-      business.cover_image_url ||
-      business.logo_url ||
-      galleryImages[0] ||
-      undefined,
-    url: `https://www.salahnearme.com/business/${business.slug}`,
+    image: primaryImage ? [primaryImage, ...imageItems.map((item) => item.url)] : undefined,
+    url: businessUrl,
     telephone: business.phone ?? undefined,
     address: {
       "@type": "PostalAddress",
@@ -482,6 +617,33 @@ export default async function BusinessPage({ params }: PageProps) {
         : undefined,
   };
 
+  const mediaJsonLd =
+    mediaItems.length > 0
+      ? {
+          "@context": "https://schema.org",
+          "@type": "ItemList",
+          name: `${business.name ?? "Business"} media`,
+          itemListElement: mediaItems.map((item, index) => ({
+            "@type": "ListItem",
+            position: index + 1,
+            item:
+              item.type === "video"
+                ? {
+                    "@type": "VideoObject",
+                    name: item.label,
+                    contentUrl: item.url,
+                    thumbnailUrl: primaryImage ?? undefined,
+                    uploadDate: new Date().toISOString(),
+                  }
+                : {
+                    "@type": "ImageObject",
+                    name: item.label,
+                    contentUrl: item.url,
+                  },
+          })),
+        }
+      : null;
+
   const breadcrumbJsonLd = {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
@@ -490,7 +652,7 @@ export default async function BusinessPage({ params }: PageProps) {
         "@type": "ListItem",
         position: 1,
         name: "Home",
-        item: "https://www.salahnearme.com",
+        item: SITE_URL,
       },
       ...(cityRow
         ? [
@@ -498,27 +660,33 @@ export default async function BusinessPage({ params }: PageProps) {
               "@type": "ListItem",
               position: 2,
               name: cityRow.name,
-              item: `https://www.salahnearme.com/${cityRow.slug}`,
+              item: `${SITE_URL}/${cityRow.slug}`,
             },
             {
               "@type": "ListItem",
               position: 3,
               name: "Businesses",
-              item: `https://www.salahnearme.com/${cityRow.slug}/businesses`,
+              item: `${SITE_URL}/${cityRow.slug}/businesses`,
             },
             {
               "@type": "ListItem",
               position: 4,
               name: business.name ?? "Business",
-              item: `https://www.salahnearme.com/business/${business.slug}`,
+              item: businessUrl,
             },
           ]
         : [
             {
               "@type": "ListItem",
               position: 2,
+              name: "Businesses",
+              item: `${SITE_URL}/businesses`,
+            },
+            {
+              "@type": "ListItem",
+              position: 3,
               name: business.name ?? "Business",
-              item: `https://www.salahnearme.com/business/${business.slug}`,
+              item: businessUrl,
             },
           ]),
     ],
@@ -540,6 +708,15 @@ export default async function BusinessPage({ params }: PageProps) {
         }}
       />
 
+      {mediaJsonLd && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(mediaJsonLd),
+          }}
+        />
+      )}
+
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
@@ -560,7 +737,7 @@ export default async function BusinessPage({ params }: PageProps) {
               className="h-full w-full object-cover"
             />
 
-            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/55 to-black/10" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/60 to-black/15" />
           </div>
         ) : (
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(212,175,55,0.16),transparent_38%)]" />
@@ -573,7 +750,7 @@ export default async function BusinessPage({ params }: PageProps) {
                 <img
                   src={business.logo_url}
                   alt={`${business.name ?? "Business"} logo`}
-                  className="h-24 w-24 rounded-3xl border border-yellow-500/30 bg-black object-cover p-1"
+                  className="h-24 w-24 rounded-3xl border border-yellow-500/30 bg-black object-cover p-1 shadow-2xl shadow-yellow-500/10"
                 />
               ) : null}
 
@@ -603,9 +780,7 @@ export default async function BusinessPage({ params }: PageProps) {
             )}
 
             <div className="mt-6 flex flex-wrap gap-2">
-              {business.city_sponsor && paidActive && (
-                <Badge>City Sponsor</Badge>
-              )}
+              {business.city_sponsor && paidActive && <Badge>City Sponsor</Badge>}
 
               {business.mosque_sponsor && paidActive && (
                 <Badge>Mosque Sponsor</Badge>
@@ -621,15 +796,16 @@ export default async function BusinessPage({ params }: PageProps) {
                 business.pricing_tier !== "free" &&
                 paidActive && <Badge>{formatLabel(business.pricing_tier)}</Badge>}
 
+              {mediaItems.length > 0 && <Badge>Media Active</Badge>}
+
+              {videoItems.length > 0 && <Badge>Video Showcase</Badge>}
+
               {business.country && <Badge>{business.country}</Badge>}
             </div>
 
             <div className="mt-8 flex flex-wrap gap-3">
               {cityRow && (
-                <Link
-                  href={`/${cityRow.slug}`}
-                  className="luxe-button text-sm"
-                >
+                <Link href={`/${cityRow.slug}`} className="luxe-button text-sm">
                   View {cityRow.name}
                 </Link>
               )}
@@ -782,10 +958,111 @@ export default async function BusinessPage({ params }: PageProps) {
                 label="Visibility"
                 value={premiumActive ? "Premium active" : "Standard listing"}
               />
+
+              <InfoRow
+                label="Media"
+                value={
+                  mediaItems.length > 0
+                    ? `${imageItems.length} photo${
+                        imageItems.length === 1 ? "" : "s"
+                      }${
+                        videoItems.length > 0
+                          ? ` • ${videoItems.length} video${
+                              videoItems.length === 1 ? "" : "s"
+                            }`
+                          : ""
+                      }`
+                    : "No media yet"
+                }
+              />
             </div>
           </aside>
         </div>
       </section>
+
+      {mediaItems.length > 0 && (
+        <section className="luxe-card rounded-3xl p-8">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
+                Business Media
+              </div>
+
+              <h2 className="mt-3 text-3xl font-black text-white">
+                Photos, menu, facilities and video showcase
+              </h2>
+
+              <p className="mt-2 max-w-3xl text-white/65">
+                Media uploaded by this business. Images and videos are detected
+                automatically so customers can quickly see the menu, premises,
+                facilities, and promotional clips.
+              </p>
+            </div>
+
+            <div className="rounded-full border border-yellow-500/25 bg-yellow-500/10 px-4 py-2 text-sm font-semibold text-yellow-300">
+              {imageItems.length} photos
+              {videoItems.length > 0 ? ` • ${videoItems.length} videos` : ""}
+            </div>
+          </div>
+
+          {videoItems.length > 0 && (
+            <div className="mt-7 grid gap-5 lg:grid-cols-2">
+              {videoItems.slice(0, 2).map((item) => (
+                <div
+                  key={item.url}
+                  className="overflow-hidden rounded-3xl border border-yellow-500/20 bg-black/40"
+                >
+                  <video
+                    src={item.url}
+                    className="aspect-video w-full bg-black object-cover"
+                    controls
+                    preload="metadata"
+                    playsInline
+                  />
+
+                  <div className="border-t border-yellow-500/10 p-4">
+                    <div className="text-sm font-semibold text-yellow-300">
+                      Promotional video
+                    </div>
+
+                    <p className="mt-1 text-sm text-white/60">
+                      Short business video for customers browsing this listing.
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {imageItems.length > 0 && (
+            <div className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {imageItems.slice(0, 12).map((item, index) => (
+                <figure
+                  key={item.url}
+                  className={`group overflow-hidden rounded-3xl border border-yellow-500/20 bg-black/30 ${
+                    index === 0 ? "sm:col-span-2" : ""
+                  }`}
+                >
+                  <img
+                    src={item.url}
+                    alt={item.label}
+                    className={`w-full object-cover transition duration-300 group-hover:scale-[1.03] ${
+                      index === 0 ? "h-80" : "h-56"
+                    }`}
+                    loading={index < 2 ? "eager" : "lazy"}
+                  />
+
+                  <figcaption className="border-t border-yellow-500/10 px-4 py-3 text-sm text-white/60">
+                    {index === 0
+                      ? "Featured business image"
+                      : `Business photo ${index + 1}`}
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="luxe-card rounded-3xl p-8">
         <div className="text-2xl font-bold text-yellow-400">
@@ -804,29 +1081,6 @@ export default async function BusinessPage({ params }: PageProps) {
       />
 
       <BusinessLeadForm businessId={business.id} />
-
-      {galleryImages.length > 0 && (
-        <section className="luxe-card rounded-3xl p-8">
-          <div className="text-2xl font-bold text-yellow-400">
-            Gallery
-          </div>
-
-          <p className="mt-2 text-sm text-white/60">
-            Photos shared by this business.
-          </p>
-
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {galleryImages.map((image) => (
-              <img
-                key={image}
-                src={image}
-                alt={`${business.name ?? "Business"} gallery image`}
-                className="h-56 w-full rounded-2xl border border-yellow-500/20 object-cover"
-              />
-            ))}
-          </div>
-        </section>
-      )}
 
       {embedMapUrl && (
         <section className="luxe-card rounded-3xl p-8">
@@ -919,7 +1173,7 @@ export default async function BusinessPage({ params }: PageProps) {
                 <BusinessTrackedLink
                   key={item.id}
                   businessId={item.id}
-                  href={`/business/${item.slug}`}
+                  href={`/businesses/${item.slug}`}
                   eventType="profile_click"
                   source="business_page_related"
                   pageType="business_profile"
@@ -957,7 +1211,7 @@ export default async function BusinessPage({ params }: PageProps) {
 
             <p className="mt-3 text-white/70">
               Own or manage this halal business? Claim the page to improve your
-              listing, update details, and increase visibility.
+              listing, upload media, update details, and increase visibility.
             </p>
 
             {business.slug && (
@@ -978,8 +1232,8 @@ export default async function BusinessPage({ params }: PageProps) {
             </div>
 
             <p className="mt-3 text-white/70">
-              Promote this business across mosque pages and city listings to
-              reach more halal-conscious customers.
+              Promote this business with photos, videos, mosque page visibility,
+              and city listing placement.
             </p>
 
             <div className="mt-5">
