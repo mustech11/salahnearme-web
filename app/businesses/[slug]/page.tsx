@@ -15,6 +15,11 @@ import { supabasePublic } from "@/lib/supabaseServer";
 
 export const revalidate = 300;
 
+const SITE_URL = "https://www.salahnearme.com";
+const MAX_PUBLIC_MEDIA_ITEMS = 18;
+const MAX_PUBLIC_IMAGES = 12;
+const MAX_PUBLIC_VIDEOS = 2;
+
 type PageProps = {
   params: Promise<{
     slug: string;
@@ -79,9 +84,8 @@ type PublicMediaItem = {
   url: string;
   type: "image" | "video";
   label: string;
+  purpose: "menu" | "building" | "facility" | "food" | "promo" | "general";
 };
-
-const SITE_URL = "https://www.salahnearme.com";
 
 const IMAGE_EXTENSIONS = [
   ".jpg",
@@ -121,7 +125,7 @@ function isPaidActive(value: string | null | undefined) {
   return Number.isFinite(time) && time > Date.now();
 }
 
-function normaliseExternalUrl(value: string | null | undefined) {
+function safeHttpUrl(value: string | null | undefined) {
   if (!value) {
     return null;
   }
@@ -132,21 +136,25 @@ function normaliseExternalUrl(value: string | null | undefined) {
     return null;
   }
 
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-    return trimmed;
-  }
+  try {
+    const parsed = new URL(
+      trimmed.startsWith("http://") || trimmed.startsWith("https://")
+        ? trimmed
+        : `https://${trimmed}`
+    );
 
-  return `https://${trimmed}`;
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+
+    return parsed.toString();
+  } catch {
+    return null;
+  }
 }
 
 function cleanUrl(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  const trimmed = value.trim();
-
-  return trimmed.length > 0 ? trimmed : null;
+  return safeHttpUrl(value);
 }
 
 function getUrlPathname(value: string) {
@@ -169,6 +177,88 @@ function isVideoUrl(value: string) {
   return VIDEO_EXTENSIONS.some((extension) => pathname.endsWith(extension));
 }
 
+function detectMediaPurpose(url: string): PublicMediaItem["purpose"] {
+  const lower = decodeURIComponent(url).toLowerCase();
+
+  if (
+    lower.includes("menu") ||
+    lower.includes("price") ||
+    lower.includes("dish-list")
+  ) {
+    return "menu";
+  }
+
+  if (
+    lower.includes("building") ||
+    lower.includes("front") ||
+    lower.includes("outside") ||
+    lower.includes("shopfront") ||
+    lower.includes("premises")
+  ) {
+    return "building";
+  }
+
+  if (
+    lower.includes("facility") ||
+    lower.includes("facilities") ||
+    lower.includes("seating") ||
+    lower.includes("room") ||
+    lower.includes("inside") ||
+    lower.includes("interior")
+  ) {
+    return "facility";
+  }
+
+  if (
+    lower.includes("food") ||
+    lower.includes("meal") ||
+    lower.includes("burger") ||
+    lower.includes("chicken") ||
+    lower.includes("rice") ||
+    lower.includes("dessert")
+  ) {
+    return "food";
+  }
+
+  if (
+    lower.includes("promo") ||
+    lower.includes("advert") ||
+    lower.includes("video") ||
+    lower.includes("reel")
+  ) {
+    return "promo";
+  }
+
+  return "general";
+}
+
+function buildMediaLabel(
+  businessName: string | null,
+  item: Pick<PublicMediaItem, "type" | "purpose">,
+  index: number
+) {
+  const name = businessName ?? "Business";
+
+  if (item.type === "video") {
+    return `${name} promotional video ${index + 1}`;
+  }
+
+  switch (item.purpose) {
+    case "menu":
+      return `${name} menu image`;
+    case "building":
+      return `${name} building or shopfront image`;
+    case "facility":
+      return `${name} facilities image`;
+    case "food":
+      return `${name} food or product image`;
+    case "promo":
+      return `${name} promotional image`;
+    default:
+      return `${name} business image ${index + 1}`;
+  }
+}
+
 function buildPublicMediaItems(
   galleryUrls: string[] | null | undefined,
   businessName: string | null
@@ -178,7 +268,8 @@ function buildPublicMediaItems(
   }
 
   const seen = new Set<string>();
-  const cleaned = galleryUrls
+
+  return galleryUrls
     .map((item) => cleanUrl(item))
     .filter((item): item is string => Boolean(item))
     .filter((item) => {
@@ -189,9 +280,7 @@ function buildPublicMediaItems(
       seen.add(item);
       return true;
     })
-    .slice(0, 18);
-
-  return cleaned
+    .slice(0, MAX_PUBLIC_MEDIA_ITEMS)
     .map((url, index) => {
       const type = isVideoUrl(url) ? "video" : "image";
 
@@ -199,10 +288,13 @@ function buildPublicMediaItems(
         return null;
       }
 
+      const purpose = detectMediaPurpose(url);
+
       return {
         url,
         type,
-        label: `${businessName ?? "Business"} media ${index + 1}`,
+        purpose,
+        label: buildMediaLabel(businessName, { type, purpose }, index),
       } satisfies PublicMediaItem;
     })
     .filter((item): item is PublicMediaItem => Boolean(item));
@@ -240,7 +332,7 @@ function buildGoogleMapsUrl(
     | "country"
   >
 ) {
-  const savedMapsUrl = normaliseExternalUrl(business.maps_url);
+  const savedMapsUrl = safeHttpUrl(business.maps_url);
 
   if (savedMapsUrl) {
     return savedMapsUrl;
@@ -318,6 +410,69 @@ function getPrimaryImage(
   );
 }
 
+function uniqueList(values: Array<string | null | undefined>) {
+  const seen = new Set<string>();
+
+  return values.filter((value): value is string => {
+    if (!value || seen.has(value)) {
+      return false;
+    }
+
+    seen.add(value);
+    return true;
+  });
+}
+
+function getMediaSummary(
+  imageItems: PublicMediaItem[],
+  videoItems: PublicMediaItem[]
+) {
+  if (imageItems.length === 0 && videoItems.length === 0) {
+    return "No media yet";
+  }
+
+  const photoText = `${imageItems.length} photo${
+    imageItems.length === 1 ? "" : "s"
+  }`;
+
+  const videoText =
+    videoItems.length > 0
+      ? ` • ${videoItems.length} video${videoItems.length === 1 ? "" : "s"}`
+      : "";
+
+  return `${photoText}${videoText}`;
+}
+
+function getSmartBusinessAdvice({
+  business,
+  paidActive,
+  mediaItems,
+  videoItems,
+}: {
+  business: BusinessRow;
+  paidActive: boolean;
+  mediaItems: PublicMediaItem[];
+  videoItems: PublicMediaItem[];
+}) {
+  if (paidActive && videoItems.length > 0) {
+    return "This premium listing includes a video showcase, making it easier for visitors to understand the business before contacting or visiting.";
+  }
+
+  if (mediaItems.length > 0) {
+    return "This listing includes business media, helping customers preview the menu, premises, facilities, or services before visiting.";
+  }
+
+  if (business.is_verified) {
+    return "This verified listing has key business details available. More media can improve customer confidence and visibility.";
+  }
+
+  return "This is a community listing. The business can claim this page to add photos, videos, opening hours, and stronger trust signals.";
+}
+
+function getBusinessProfileUrl(slug: string | null | undefined) {
+  return slug ? `/businesses/${slug}` : "/businesses";
+}
+
 export async function generateStaticParams() {
   const supabase = supabasePublic();
 
@@ -325,7 +480,7 @@ export async function generateStaticParams() {
     .from("businesses")
     .select("slug")
     .not("slug", "is", null)
-    .eq("is_live", true);
+    .limit(1000);
 
   return (data ?? [])
     .filter((item) => Boolean(item.slug))
@@ -342,7 +497,9 @@ export async function generateMetadata({
 
   const { data } = await supabase
     .from("businesses")
-    .select("name,category,city,description,slug,cover_image_url,logo_url,gallery_urls")
+    .select(
+      "name,category,city,description,slug,cover_image_url,logo_url,gallery_urls"
+    )
     .eq("slug", slug)
     .maybeSingle();
 
@@ -371,7 +528,7 @@ export async function generateMetadata({
     data.description ||
     `View ${data.name ?? "this halal business"}${
       data.city ? ` in ${data.city}` : ""
-    }: halal business profile, media, map, contact details, opening hours, and nearby listings.`;
+    }: halal business profile, media, map, contact details, opening hours, and nearby halal listings.`;
 
   return {
     title,
@@ -384,6 +541,7 @@ export async function generateMetadata({
       description,
       url: `/businesses/${slug}`,
       type: "website",
+      siteName: "SalahNearMe",
       images: image
         ? [
             {
@@ -544,6 +702,7 @@ export default async function BusinessPage({ params }: PageProps) {
         )
         .eq("city", business.city)
         .neq("id", business.id)
+        .not("slug", "is", null)
         .order("featured", {
           ascending: false,
         })
@@ -568,14 +727,10 @@ export default async function BusinessPage({ params }: PageProps) {
   const googleMapsUrl = buildGoogleMapsUrl(business);
   const appleMapsUrl = buildAppleMapsUrl(business);
   const embedMapUrl = buildEmbedMapUrl(business);
-  const websiteUrl = normaliseExternalUrl(business.website);
+  const websiteUrl = safeHttpUrl(business.website);
   const paidActive = isPaidActive(business.paid_until);
 
-  const mediaItems = buildPublicMediaItems(
-    business.gallery_urls,
-    business.name
-  );
-
+  const mediaItems = buildPublicMediaItems(business.gallery_urls, business.name);
   const imageItems = mediaItems.filter((item) => item.type === "image");
   const videoItems = mediaItems.filter((item) => item.type === "video");
   const primaryImage = getPrimaryImage(business, mediaItems);
@@ -589,14 +744,19 @@ export default async function BusinessPage({ params }: PageProps) {
         business.sponsorship_active
     );
 
-  const businessUrl = `${SITE_URL}/businesses/${business.slug}`;
+  const businessUrl = `${SITE_URL}${getBusinessProfileUrl(business.slug)}`;
+
+  const jsonLdImages = uniqueList([
+    primaryImage,
+    ...imageItems.map((item) => item.url),
+  ]);
 
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "LocalBusiness",
     name: business.name ?? "Business",
     description: business.description ?? undefined,
-    image: primaryImage ? [primaryImage, ...imageItems.map((item) => item.url)] : undefined,
+    image: jsonLdImages.length > 0 ? jsonLdImages : undefined,
     url: businessUrl,
     telephone: business.phone ?? undefined,
     address: {
@@ -631,6 +791,7 @@ export default async function BusinessPage({ params }: PageProps) {
                 ? {
                     "@type": "VideoObject",
                     name: item.label,
+                    description: `${business.name ?? "Business"} video media`,
                     contentUrl: item.url,
                     thumbnailUrl: primaryImage ?? undefined,
                     uploadDate: new Date().toISOString(),
@@ -692,6 +853,13 @@ export default async function BusinessPage({ params }: PageProps) {
     ],
   };
 
+  const smartAdvice = getSmartBusinessAdvice({
+    business,
+    paidActive,
+    mediaItems,
+    videoItems,
+  });
+
   return (
     <div className="space-y-8">
       <BusinessAnalyticsTracker
@@ -729,10 +897,10 @@ export default async function BusinessPage({ params }: PageProps) {
           premiumActive ? "border-yellow-500/40" : ""
         }`}
       >
-        {business.cover_image_url ? (
+        {primaryImage ? (
           <div className="relative h-72 overflow-hidden rounded-t-3xl md:h-96">
             <img
-              src={business.cover_image_url}
+              src={primaryImage}
               alt={`${business.name ?? "Business"} cover`}
               className="h-full w-full object-cover"
             />
@@ -780,7 +948,9 @@ export default async function BusinessPage({ params }: PageProps) {
             )}
 
             <div className="mt-6 flex flex-wrap gap-2">
-              {business.city_sponsor && paidActive && <Badge>City Sponsor</Badge>}
+              {business.city_sponsor && paidActive && (
+                <Badge>City Sponsor</Badge>
+              )}
 
               {business.mosque_sponsor && paidActive && (
                 <Badge>Mosque Sponsor</Badge>
@@ -887,6 +1057,16 @@ export default async function BusinessPage({ params }: PageProps) {
                 </BusinessTrackedLink>
               )}
             </div>
+
+            <div className="mt-8 rounded-2xl border border-yellow-500/20 bg-black/30 p-5">
+              <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
+                Smart listing insight
+              </div>
+
+              <p className="mt-2 text-sm leading-6 text-white/70">
+                {smartAdvice}
+              </p>
+            </div>
           </div>
 
           <aside className="luxe-card-soft rounded-3xl p-6">
@@ -961,19 +1141,7 @@ export default async function BusinessPage({ params }: PageProps) {
 
               <InfoRow
                 label="Media"
-                value={
-                  mediaItems.length > 0
-                    ? `${imageItems.length} photo${
-                        imageItems.length === 1 ? "" : "s"
-                      }${
-                        videoItems.length > 0
-                          ? ` • ${videoItems.length} video${
-                              videoItems.length === 1 ? "" : "s"
-                            }`
-                          : ""
-                      }`
-                    : "No media yet"
-                }
+                value={getMediaSummary(imageItems, videoItems)}
               />
             </div>
           </aside>
@@ -993,21 +1161,20 @@ export default async function BusinessPage({ params }: PageProps) {
               </h2>
 
               <p className="mt-2 max-w-3xl text-white/65">
-                Media uploaded by this business. Images and videos are detected
-                automatically so customers can quickly see the menu, premises,
-                facilities, and promotional clips.
+                Images and videos are detected automatically so customers can
+                quickly see the menu, premises, facilities, products, and
+                promotional clips.
               </p>
             </div>
 
             <div className="rounded-full border border-yellow-500/25 bg-yellow-500/10 px-4 py-2 text-sm font-semibold text-yellow-300">
-              {imageItems.length} photos
-              {videoItems.length > 0 ? ` • ${videoItems.length} videos` : ""}
+              {getMediaSummary(imageItems, videoItems)}
             </div>
           </div>
 
           {videoItems.length > 0 && (
             <div className="mt-7 grid gap-5 lg:grid-cols-2">
-              {videoItems.slice(0, 2).map((item) => (
+              {videoItems.slice(0, MAX_PUBLIC_VIDEOS).map((item) => (
                 <div
                   key={item.url}
                   className="overflow-hidden rounded-3xl border border-yellow-500/20 bg-black/40"
@@ -1036,7 +1203,7 @@ export default async function BusinessPage({ params }: PageProps) {
 
           {imageItems.length > 0 && (
             <div className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {imageItems.slice(0, 12).map((item, index) => (
+              {imageItems.slice(0, MAX_PUBLIC_IMAGES).map((item, index) => (
                 <figure
                   key={item.url}
                   className={`group overflow-hidden rounded-3xl border border-yellow-500/20 bg-black/30 ${
@@ -1053,9 +1220,11 @@ export default async function BusinessPage({ params }: PageProps) {
                   />
 
                   <figcaption className="border-t border-yellow-500/10 px-4 py-3 text-sm text-white/60">
-                    {index === 0
-                      ? "Featured business image"
-                      : `Business photo ${index + 1}`}
+                    {item.purpose === "general"
+                      ? index === 0
+                        ? "Featured business image"
+                        : `Business photo ${index + 1}`
+                      : formatLabel(item.purpose)}
                   </figcaption>
                 </figure>
               ))}
@@ -1173,7 +1342,7 @@ export default async function BusinessPage({ params }: PageProps) {
                 <BusinessTrackedLink
                   key={item.id}
                   businessId={item.id}
-                  href={`/businesses/${item.slug}`}
+                  href={getBusinessProfileUrl(item.slug)}
                   eventType="profile_click"
                   source="business_page_related"
                   pageType="business_profile"
@@ -1277,13 +1446,7 @@ function Badge({
   );
 }
 
-function InfoRow({
-  label,
-  value,
-}: {
-  label: string;
-  value: ReactNode;
-}) {
+function InfoRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
       <div className="text-xs uppercase tracking-[0.2em] text-white/50">
