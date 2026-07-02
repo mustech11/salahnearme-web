@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { cookies } from "next/headers";
+import SmartDailyModePanel from "@/components/SmartDailyModePanel";
 
 import CitySearch from "@/components/CitySearch";
 import HomeDailyPanel from "@/components/HomeDailyPanel";
@@ -421,6 +422,8 @@ export default async function Home() {
           </div>
         </div>
       </section>
+
+      <SmartDailyModePanel className="mt-8" />
 
       <section className="grid gap-4 md:grid-cols-3">
         <StatCard
