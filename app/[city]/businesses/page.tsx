@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 
+import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import BusinessTrackedLink from "@/components/BusinessTrackedLink";
@@ -80,10 +82,7 @@ function normaliseExternalUrl(value: string | null | undefined) {
     return null;
   }
 
-  if (
-    trimmed.startsWith("http://") ||
-    trimmed.startsWith("https://")
-  ) {
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
     return trimmed;
   }
 
@@ -91,7 +90,38 @@ function normaliseExternalUrl(value: string | null | undefined) {
 }
 
 function getCardImage(business: BusinessRow) {
-  return business.cover_image_url || business.logo_url || business.gallery_urls?.[0] || null;
+  return (
+    business.cover_image_url ||
+    business.logo_url ||
+    business.gallery_urls?.[0] ||
+    null
+  );
+}
+
+function getCitySearchTerms(cityRow: CityRow) {
+  const terms = new Set<string>();
+
+  terms.add(cityRow.name);
+  terms.add(cityRow.slug);
+  terms.add(cityRow.name.toLowerCase());
+  terms.add(cityRow.slug.toLowerCase());
+
+  return Array.from(terms).filter(Boolean);
+}
+
+function getCategoryCounts(businesses: BusinessRow[]) {
+  const counts = new Map<string, number>();
+
+  for (const business of businesses) {
+    const category = formatLabel(business.category) ?? "Other";
+
+    counts.set(category, (counts.get(category) ?? 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
 }
 
 export async function generateStaticParams() {
@@ -115,7 +145,7 @@ export async function generateMetadata({
 
   const { data: cityRow } = await supabase
     .from("cities")
-    .select("name")
+    .select("name,slug")
     .eq("slug", city)
     .eq("is_active", true)
     .maybeSingle();
@@ -128,14 +158,14 @@ export async function generateMetadata({
 
   return {
     title: `Halal Businesses in ${cityRow.name} | SalahNearMe`,
-    description: `Browse halal restaurants, butchers, services, shops, verified listings, and featured Muslim businesses in ${cityRow.name}.`,
+    description: `Browse halal restaurants, butchers, groceries, shops, services, verified listings, and featured Muslim businesses in ${cityRow.name}.`,
     alternates: {
-      canonical: `/${city}/businesses`,
+      canonical: `/${cityRow.slug}/businesses`,
     },
     openGraph: {
       title: `Halal Businesses in ${cityRow.name}`,
-      description: `Explore trusted halal businesses and sponsors in ${cityRow.name}.`,
-      url: `/${city}/businesses`,
+      description: `Explore trusted halal businesses, restaurants, butchers, shops, sponsors, and Muslim-friendly services in ${cityRow.name}.`,
+      url: `/${cityRow.slug}/businesses`,
       type: "website",
     },
   };
@@ -161,6 +191,8 @@ export default async function CityBusinessesPage({ params }: PageProps) {
   if (!cityRow) {
     notFound();
   }
+
+  const cityTerms = getCitySearchTerms(cityRow);
 
   const { data: businessesRaw, error: businessesError } = await supabase
     .from("businesses")
@@ -192,7 +224,7 @@ export default async function CityBusinessesPage({ params }: PageProps) {
       can_advertise
     `
     )
-    .eq("city", cityRow.name)
+    .in("city", cityTerms)
     .eq("can_advertise", true)
     .order("name", { ascending: true });
 
@@ -224,6 +256,8 @@ export default async function CityBusinessesPage({ params }: PageProps) {
       isPaidActive(business.paid_until)
   ).length;
 
+  const categoryCounts = getCategoryCounts(rankedBusinesses);
+
   return (
     <div className="space-y-8">
       <section className="luxe-card relative overflow-hidden rounded-3xl p-8 md:p-10">
@@ -240,7 +274,8 @@ export default async function CityBusinessesPage({ params }: PageProps) {
 
           <p className="mt-4 max-w-3xl text-white/70">
             Explore trusted halal businesses, featured sponsors, restaurants,
-            butchers, shops, and verified local services in {cityRow.name}.
+            butchers, shops, groceries, Muslim-friendly services, and verified
+            local listings in {cityRow.name}.
           </p>
 
           <div className="mt-8 grid gap-4 sm:grid-cols-3">
@@ -248,6 +283,20 @@ export default async function CityBusinessesPage({ params }: PageProps) {
             <StatCard title="Featured" value={featuredCount} />
             <StatCard title="Verified" value={verifiedCount} />
           </div>
+
+          {categoryCounts.length > 0 ? (
+            <div className="mt-6 flex flex-wrap gap-2">
+              {categoryCounts.map((item) => (
+                <span
+                  key={item.label}
+                  className="rounded-full border border-white/10 bg-black/20 px-4 py-2 text-sm text-white/70"
+                >
+                  {item.label}{" "}
+                  <span className="text-yellow-400">{item.count}</span>
+                </span>
+              ))}
+            </div>
+          ) : null}
 
           {sponsoredCount > 0 ? (
             <div className="mt-5 text-sm text-yellow-300">
@@ -260,9 +309,7 @@ export default async function CityBusinessesPage({ params }: PageProps) {
       </section>
 
       {rankedBusinesses.length === 0 ? (
-        <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-8 text-white/60">
-          No halal businesses found in this city yet.
-        </div>
+        <EmptyCityBusinesses cityRow={cityRow} />
       ) : (
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {rankedBusinesses.map((business, index) => {
@@ -312,7 +359,9 @@ export default async function CityBusinessesPage({ params }: PageProps) {
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="mb-2 flex flex-wrap gap-2">
-                        {index < 3 && premium ? <Badge>Top Placement</Badge> : null}
+                        {index < 3 && premium ? (
+                          <Badge>Top Placement</Badge>
+                        ) : null}
 
                         {business.city_sponsor && paidActive ? (
                           <Badge>City Sponsor</Badge>
@@ -452,6 +501,90 @@ export default async function CityBusinessesPage({ params }: PageProps) {
   );
 }
 
+function EmptyCityBusinesses({ cityRow }: { cityRow: CityRow }) {
+  return (
+    <section className="overflow-hidden rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))]">
+      <div className="relative p-8 md:p-10">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(212,175,55,0.12),transparent_38%)]" />
+
+        <div className="relative z-10 grid gap-8 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
+          <div>
+            <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
+              Help Build {cityRow.name}
+            </div>
+
+            <h2 className="mt-4 text-3xl font-black tracking-[-0.03em] text-white md:text-5xl">
+              No halal businesses listed in {cityRow.name} yet.
+            </h2>
+
+            <p className="mt-4 max-w-3xl text-white/70">
+              SalahNearMe is expanding city by city. If you know a halal
+              restaurant, butcher, grocery shop, Islamic bookstore, travel
+              service, tuition centre, charity, clinic, or Muslim-friendly local
+              service in {cityRow.name}, you can help the community by adding it.
+            </p>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Link
+                href={`/add-business?city=${cityRow.slug}`}
+                className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-bold text-black hover:bg-yellow-400"
+              >
+                Add a halal business
+              </Link>
+
+              <Link
+                href="/claim/business"
+                className="rounded-xl border border-yellow-500/30 bg-black px-5 py-3 text-sm font-bold text-yellow-400 hover:bg-yellow-500/10"
+              >
+                Claim your business
+              </Link>
+
+              <Link
+                href={`/${cityRow.slug}/mosques`}
+                className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-bold text-white hover:bg-white/[0.06]"
+              >
+                Browse mosques
+              </Link>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-white/10 bg-black/20 p-6">
+            <div className="text-lg font-black text-white">
+              Why add listings?
+            </div>
+
+            <div className="mt-5 space-y-4">
+              <EmptyBenefit
+                title="Help Muslims find halal places"
+                text={`Make it easier for locals and travellers to discover trusted halal services in ${cityRow.name}.`}
+              />
+
+              <EmptyBenefit
+                title="Support local Muslim businesses"
+                text="New listings create visibility, traffic, calls, map clicks, and future sponsorship opportunities."
+              />
+
+              <EmptyBenefit
+                title="Grow the city ecosystem"
+                text="Every added business makes the city page stronger for prayer, food, shopping, services, and travel."
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function EmptyBenefit({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+      <div className="font-semibold text-yellow-400">{title}</div>
+      <p className="mt-1 text-sm text-white/65">{text}</p>
+    </div>
+  );
+}
+
 function StatCard({ title, value }: { title: string; value: number }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
@@ -468,7 +601,7 @@ function Badge({
   children,
   variant = "default",
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   variant?: "default" | "green";
 }) {
   const className =
