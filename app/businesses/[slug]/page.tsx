@@ -15,10 +15,14 @@ import { supabasePublic } from "@/lib/supabaseServer";
 
 export const revalidate = 300;
 
-const SITE_URL = "https://www.salahnearme.com";
+const DEFAULT_SITE_URL = "https://www.salahnearme.com";
+const MAX_STATIC_BUSINESSES = 1000;
+const MAX_RELATED_BUSINESSES = 6;
+const MAX_RELATED_FETCH = 30;
 const MAX_PUBLIC_MEDIA_ITEMS = 18;
 const MAX_PUBLIC_IMAGES = 12;
 const MAX_PUBLIC_VIDEOS = 2;
+const DESCRIPTION_MAX_LENGTH = 165;
 
 type PageProps = {
   params: Promise<{
@@ -68,9 +72,12 @@ type BusinessRow = {
 };
 
 type CityRow = {
-  id?: number;
+  id: number;
   slug: string;
   name: string;
+  country?: string | null;
+  country_code?: string | null;
+  timezone?: string | null;
 };
 
 type SponsorMosqueRow = {
@@ -98,39 +105,79 @@ const IMAGE_EXTENSIONS = [
 
 const VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".m4v"];
 
+function getSiteUrl() {
+  return (
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    DEFAULT_SITE_URL
+  ).replace(/\/+$/, "");
+}
+
+function cleanText(value: string | null | undefined) {
+  const trimmed = value?.trim();
+
+  return trimmed ? trimmed : null;
+}
+
+function truncateText(value: string, maxLength = DESCRIPTION_MAX_LENGTH) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength - 1).trim()}…`;
+}
+
+function slugify(value: string | null | undefined) {
+  return (
+    cleanText(value)
+      ?.toLowerCase()
+      .replace(/&/g, "and")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") ?? null
+  );
+}
+
 function formatLabel(value: string | null | undefined) {
-  if (!value) {
+  const cleaned = cleanText(value);
+
+  if (!cleaned) {
     return null;
   }
 
-  return value
+  return cleaned
     .replace(/_/g, " ")
     .replace(/-/g, " ")
+    .replace(/\s+/g, " ")
     .replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
 function buildLocationLine(
   item: Pick<BusinessRow, "area" | "city" | "postcode">
 ) {
-  return [item.area, item.city, item.postcode].filter(Boolean).join(" • ");
+  return [item.area, item.city, item.postcode]
+    .map(cleanText)
+    .filter(Boolean)
+    .join(" • ");
 }
 
 function isPaidActive(value: string | null | undefined) {
-  if (!value) {
+  const cleaned = cleanText(value);
+
+  if (!cleaned) {
     return false;
   }
 
-  const time = new Date(value).getTime();
+  const time = new Date(cleaned).getTime();
 
   return Number.isFinite(time) && time > Date.now();
 }
 
-function safeHttpUrl(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
+function isTruthySponsorFlag(value: boolean | null | undefined) {
+  return value === true;
+}
 
-  const trimmed = value.trim();
+function safeHttpUrl(value: string | null | undefined) {
+  const trimmed = cleanText(value);
 
   if (!trimmed) {
     return null;
@@ -153,8 +200,16 @@ function safeHttpUrl(value: string | null | undefined) {
   }
 }
 
-function cleanUrl(value: string | null | undefined) {
-  return safeHttpUrl(value);
+function safeTelHref(value: string | null | undefined) {
+  const cleaned = cleanText(value);
+
+  if (!cleaned) {
+    return null;
+  }
+
+  const dial = cleaned.replace(/[^\d+]/g, "");
+
+  return dial.length >= 7 ? `tel:${dial}` : null;
 }
 
 function getUrlPathname(value: string) {
@@ -237,7 +292,7 @@ function buildMediaLabel(
   item: Pick<PublicMediaItem, "type" | "purpose">,
   index: number
 ) {
-  const name = businessName ?? "Business";
+  const name = cleanText(businessName) ?? "Business";
 
   if (item.type === "video") {
     return `${name} promotional video ${index + 1}`;
@@ -268,36 +323,40 @@ function buildPublicMediaItems(
   }
 
   const seen = new Set<string>();
+  const items: PublicMediaItem[] = [];
 
-  return galleryUrls
-    .map((item) => cleanUrl(item))
-    .filter((item): item is string => Boolean(item))
-    .filter((item) => {
-      if (seen.has(item)) {
-        return false;
-      }
+  for (const rawItem of galleryUrls) {
+    if (items.length >= MAX_PUBLIC_MEDIA_ITEMS) {
+      break;
+    }
 
-      seen.add(item);
-      return true;
-    })
-    .slice(0, MAX_PUBLIC_MEDIA_ITEMS)
-    .map((url, index) => {
-      const type = isVideoUrl(url) ? "video" : "image";
+    const url = safeHttpUrl(rawItem);
 
-      if (type === "image" && !isImageUrl(url)) {
-        return null;
-      }
+    if (!url || seen.has(url)) {
+      continue;
+    }
 
-      const purpose = detectMediaPurpose(url);
+    const isVideo = isVideoUrl(url);
+    const isImage = isImageUrl(url);
 
-      return {
-        url,
-        type,
-        purpose,
-        label: buildMediaLabel(businessName, { type, purpose }, index),
-      } satisfies PublicMediaItem;
-    })
-    .filter((item): item is PublicMediaItem => Boolean(item));
+    if (!isVideo && !isImage) {
+      continue;
+    }
+
+    const type: PublicMediaItem["type"] = isVideo ? "video" : "image";
+    const purpose = detectMediaPurpose(url);
+
+    seen.add(url);
+
+    items.push({
+      url,
+      type,
+      purpose,
+      label: buildMediaLabel(businessName, { type, purpose }, items.length),
+    });
+  }
+
+  return items;
 }
 
 function buildPlaceQuery(
@@ -314,6 +373,7 @@ function buildPlaceQuery(
     business.postcode,
     business.country,
   ]
+    .map(cleanText)
     .filter(Boolean)
     .join(", ");
 }
@@ -374,7 +434,7 @@ function buildAppleMapsUrl(
     typeof business.longitude === "number"
   ) {
     return `https://maps.apple.com/?q=${encodeURIComponent(
-      business.name ?? "Business"
+      cleanText(business.name) ?? "Business"
     )}&ll=${business.latitude},${business.longitude}`;
   }
 
@@ -403,8 +463,8 @@ function getPrimaryImage(
   mediaItems: PublicMediaItem[]
 ) {
   return (
-    cleanUrl(business.cover_image_url) ||
-    cleanUrl(business.logo_url) ||
+    safeHttpUrl(business.cover_image_url) ||
+    safeHttpUrl(business.logo_url) ||
     mediaItems.find((item) => item.type === "image")?.url ||
     null
   );
@@ -413,14 +473,16 @@ function getPrimaryImage(
 function uniqueList(values: Array<string | null | undefined>) {
   const seen = new Set<string>();
 
-  return values.filter((value): value is string => {
-    if (!value || seen.has(value)) {
-      return false;
-    }
+  return values
+    .map(cleanText)
+    .filter((value): value is string => {
+      if (!value || seen.has(value)) {
+        return false;
+      }
 
-    seen.add(value);
-    return true;
-  });
+      seen.add(value);
+      return true;
+    });
 }
 
 function getMediaSummary(
@@ -458,12 +520,16 @@ function getSmartBusinessAdvice({
     return "This premium listing includes a video showcase, making it easier for visitors to understand the business before contacting or visiting.";
   }
 
+  if (paidActive && mediaItems.length > 0) {
+    return "This active listing includes business media and premium visibility signals, helping customers preview the place before visiting.";
+  }
+
   if (mediaItems.length > 0) {
     return "This listing includes business media, helping customers preview the menu, premises, facilities, or services before visiting.";
   }
 
   if (business.is_verified) {
-    return "This verified listing has key business details available. More media can improve customer confidence and visibility.";
+    return "This verified listing has key business details available. More photos, videos, and opening hours can improve customer confidence.";
   }
 
   return "This is a community listing. The business can claim this page to add photos, videos, opening hours, and stronger trust signals.";
@@ -473,6 +539,148 @@ function getBusinessProfileUrl(slug: string | null | undefined) {
   return slug ? `/businesses/${slug}` : "/businesses";
 }
 
+function getBusinessType(category: string | null | undefined) {
+  const lower = cleanText(category)?.toLowerCase() ?? "";
+
+  if (
+    lower.includes("restaurant") ||
+    lower.includes("takeaway") ||
+    lower.includes("food") ||
+    lower.includes("cafe")
+  ) {
+    return "Restaurant";
+  }
+
+  if (lower.includes("butcher")) {
+    return "Butcher";
+  }
+
+  if (
+    lower.includes("grocery") ||
+    lower.includes("shop") ||
+    lower.includes("store") ||
+    lower.includes("bookstore")
+  ) {
+    return "Store";
+  }
+
+  if (
+    lower.includes("clinic") ||
+    lower.includes("dental") ||
+    lower.includes("doctor")
+  ) {
+    return "MedicalBusiness";
+  }
+
+  return "LocalBusiness";
+}
+
+function buildBusinessDescription(business: {
+  name: string | null;
+  category: string | null;
+  city: string | null;
+  description: string | null;
+}) {
+  const savedDescription = cleanText(business.description);
+
+  if (savedDescription) {
+    return truncateText(savedDescription);
+  }
+
+  const name = cleanText(business.name) ?? "this halal business";
+  const category = formatLabel(business.category);
+  const city = cleanText(business.city);
+
+  return truncateText(
+    `View ${name}${category ? `, a ${category.toLowerCase()}` : ""}${
+      city ? ` in ${city}` : ""
+    } on SalahNearMe. Find contact details, directions, opening hours, media, and trusted halal business information.`
+  );
+}
+
+function buildBusinessTitle(business: {
+  name: string | null;
+  city: string | null;
+  category: string | null;
+}) {
+  const name = cleanText(business.name) ?? "Halal Business";
+  const city = cleanText(business.city);
+  const category = formatLabel(business.category);
+
+  return `${name}${city ? ` in ${city}` : ""}${
+    category ? ` | ${category}` : ""
+  } | SalahNearMe`;
+}
+
+function compactJsonLd<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => compactJsonLd(item))
+      .filter((item) => item !== undefined && item !== null) as T;
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .map(([key, item]) => [key, compactJsonLd(item)])
+        .filter(([, item]) => {
+          if (item === undefined || item === null || item === "") {
+            return false;
+          }
+
+          if (Array.isArray(item) && item.length === 0) {
+            return false;
+          }
+
+          if (
+            typeof item === "object" &&
+            !Array.isArray(item) &&
+            Object.keys(item).length === 0
+          ) {
+            return false;
+          }
+
+          return true;
+        })
+    ) as T;
+  }
+
+  return value;
+}
+
+async function getCityForBusiness(
+  cityName: string | null,
+  citySlug: string | null
+) {
+  const supabase = supabasePublic();
+
+  if (citySlug) {
+    const { data } = await supabase
+      .from("cities")
+      .select("id,slug,name,country,country_code,timezone")
+      .eq("slug", citySlug)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (data) {
+      return data as CityRow;
+    }
+  }
+
+  if (!cityName) {
+    return null;
+  }
+
+  const { data } = await supabase
+    .from("cities")
+    .select("id,slug,name,country,country_code,timezone")
+    .ilike("name", cityName)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  return (data ?? null) as CityRow | null;
+}
+
 export async function generateStaticParams() {
   const supabase = supabasePublic();
 
@@ -480,7 +688,16 @@ export async function generateStaticParams() {
     .from("businesses")
     .select("slug")
     .not("slug", "is", null)
-    .limit(1000);
+    .order("featured", {
+      ascending: false,
+    })
+    .order("is_verified", {
+      ascending: false,
+    })
+    .order("name", {
+      ascending: true,
+    })
+    .limit(MAX_STATIC_BUSINESSES);
 
   return (data ?? [])
     .filter((item) => Boolean(item.slug))
@@ -498,7 +715,7 @@ export async function generateMetadata({
   const { data } = await supabase
     .from("businesses")
     .select(
-      "name,category,city,description,slug,cover_image_url,logo_url,gallery_urls"
+      "name,category,city,description,slug,cover_image_url,logo_url,gallery_urls,is_verified"
     )
     .eq("slug", slug)
     .maybeSingle();
@@ -513,40 +730,46 @@ export async function generateMetadata({
     };
   }
 
+  const siteUrl = getSiteUrl();
   const mediaItems = buildPublicMediaItems(
     data.gallery_urls as string[] | null | undefined,
     data.name
   );
 
   const image = getPrimaryImage(data, mediaItems);
-
-  const title = `${data.name ?? "Halal Business"}${
-    data.city ? ` | ${data.city}` : ""
-  } | SalahNearMe`;
-
-  const description =
-    data.description ||
-    `View ${data.name ?? "this halal business"}${
-      data.city ? ` in ${data.city}` : ""
-    }: halal business profile, media, map, contact details, opening hours, and nearby halal listings.`;
+  const title = buildBusinessTitle(data);
+  const description = buildBusinessDescription(data);
+  const canonicalPath = `/businesses/${slug}`;
+  const canonicalUrl = `${siteUrl}${canonicalPath}`;
 
   return {
     title,
     description,
     alternates: {
-      canonical: `/businesses/${slug}`,
+      canonical: canonicalPath,
+    },
+    robots: {
+      index: true,
+      follow: true,
+      googleBot: {
+        index: true,
+        follow: true,
+        "max-image-preview": "large",
+        "max-snippet": -1,
+        "max-video-preview": -1,
+      },
     },
     openGraph: {
       title,
       description,
-      url: `/businesses/${slug}`,
+      url: canonicalUrl,
       type: "website",
       siteName: "SalahNearMe",
       images: image
         ? [
             {
               url: image,
-              alt: data.name ?? "SalahNearMe business",
+              alt: data.name ?? "SalahNearMe halal business",
             },
           ]
         : undefined,
@@ -563,6 +786,7 @@ export async function generateMetadata({
 export default async function BusinessPage({ params }: PageProps) {
   const { slug } = await params;
   const supabase = supabasePublic();
+  const siteUrl = getSiteUrl();
 
   const { data: businessRaw, error } = await supabase
     .from("businesses")
@@ -643,16 +867,8 @@ export default async function BusinessPage({ params }: PageProps) {
     notFound();
   }
 
-  const { data: cityRowRaw } = business.city
-    ? await supabase
-        .from("cities")
-        .select("id,slug,name")
-        .eq("name", business.city)
-        .eq("is_active", true)
-        .maybeSingle()
-    : { data: null };
-
-  const cityRow = (cityRowRaw ?? null) as CityRow | null;
+  const citySlug = slugify(business.city);
+  const cityRow = await getCityForBusiness(business.city, citySlug);
 
   const { data: sponsorMosqueRaw } = business.sponsor_mosque_id
     ? await supabase
@@ -712,7 +928,7 @@ export default async function BusinessPage({ params }: PageProps) {
         .order("name", {
           ascending: true,
         })
-        .limit(20)
+        .limit(MAX_RELATED_FETCH)
     : { data: [] };
 
   const relatedBusinesses = sortBusinessesByRank(
@@ -722,12 +938,13 @@ export default async function BusinessPage({ params }: PageProps) {
       cityName: business.city,
       mosqueId: business.sponsor_mosque_id,
     }
-  ).slice(0, 6);
+  ).slice(0, MAX_RELATED_BUSINESSES);
 
   const googleMapsUrl = buildGoogleMapsUrl(business);
   const appleMapsUrl = buildAppleMapsUrl(business);
   const embedMapUrl = buildEmbedMapUrl(business);
   const websiteUrl = safeHttpUrl(business.website);
+  const phoneHref = safeTelHref(business.phone);
   const paidActive = isPaidActive(business.paid_until);
 
   const mediaItems = buildPublicMediaItems(business.gallery_urls, business.name);
@@ -739,33 +956,44 @@ export default async function BusinessPage({ params }: PageProps) {
     paidActive &&
     Boolean(
       business.featured ||
-        business.city_sponsor ||
-        business.mosque_sponsor ||
-        business.sponsorship_active
+        isTruthySponsorFlag(business.city_sponsor) ||
+        isTruthySponsorFlag(business.mosque_sponsor) ||
+        isTruthySponsorFlag(business.sponsorship_active)
     );
 
-  const businessUrl = `${SITE_URL}${getBusinessProfileUrl(business.slug)}`;
+  const businessPath = getBusinessProfileUrl(business.slug);
+  const businessUrl = `${siteUrl}${businessPath}`;
+  const businessName = cleanText(business.name) ?? "Business";
+  const categoryLabel = formatLabel(business.category);
+  const locationLine = buildLocationLine(business);
+  const description = buildBusinessDescription(business);
+  const localBusinessType = getBusinessType(business.category);
 
   const jsonLdImages = uniqueList([
     primaryImage,
     ...imageItems.map((item) => item.url),
   ]);
 
-  const jsonLd = {
+  const jsonLd = compactJsonLd({
     "@context": "https://schema.org",
-    "@type": "LocalBusiness",
-    name: business.name ?? "Business",
-    description: business.description ?? undefined,
+    "@type": localBusinessType,
+    name: businessName,
+    description,
     image: jsonLdImages.length > 0 ? jsonLdImages : undefined,
     url: businessUrl,
-    telephone: business.phone ?? undefined,
-    address: {
-      "@type": "PostalAddress",
-      streetAddress: business.address ?? undefined,
-      addressLocality: business.city ?? undefined,
-      postalCode: business.postcode ?? undefined,
-      addressCountry: business.country ?? undefined,
-    },
+    telephone: cleanText(business.phone) ?? undefined,
+    email: cleanText(business.email) ?? undefined,
+    priceRange: business.pricing_tier ? formatLabel(business.pricing_tier) : undefined,
+    address:
+      business.address || business.city || business.postcode || business.country
+        ? {
+            "@type": "PostalAddress",
+            streetAddress: cleanText(business.address) ?? undefined,
+            addressLocality: cleanText(business.city) ?? undefined,
+            postalCode: cleanText(business.postcode) ?? undefined,
+            addressCountry: cleanText(business.country) ?? "United Kingdom",
+          }
+        : undefined,
     geo:
       typeof business.latitude === "number" &&
       typeof business.longitude === "number"
@@ -775,14 +1003,16 @@ export default async function BusinessPage({ params }: PageProps) {
             longitude: business.longitude,
           }
         : undefined,
-  };
+    hasMap: googleMapsUrl ?? undefined,
+    sameAs: websiteUrl ? [websiteUrl] : undefined,
+  });
 
   const mediaJsonLd =
     mediaItems.length > 0
-      ? {
+      ? compactJsonLd({
           "@context": "https://schema.org",
           "@type": "ItemList",
-          name: `${business.name ?? "Business"} media`,
+          name: `${businessName} media`,
           itemListElement: mediaItems.map((item, index) => ({
             "@type": "ListItem",
             position: index + 1,
@@ -791,7 +1021,7 @@ export default async function BusinessPage({ params }: PageProps) {
                 ? {
                     "@type": "VideoObject",
                     name: item.label,
-                    description: `${business.name ?? "Business"} video media`,
+                    description: `${businessName} video media`,
                     contentUrl: item.url,
                     thumbnailUrl: primaryImage ?? undefined,
                     uploadDate: new Date().toISOString(),
@@ -802,10 +1032,10 @@ export default async function BusinessPage({ params }: PageProps) {
                     contentUrl: item.url,
                   },
           })),
-        }
+        })
       : null;
 
-  const breadcrumbJsonLd = {
+  const breadcrumbJsonLd = compactJsonLd({
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
     itemListElement: [
@@ -813,7 +1043,7 @@ export default async function BusinessPage({ params }: PageProps) {
         "@type": "ListItem",
         position: 1,
         name: "Home",
-        item: SITE_URL,
+        item: siteUrl,
       },
       ...(cityRow
         ? [
@@ -821,18 +1051,18 @@ export default async function BusinessPage({ params }: PageProps) {
               "@type": "ListItem",
               position: 2,
               name: cityRow.name,
-              item: `${SITE_URL}/${cityRow.slug}`,
+              item: `${siteUrl}/${cityRow.slug}`,
             },
             {
               "@type": "ListItem",
               position: 3,
               name: "Businesses",
-              item: `${SITE_URL}/${cityRow.slug}/businesses`,
+              item: `${siteUrl}/${cityRow.slug}/businesses`,
             },
             {
               "@type": "ListItem",
               position: 4,
-              name: business.name ?? "Business",
+              name: businessName,
               item: businessUrl,
             },
           ]
@@ -841,17 +1071,17 @@ export default async function BusinessPage({ params }: PageProps) {
               "@type": "ListItem",
               position: 2,
               name: "Businesses",
-              item: `${SITE_URL}/businesses`,
+              item: `${siteUrl}/businesses`,
             },
             {
               "@type": "ListItem",
               position: 3,
-              name: business.name ?? "Business",
+              name: businessName,
               item: businessUrl,
             },
           ]),
     ],
-  };
+  });
 
   const smartAdvice = getSmartBusinessAdvice({
     business,
@@ -901,7 +1131,7 @@ export default async function BusinessPage({ params }: PageProps) {
           <div className="relative h-72 overflow-hidden rounded-t-3xl md:h-96">
             <img
               src={primaryImage}
-              alt={`${business.name ?? "Business"} cover`}
+              alt={`${businessName} cover`}
               className="h-full w-full object-cover"
             />
 
@@ -914,10 +1144,10 @@ export default async function BusinessPage({ params }: PageProps) {
         <div className="relative z-10 grid gap-8 p-8 md:p-10 lg:grid-cols-[1.2fr_0.8fr]">
           <div>
             <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
-              {business.logo_url ? (
+              {safeHttpUrl(business.logo_url) ? (
                 <img
-                  src={business.logo_url}
-                  alt={`${business.name ?? "Business"} logo`}
+                  src={safeHttpUrl(business.logo_url) ?? ""}
+                  alt={`${businessName} logo`}
                   className="h-24 w-24 rounded-3xl border border-yellow-500/30 bg-black object-cover p-1 shadow-2xl shadow-yellow-500/10"
                 />
               ) : null}
@@ -928,31 +1158,32 @@ export default async function BusinessPage({ params }: PageProps) {
                 </div>
 
                 <h1 className="dashboard-hero-glow mt-4 text-4xl font-black tracking-[-0.04em] text-white md:text-6xl">
-                  {business.name ?? "Business"}
+                  {businessName}
                 </h1>
               </div>
             </div>
 
-            <div className="mt-4 text-lg text-white/70">
-              {[formatLabel(business.category), buildLocationLine(business)]
-                .filter(Boolean)
-                .join(" • ")}
-            </div>
+            {locationLine || categoryLabel ? (
+              <div className="mt-4 text-lg text-white/70">
+                {[categoryLabel, locationLine].filter(Boolean).join(" • ")}
+              </div>
+            ) : null}
 
             {(business.address || business.postcode) && (
               <div className="mt-4 max-w-3xl text-white/80">
                 {[business.address, business.postcode]
+                  .map(cleanText)
                   .filter(Boolean)
                   .join(" • ")}
               </div>
             )}
 
             <div className="mt-6 flex flex-wrap gap-2">
-              {business.city_sponsor && paidActive && (
+              {isTruthySponsorFlag(business.city_sponsor) && paidActive && (
                 <Badge>City Sponsor</Badge>
               )}
 
-              {business.mosque_sponsor && paidActive && (
+              {isTruthySponsorFlag(business.mosque_sponsor) && paidActive && (
                 <Badge>Mosque Sponsor</Badge>
               )}
 
@@ -1043,10 +1274,10 @@ export default async function BusinessPage({ params }: PageProps) {
                 </BusinessTrackedLink>
               )}
 
-              {business.phone && (
+              {phoneHref && (
                 <BusinessTrackedLink
                   businessId={business.id}
-                  href={`tel:${business.phone}`}
+                  href={phoneHref}
                   eventType="phone_click"
                   source="business_page"
                   pageType="business_profile"
@@ -1075,18 +1306,15 @@ export default async function BusinessPage({ params }: PageProps) {
             </div>
 
             <div className="mt-6 space-y-5">
-              <InfoRow
-                label="Category"
-                value={formatLabel(business.category) ?? "Not available"}
-              />
+              <InfoRow label="Category" value={categoryLabel ?? "Not available"} />
 
               <InfoRow
                 label="Phone"
                 value={
-                  business.phone ? (
+                  phoneHref ? (
                     <BusinessTrackedLink
                       businessId={business.id}
-                      href={`tel:${business.phone}`}
+                      href={phoneHref}
                       eventType="phone_click"
                       source="business_page_sidebar"
                       pageType="business_profile"
@@ -1116,7 +1344,7 @@ export default async function BusinessPage({ params }: PageProps) {
                       citySlug={cityRow?.slug}
                       className="break-all hover:text-yellow-400"
                     >
-                      {business.website}
+                      {websiteUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}
                     </BusinessTrackedLink>
                   ) : (
                     "Not available"
@@ -1161,9 +1389,8 @@ export default async function BusinessPage({ params }: PageProps) {
               </h2>
 
               <p className="mt-2 max-w-3xl text-white/65">
-                Images and videos are detected automatically so customers can
-                quickly see the menu, premises, facilities, products, and
-                promotional clips.
+                Images and videos help customers quickly see the menu, premises,
+                facilities, products, and promotional clips before visiting.
               </p>
             </div>
 
@@ -1239,7 +1466,7 @@ export default async function BusinessPage({ params }: PageProps) {
         </div>
 
         <div className="luxe-card-soft mt-5 rounded-2xl p-5 text-white/80">
-          {business.description ||
+          {cleanText(business.description) ||
             "More business details will appear here as this listing is enriched."}
         </div>
       </section>
@@ -1264,7 +1491,7 @@ export default async function BusinessPage({ params }: PageProps) {
 
           <div className="mt-6 overflow-hidden rounded-2xl border border-yellow-500/20">
             <iframe
-              title="Business location map"
+              title={`${businessName} location map`}
               src={embedMapUrl}
               className="h-[380px] w-full"
               loading="lazy"
@@ -1286,7 +1513,7 @@ export default async function BusinessPage({ params }: PageProps) {
             </div>
 
             <div className="mt-3 text-xl font-bold text-white">
-              {sponsorMosque.name}
+              {sponsorMosque.name ?? "Mosque"}
             </div>
 
             <div className="mt-2 text-sm text-white/60">
@@ -1352,7 +1579,9 @@ export default async function BusinessPage({ params }: PageProps) {
                     from_business_id: business.id,
                   }}
                 >
-                  <div className="font-semibold text-white">{item.name}</div>
+                  <div className="font-semibold text-white">
+                    {item.name ?? "Halal business"}
+                  </div>
 
                   <div className="mt-2 text-sm text-white/60">
                     {[formatLabel(item.category), item.city]
