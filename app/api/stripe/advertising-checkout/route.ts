@@ -33,8 +33,6 @@ type BusinessRow = {
   email: string | null;
 };
 
-type JsonBody = Record<string, unknown>;
-
 const ADVERTISING_TYPES = [
   "city_featured",
   "mosque_sponsor",
@@ -45,8 +43,13 @@ const ADVERTISING_TYPES = [
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function jsonResponse(body: JsonBody, status = 200) {
-  return NextResponse.json(body, { status });
+function jsonResponse(body: Record<string, unknown>, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+    },
+  });
 }
 
 function cleanString(value: unknown) {
@@ -54,7 +57,9 @@ function cleanString(value: unknown) {
 }
 
 function nullableString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
+  const cleaned = cleanString(value);
+
+  return cleaned ? cleaned : null;
 }
 
 function nullableBoolean(value: unknown): boolean | null {
@@ -85,15 +90,15 @@ function getStripePriceId(advertisingType: AdvertisingType) {
 
 function getMissingPriceHint(advertisingType: AdvertisingType) {
   if (advertisingType === "city_featured") {
-    return "Add STRIPE_PRICE_CITY_FEATURED to .env.local, then restart npm run dev.";
+    return "Add STRIPE_PRICE_CITY_FEATURED to Vercel and .env.local.";
   }
 
   if (advertisingType === "mosque_sponsor") {
-    return "Add STRIPE_PRICE_MOSQUE_SPONSOR to .env.local, then restart npm run dev.";
+    return "Add STRIPE_PRICE_MOSQUE_SPONSOR to Vercel and .env.local.";
   }
 
   if (advertisingType === "multi_mosque") {
-    return "Add STRIPE_PRICE_MULTI_MOSQUE to .env.local, then restart npm run dev.";
+    return "Add STRIPE_PRICE_MULTI_MOSQUE to Vercel and .env.local.";
   }
 
   return "Multi-city campaigns are custom and should be configured manually.";
@@ -148,26 +153,33 @@ function normaliseBusinessRow(row: unknown): BusinessRow | null {
 }
 
 export async function GET() {
-  return jsonResponse(
-    {
-      ok: true,
-      route: "/api/stripe/advertising-checkout",
-      method: "POST",
-      required_body: {
-        advertising_type: ADVERTISING_TYPES,
-        business_id: "valid business UUID",
-      },
+  return jsonResponse({
+    ok: true,
+    route: "/api/stripe/advertising-checkout",
+    method: "POST",
+    required_body: {
+      advertising_type: ADVERTISING_TYPES,
+      business_id: "valid business UUID",
     },
-    200
-  );
+  });
 }
 
 export async function POST(req: Request) {
   try {
     const body = (await req.json().catch(() => null)) as RequestBody | null;
 
-    const advertisingTypeRaw = cleanString(body?.advertising_type);
-    const businessId = cleanString(body?.business_id);
+    if (!body) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Missing request body.",
+        },
+        400
+      );
+    }
+
+    const advertisingTypeRaw = cleanString(body.advertising_type);
+    const businessId = cleanString(body.business_id);
 
     if (!advertisingTypeRaw || !isAdvertisingType(advertisingTypeRaw)) {
       return jsonResponse(
@@ -301,14 +313,11 @@ export async function POST(req: Request) {
       );
     }
 
-    return jsonResponse(
-      {
-        ok: true,
-        url: session.url,
-        session_id: session.id,
-      },
-      200
-    );
+    return jsonResponse({
+      ok: true,
+      url: session.url,
+      session_id: session.id,
+    });
   } catch (error) {
     console.error("advertising checkout route error:", error);
 
