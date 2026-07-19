@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import BusinessTrackedLink from "@/components/BusinessTrackedLink";
 import MosqueBusinessSponsors from "@/components/MosqueBusinessSponsors";
 import MosqueCorrectionReportForm from "@/components/MosqueCorrectionReportForm";
 import MosqueFacilitiesGrid from "@/components/MosqueFacilitiesGrid";
@@ -14,6 +13,7 @@ import MosqueNearbyBusinesses from "@/components/MosqueNearbyBusinesses";
 import MosqueTrustBadges from "@/components/MosqueTrustBadges";
 
 import { sortBusinessesByRank } from "@/lib/businessRanking";
+import { getSiteUrl } from "@/lib/env";
 import { buildLiveStatus } from "@/lib/mosqueLive";
 import { supabasePublic } from "@/lib/supabaseServer";
 
@@ -106,12 +106,15 @@ type MosqueRow = {
   website: string | null;
   country: string | null;
   timezone: string | null;
+
   womens_space: boolean | null;
   parking: boolean | null;
   wheelchair_access: boolean | null;
+
   verified_status: string | null;
   source: string | null;
   area_hint: string | null;
+
   children_classes: boolean | null;
   nikah_service: boolean | null;
   janazah_service: boolean | null;
@@ -120,6 +123,7 @@ type MosqueRow = {
   imam_name: string | null;
   languages: string[] | null;
   facilities_notes: string | null;
+
   jumuah_enabled: boolean | null;
   jumuah_khutbah_1: string | null;
   jumuah_salah_1: string | null;
@@ -128,23 +132,55 @@ type MosqueRow = {
   jumuah_khutbah_3: string | null;
   jumuah_salah_3: string | null;
   jumuah_notes: string | null;
+
   city_id: number | null;
   cities?: MosqueCityJoin;
 };
 
+type MosqueLiveReportType =
+  | "iqamah"
+  | "khutbah"
+  | "full"
+  | "correction"
+  | "parking_full"
+  | "jumuah_first"
+  | "jumuah_second"
+  | "jumuah_third";
+
+type LiveReportRow = {
+  report_type: MosqueLiveReportType;
+  created_at: string;
+};
+
+const DEFAULT_TIMEZONE = "Europe/London";
+const DEFAULT_COUNTRY = "United Kingdom";
+const MAX_STATIC_MOSQUE_PARAMS = 1000;
+
+function cleanText(value: string | null | undefined) {
+  const trimmed = value?.trim();
+
+  return trimmed ? trimmed : null;
+}
+
+function isSafeSlug(value: string) {
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
+}
+
 function formatLabel(value: string | null | undefined) {
-  if (!value) {
+  const cleaned = cleanText(value);
+
+  if (!cleaned) {
     return null;
   }
 
-  return value
+  return cleaned
     .replace(/_/g, " ")
     .replace(/-/g, " ")
     .replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
 function formatTimeValue(value: string | null | undefined) {
-  const trimmed = value?.trim();
+  const trimmed = cleanText(value);
 
   if (!trimmed) {
     return "—";
@@ -158,17 +194,13 @@ function formatTimeValue(value: string | null | undefined) {
 }
 
 function normaliseExternalUrl(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  const trimmed = value.trim();
+  const trimmed = cleanText(value);
 
   if (!trimmed) {
     return null;
   }
 
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+  if (/^https?:\/\//i.test(trimmed)) {
     return trimmed;
   }
 
@@ -176,7 +208,7 @@ function normaliseExternalUrl(value: string | null | undefined) {
 }
 
 function getTodayDateForTimezone(timezone: string | null | undefined) {
-  const safeTimezone = timezone || "Europe/London";
+  const safeTimezone = cleanText(timezone) ?? DEFAULT_TIMEZONE;
 
   try {
     const parts = new Intl.DateTimeFormat("en-GB", {
@@ -240,10 +272,28 @@ function getCurrentMonthRange(dateValue: string) {
   };
 }
 
+function getCitySlug(mosque: MosqueRow) {
+  return cleanText(mosque.cities?.slug);
+}
+
+function getCityName(mosque: MosqueRow) {
+  return cleanText(mosque.cities?.name) ?? cleanText(mosque.city);
+}
+
+function getCityCountry(mosque: MosqueRow) {
+  return (
+    cleanText(mosque.cities?.country) ??
+    cleanText(mosque.country) ??
+    DEFAULT_COUNTRY
+  );
+}
+
 function buildDirectionsLabel(
-  mosque: Pick<MosqueRow, "area" | "city" | "postcode">
+  mosque: Pick<MosqueRow, "area" | "city" | "postcode">,
+  cityName?: string | null
 ) {
-  return [mosque.area, mosque.city, mosque.postcode]
+  return [mosque.area, cityName ?? mosque.city, mosque.postcode]
+    .map(cleanText)
     .filter(Boolean)
     .join(" • ");
 }
@@ -257,6 +307,7 @@ function buildPlaceQuery(mosque: MosqueRow, cityName?: string | null) {
     mosque.postcode,
     mosque.country,
   ]
+    .map(cleanText)
     .filter(Boolean)
     .join(", ");
 }
@@ -270,7 +321,9 @@ function buildGoogleMapsUrl(mosque: MosqueRow, cityName?: string | null) {
 
   if (
     typeof mosque.latitude === "number" &&
-    typeof mosque.longitude === "number"
+    Number.isFinite(mosque.latitude) &&
+    typeof mosque.longitude === "number" &&
+    Number.isFinite(mosque.longitude)
   ) {
     return `https://www.google.com/maps/search/?api=1&query=${mosque.latitude},${mosque.longitude}`;
   }
@@ -287,7 +340,9 @@ function buildGoogleMapsUrl(mosque: MosqueRow, cityName?: string | null) {
 function buildAppleMapsUrl(mosque: MosqueRow, cityName?: string | null) {
   if (
     typeof mosque.latitude === "number" &&
-    typeof mosque.longitude === "number"
+    Number.isFinite(mosque.latitude) &&
+    typeof mosque.longitude === "number" &&
+    Number.isFinite(mosque.longitude)
   ) {
     return `https://maps.apple.com/?q=${encodeURIComponent(
       mosque.name ?? "Mosque"
@@ -299,16 +354,76 @@ function buildAppleMapsUrl(mosque: MosqueRow, cityName?: string | null) {
   return query ? `https://maps.apple.com/?q=${encodeURIComponent(query)}` : null;
 }
 
-function getCitySlug(mosque: MosqueRow) {
-  return mosque.cities?.slug ?? null;
+function buildMosqueDescription(mosqueName: string, place: string | null) {
+  return `View ${mosqueName}${
+    place ? ` in ${place}` : ""
+  } on SalahNearMe. Find mosque details, directions, facilities, Jumu’ah times, prayer timetable, live community status, correction reporting, and nearby halal businesses.`;
 }
 
-function getCityName(mosque: MosqueRow) {
-  return mosque.cities?.name ?? mosque.city ?? null;
+function getFallbackJumuahCards(mosque: MosqueRow) {
+  return [
+    {
+      label: "Jumu’ah 1",
+      khutbah: mosque.jumuah_khutbah_1,
+      salah: mosque.jumuah_salah_1,
+    },
+    {
+      label: "Jumu’ah 2",
+      khutbah: mosque.jumuah_khutbah_2,
+      salah: mosque.jumuah_salah_2,
+    },
+    {
+      label: "Jumu’ah 3",
+      khutbah: mosque.jumuah_khutbah_3,
+      salah: mosque.jumuah_salah_3,
+    },
+  ].filter((slot) => cleanText(slot.khutbah) || cleanText(slot.salah));
 }
 
-function getCityCountry(mosque: MosqueRow) {
-  return mosque.cities?.country ?? mosque.country ?? "United Kingdom";
+function buildMosqueJsonLd({
+  mosque,
+  cityName,
+  cityCountry,
+  pageUrl,
+  googleMapsUrl,
+}: {
+  mosque: MosqueRow;
+  cityName: string | null;
+  cityCountry: string;
+  pageUrl: string;
+  googleMapsUrl: string | null;
+}) {
+  const jsonLd: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": "Mosque",
+    name: mosque.name ?? "Mosque",
+    url: pageUrl,
+    telephone: cleanText(mosque.phone) ?? undefined,
+    sameAs: normaliseExternalUrl(mosque.website) ?? undefined,
+    hasMap: googleMapsUrl ?? undefined,
+    address: {
+      "@type": "PostalAddress",
+      streetAddress: cleanText(mosque.address) ?? undefined,
+      addressLocality: cityName ?? undefined,
+      postalCode: cleanText(mosque.postcode) ?? undefined,
+      addressCountry: cityCountry,
+    },
+  };
+
+  if (
+    typeof mosque.latitude === "number" &&
+    Number.isFinite(mosque.latitude) &&
+    typeof mosque.longitude === "number" &&
+    Number.isFinite(mosque.longitude)
+  ) {
+    jsonLd.geo = {
+      "@type": "GeoCoordinates",
+      latitude: mosque.latitude,
+      longitude: mosque.longitude,
+    };
+  }
+
+  return jsonLd;
 }
 
 export async function generateStaticParams() {
@@ -318,12 +433,15 @@ export async function generateStaticParams() {
     .from("mosques")
     .select("slug")
     .not("slug", "is", null)
-    .eq("is_active", true);
+    .eq("is_active", true)
+    .order("updated_at", { ascending: false })
+    .limit(MAX_STATIC_MOSQUE_PARAMS);
 
   return (data ?? [])
-    .filter((mosque) => Boolean(mosque.slug))
-    .map((mosque) => ({
-      slug: mosque.slug as string,
+    .map((mosque) => cleanText(mosque.slug as string | null))
+    .filter((slug): slug is string => Boolean(slug))
+    .map((slug) => ({
+      slug,
     }));
 }
 
@@ -331,6 +449,17 @@ export async function generateMetadata({
   params,
 }: PageProps): Promise<Metadata> {
   const { slug } = await params;
+
+  if (!isSafeSlug(slug)) {
+    return {
+      title: "Mosque Not Found | SalahNearMe",
+      robots: {
+        index: false,
+        follow: false,
+      },
+    };
+  }
+
   const supabase = supabasePublic();
 
   const { data } = await supabase
@@ -341,6 +470,7 @@ export async function generateMetadata({
       slug,
       city,
       area,
+      postcode,
       cities:city_id (
         slug,
         name,
@@ -355,36 +485,44 @@ export async function generateMetadata({
   if (!data) {
     return {
       title: "Mosque Not Found | SalahNearMe",
+      robots: {
+        index: false,
+        follow: false,
+      },
     };
   }
 
   const mosque = data as unknown as Pick<
     MosqueRow,
-    "name" | "slug" | "city" | "area" | "cities"
+    "name" | "slug" | "city" | "area" | "postcode" | "cities"
   >;
 
   const cityName = mosque.cities?.name ?? mosque.city ?? null;
-  const place = [mosque.area, cityName].filter(Boolean).join(", ");
+  const mosqueName = mosque.name ?? "Mosque";
+  const place = [mosque.area, cityName, mosque.postcode]
+    .map(cleanText)
+    .filter(Boolean)
+    .join(", ");
 
-  const title = `${mosque.name ?? "Mosque"}${
-    place ? ` | ${place}` : ""
-  } | SalahNearMe`;
-
-  const description = `View ${mosque.name ?? "this mosque"}${
-    place ? ` in ${place}` : ""
-  }: location, directions, live community status, facilities, Jumu’ah times, monthly timetable, trust badges, correction reports, and nearby halal businesses.`;
+  const title = `${mosqueName}${place ? ` | ${place}` : ""} | SalahNearMe`;
+  const description = buildMosqueDescription(mosqueName, place || null);
+  const siteUrl = getSiteUrl();
+  const canonicalPath = `/mosque/${slug}`;
+  const canonicalUrl = `${siteUrl}${canonicalPath}`;
 
   return {
+    metadataBase: new URL(siteUrl),
     title,
     description,
     alternates: {
-      canonical: `/mosque/${slug}`,
+      canonical: canonicalPath,
     },
     openGraph: {
       title,
       description,
-      url: `/mosque/${slug}`,
+      url: canonicalUrl,
       type: "website",
+      siteName: "SalahNearMe",
     },
     twitter: {
       card: "summary_large_image",
@@ -396,6 +534,11 @@ export async function generateMetadata({
 
 export default async function MosquePage({ params }: PageProps) {
   const { slug } = await params;
+
+  if (!isSafeSlug(slug)) {
+    notFound();
+  }
+
   const supabase = supabasePublic();
 
   const { data: mosqueRaw, error: mosqueError } = await supabase
@@ -451,7 +594,12 @@ export default async function MosquePage({ params }: PageProps) {
     .maybeSingle();
 
   if (mosqueError) {
-    return <pre className="text-white/80">{mosqueError.message}</pre>;
+    return (
+      <ErrorPanel
+        title="Mosque profile temporarily unavailable"
+        message="We could not load this mosque profile at the moment. Please try again shortly."
+      />
+    );
   }
 
   if (!mosqueRaw) {
@@ -468,80 +616,107 @@ export default async function MosquePage({ params }: PageProps) {
   const appleMapsUrl = buildAppleMapsUrl(mosque, cityName);
   const mosqueWebsiteUrl = normaliseExternalUrl(mosque.website);
 
-  const { data: liveReports } = await supabase
-    .from("mosque_live_reports")
-    .select("report_type, created_at")
-    .eq("mosque_id", mosque.id)
-    .order("created_at", { ascending: false })
-    .limit(50);
-
-  const live = buildLiveStatus(liveReports ?? []);
-
   const today = getTodayDateForTimezone(mosque.timezone);
   const currentMonthRange = getCurrentMonthRange(today);
 
-  const { data: todaysPrayerTimes } = await supabase
-    .from("mosque_prayer_times")
-    .select("*")
-    .eq("mosque_id", mosque.id)
-    .eq("prayer_date", today)
-    .maybeSingle();
+  const [
+    liveReportsResult,
+    todaysPrayerTimesResult,
+    currentMonthPublishedCountResult,
+    jumuahTimesResult,
+    sponsoredBusinessesResult,
+  ] = await Promise.all([
+    supabase
+      .from("mosque_live_reports")
+      .select("report_type, created_at")
+      .eq("mosque_id", mosque.id)
+      .order("created_at", { ascending: false })
+      .limit(50),
 
-  const { count: currentMonthPublishedCount } = await supabase
-    .from("mosque_prayer_times")
-    .select("id", {
-      count: "exact",
-      head: true,
-    })
-    .eq("mosque_id", mosque.id)
-    .gte("prayer_date", currentMonthRange.startDate)
-    .lte("prayer_date", currentMonthRange.endDate);
+    supabase
+      .from("mosque_prayer_times")
+      .select("*")
+      .eq("mosque_id", mosque.id)
+      .eq("prayer_date", today)
+      .maybeSingle(),
 
-  const { data: jumuahTimes } = await supabase
-    .from("mosque_jumuah_times")
-    .select("*")
-    .eq("mosque_id", mosque.id)
-    .eq("active", true)
-    .order("salah_time", {
-      ascending: true,
-    });
+    supabase
+      .from("mosque_prayer_times")
+      .select("id", {
+        count: "exact",
+        head: true,
+      })
+      .eq("mosque_id", mosque.id)
+      .gte("prayer_date", currentMonthRange.startDate)
+      .lte("prayer_date", currentMonthRange.endDate),
 
-  const prayerTimes = todaysPrayerTimes as MosquePrayerTimeRow | null;
-  const officialJumuahTimes = (jumuahTimes ?? []) as MosqueJumuahTimeRow[];
+    supabase
+      .from("mosque_jumuah_times")
+      .select("*")
+      .eq("mosque_id", mosque.id)
+      .eq("active", true)
+      .order("salah_time", {
+        ascending: true,
+      }),
 
-  const { data: sponsoredBusinesses } = await supabase
-    .from("businesses")
-    .select(
+    supabase
+      .from("businesses")
+      .select(
+        `
+        id,
+        name,
+        slug,
+        category,
+        city,
+        area,
+        address,
+        postcode,
+        featured,
+        featured_rank,
+        website,
+        maps_url,
+        phone,
+        pricing_tier,
+        paid_until,
+        is_verified,
+        sponsor_mosque_id,
+        logo_url,
+        cover_image_url,
+        gallery_urls
       `
-      id,
-      name,
-      slug,
-      category,
-      city,
-      area,
-      address,
-      postcode,
-      featured,
-      featured_rank,
-      website,
-      maps_url,
-      phone,
-      pricing_tier,
-      paid_until,
-      is_verified,
-      sponsor_mosque_id,
-      logo_url,
-      cover_image_url,
-      gallery_urls
-    `
-    )
-    .eq("sponsor_mosque_id", mosque.id)
-    .eq("is_active", true)
-    .eq("is_live", true)
-    .order("name", { ascending: true })
-    .limit(6);
+      )
+      .eq("sponsor_mosque_id", mosque.id)
+      .eq("is_active", true)
+      .eq("is_live", true)
+      .order("name", { ascending: true })
+      .limit(6),
+  ]);
 
-  let businessesToShow = (sponsoredBusinesses ?? []) as unknown as BusinessCard[];
+ const liveReports = (liveReportsResult.data ?? [])
+  .filter(
+    (report): report is LiveReportRow =>
+      typeof report.report_type === "string" &&
+      typeof report.created_at === "string"
+  )
+  .map((report) => ({
+    report_type: report.report_type,
+    created_at: report.created_at,
+  }));
+
+const live = buildLiveStatus(liveReports);
+
+  const prayerTimes =
+    (todaysPrayerTimesResult.data as MosquePrayerTimeRow | null) ?? null;
+
+  const currentMonthPublishedCount =
+    currentMonthPublishedCountResult.count ?? 0;
+
+  const officialJumuahTimes =
+    (jumuahTimesResult.data ?? []) as MosqueJumuahTimeRow[];
+
+  let businessesToShow =
+    (sponsoredBusinessesResult.data ?? []) as unknown as BusinessCard[];
+
   let sectionTitle = "Sponsored Halal Businesses";
   let sectionDescription =
     "These businesses are supporting this mosque and are ranked by active sponsorship level and placement.";
@@ -580,9 +755,9 @@ export default async function MosquePage({ params }: PageProps) {
       .limit(12);
 
     businessesToShow = (fallbackBusinesses ?? []) as unknown as BusinessCard[];
-    sectionTitle = "Featured Halal Businesses";
+    sectionTitle = `Halal Businesses in ${cityName}`;
     sectionDescription =
-      "Approved halal businesses in this city. Sponsored and featured placements receive stronger visibility.";
+      "Approved halal businesses near this mosque. Sponsored and featured placements receive stronger visibility.";
   }
 
   businessesToShow = sortBusinessesByRank(businessesToShow, {
@@ -590,51 +765,30 @@ export default async function MosquePage({ params }: PageProps) {
     cityName,
   }).slice(0, 6);
 
-  const fallbackJumuahCards = [
-    {
-      label: "Jumu’ah 1",
-      khutbah: mosque.jumuah_khutbah_1,
-      salah: mosque.jumuah_salah_1,
-    },
-    {
-      label: "Jumu’ah 2",
-      khutbah: mosque.jumuah_khutbah_2,
-      salah: mosque.jumuah_salah_2,
-    },
-    {
-      label: "Jumu’ah 3",
-      khutbah: mosque.jumuah_khutbah_3,
-      salah: mosque.jumuah_salah_3,
-    },
-  ];
+  const fallbackJumuahCards = getFallbackJumuahCards(mosque);
 
   const monthlyTimetableHref = mosque.slug
     ? `/mosque/${mosque.slug}/timetable?month=${currentMonthRange.month}&year=${currentMonthRange.year}`
     : null;
 
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@type": "Mosque",
-    name: mosque.name ?? "Mosque",
-    address: {
-      "@type": "PostalAddress",
-      streetAddress: mosque.address ?? undefined,
-      addressLocality: cityName ?? undefined,
-      postalCode: mosque.postcode ?? undefined,
-      addressCountry: cityCountry ?? undefined,
+  const siteUrl = getSiteUrl();
+  const pageUrl = `${siteUrl}/mosque/${mosque.slug}`;
+  const jsonLd = buildMosqueJsonLd({
+    mosque,
+    cityName,
+    cityCountry,
+    pageUrl,
+    googleMapsUrl,
+  });
+
+  const locationLabel = buildDirectionsLabel(
+    {
+      area: mosque.area,
+      city: mosque.city,
+      postcode: mosque.postcode,
     },
-    geo:
-      typeof mosque.latitude === "number" &&
-      typeof mosque.longitude === "number"
-        ? {
-            "@type": "GeoCoordinates",
-            latitude: mosque.latitude,
-            longitude: mosque.longitude,
-          }
-        : undefined,
-    url: `https://www.salahnearme.com/mosque/${mosque.slug}`,
-    telephone: mosque.phone ?? undefined,
-  };
+    cityName
+  );
 
   return (
     <div className="space-y-8">
@@ -660,13 +814,13 @@ export default async function MosquePage({ params }: PageProps) {
             {mosque.name ?? "Mosque"}
           </h1>
 
-          <div className="mt-4 text-lg text-white/70">
-            {buildDirectionsLabel({
-              area: mosque.area,
-              city: cityName,
-              postcode: mosque.postcode,
-            })}
-          </div>
+          {locationLabel ? (
+            <div className="mt-4 text-lg text-white/70">{locationLabel}</div>
+          ) : (
+            <div className="mt-4 text-lg text-white/60">
+              Location details are being verified.
+            </div>
+          )}
 
           {mosque.address ? (
             <div className="mt-4 max-w-3xl text-white/80">
@@ -678,8 +832,12 @@ export default async function MosquePage({ params }: PageProps) {
             {cityName ? <Badge>{cityName}</Badge> : null}
 
             {mosque.verified_status ? (
-              <Badge variant="green">{formatLabel(mosque.verified_status)}</Badge>
-            ) : null}
+              <Badge variant="green">
+                {formatLabel(mosque.verified_status)}
+              </Badge>
+            ) : (
+              <Badge variant="yellow">Awaiting verification</Badge>
+            )}
 
             {mosque.source ? <Badge>{formatLabel(mosque.source)}</Badge> : null}
 
@@ -768,7 +926,8 @@ export default async function MosquePage({ params }: PageProps) {
             </div>
 
             <p className="mt-2 text-sm text-white/60">
-              Community-reported live updates for this mosque.
+              Community-reported live updates for this mosque. These are helpful
+              signals, not official mosque announcements.
             </p>
           </div>
 
@@ -797,7 +956,7 @@ export default async function MosquePage({ params }: PageProps) {
 
               {live.counts.correction > 0 ? (
                 <LiveCard
-                  text={`Time incorrect (${live.counts.correction})`}
+                  text={`Time correction reported (${live.counts.correction})`}
                   colour="yellow"
                 />
               ) : null}
@@ -832,7 +991,8 @@ export default async function MosquePage({ params }: PageProps) {
             </div>
           ) : (
             <div className="luxe-card-soft rounded-2xl p-5 text-white/80">
-              No live updates yet.
+              No live community updates yet. Visitors can report whether iqamah
+              has started, parking is full, or a timetable correction is needed.
             </div>
           )}
         </div>
@@ -855,15 +1015,15 @@ export default async function MosquePage({ params }: PageProps) {
                 <span className="font-semibold text-white">{today}</span>.
               </p>
 
-              {typeof currentMonthPublishedCount === "number" &&
-              currentMonthPublishedCount > 0 ? (
+              {currentMonthPublishedCount > 0 ? (
                 <p className="mt-2 text-sm text-emerald-200">
                   {currentMonthPublishedCount} timetable rows are published for
                   this month.
                 </p>
               ) : (
                 <p className="mt-2 text-sm text-yellow-100/80">
-                  No published rows were found for this month yet.
+                  No published mosque-specific timetable rows were found for
+                  this month yet.
                 </p>
               )}
             </div>
@@ -930,9 +1090,9 @@ export default async function MosquePage({ params }: PageProps) {
             </div>
           ) : (
             <div className="mt-5 rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-4 text-sm text-yellow-100">
-              No mosque-specific timetable has been added for today yet. Use
-              the monthly timetable button to check other published dates, or
-              the mosque can claim this page to add official iqamah times.
+              No mosque-specific timetable has been added for today yet. The
+              mosque management team can claim this page to add official iqamah
+              times.
             </div>
           )}
         </section>
@@ -941,6 +1101,11 @@ export default async function MosquePage({ params }: PageProps) {
           <div className="text-2xl font-bold text-yellow-400">
             Friday Prayer Sessions
           </div>
+
+          <p className="mt-2 text-sm text-white/60">
+            Jumu’ah information is shown when it has been provided by the mosque
+            or imported from a trusted timetable source.
+          </p>
 
           <div className="mt-6 grid gap-4">
             {officialJumuahTimes.length > 0
@@ -965,7 +1130,8 @@ export default async function MosquePage({ params }: PageProps) {
                     ) : null}
                   </div>
                 ))
-              : fallbackJumuahCards.map((slot) => (
+              : fallbackJumuahCards.length > 0
+              ? fallbackJumuahCards.map((slot) => (
                   <div
                     key={slot.label}
                     className="luxe-card-soft rounded-2xl p-5"
@@ -979,7 +1145,12 @@ export default async function MosquePage({ params }: PageProps) {
                       <TimeBlock label="Salah" value={slot.salah} />
                     </div>
                   </div>
-                ))}
+                ))
+              : (
+                  <div className="luxe-card-soft rounded-2xl p-5 text-white/70">
+                    Jumu’ah times have not been added for this mosque yet.
+                  </div>
+                )}
           </div>
 
           {mosque.jumuah_notes ? (
@@ -1052,7 +1223,7 @@ export default async function MosquePage({ params }: PageProps) {
             <p className="mt-3 text-white/70">
               Are you part of this mosque management team? Claim this page to
               update prayer times, Jumu’ah sessions, facilities, and live mosque
-              status.
+              information.
             </p>
 
             {mosque.slug ? (
@@ -1069,31 +1240,22 @@ export default async function MosquePage({ params }: PageProps) {
 
           <div className="luxe-card-soft rounded-2xl p-6">
             <div className="text-xl font-bold text-yellow-400">
-              Support This Mosque
+              Support this mosque page
             </div>
 
             <p className="mt-3 text-white/70">
               Sponsor this mosque page to place your halal business in front of
-              local visitors.
+              local visitors looking for nearby Muslim-friendly services.
             </p>
 
             <div className="mt-5 flex flex-wrap gap-3">
               {mosque.slug ? (
-                <BusinessTrackedLink
-                  businessId="platform"
+                <Link
                   href={`/sponsor/mosque/${mosque.slug}`}
-                  eventType="sponsor_click"
-                  source="mosque_page_bottom_cta"
-                  pageType="mosque_page"
-                  citySlug={citySlug ?? undefined}
                   className="luxe-button text-sm"
-                  metadata={{
-                    mosque_id: mosque.id,
-                    mosque_slug: mosque.slug,
-                  }}
                 >
                   Sponsor this mosque
-                </BusinessTrackedLink>
+                </Link>
               ) : null}
 
               {cityName && citySlug ? (
@@ -1112,16 +1274,38 @@ export default async function MosquePage({ params }: PageProps) {
   );
 }
 
+function ErrorPanel({ title, message }: { title: string; message: string }) {
+  return (
+    <section className="luxe-card rounded-3xl p-8">
+      <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
+        SalahNearMe
+      </div>
+
+      <h1 className="mt-4 text-3xl font-black text-white">{title}</h1>
+
+      <p className="mt-3 max-w-2xl text-white/70">{message}</p>
+
+      <div className="mt-6">
+        <Link href="/" className="luxe-button text-sm">
+          Go home
+        </Link>
+      </div>
+    </section>
+  );
+}
+
 function Badge({
   children,
   variant = "default",
 }: {
   children: ReactNode;
-  variant?: "default" | "green";
+  variant?: "default" | "green" | "yellow";
 }) {
   const className =
     variant === "green"
       ? "border-green-500/30 bg-green-500/10 text-green-300"
+      : variant === "yellow"
+      ? "border-yellow-500/30 bg-yellow-500/10 text-yellow-300"
       : "border-yellow-500/20 bg-yellow-500/10 text-yellow-300";
 
   return (
@@ -1179,12 +1363,12 @@ function PrayerTimeCard({
     <div className="luxe-card-soft rounded-2xl p-4">
       <div className="text-sm font-semibold text-yellow-400">{prayer}</div>
 
-      <div className="mt-3 text-sm text-white/60">Begins:</div>
+      <div className="mt-3 text-sm text-white/60">Begins</div>
       <div className="text-lg font-semibold text-white">
         {formatTimeValue(begins)}
       </div>
 
-      <div className="mt-3 text-sm text-white/60">Iqamah:</div>
+      <div className="mt-3 text-sm text-white/60">Iqamah</div>
       <div className="text-lg font-semibold text-white">
         {formatTimeValue(iqamah)}
       </div>
@@ -1203,7 +1387,7 @@ function SingleTimeCard({
     <div className="luxe-card-soft rounded-2xl p-4">
       <div className="text-sm font-semibold text-yellow-400">{label}</div>
 
-      <div className="mt-3 text-sm text-white/60">Time:</div>
+      <div className="mt-3 text-sm text-white/60">Time</div>
       <div className="text-lg font-semibold text-white">
         {formatTimeValue(value)}
       </div>
