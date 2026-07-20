@@ -513,28 +513,42 @@ export default async function Home() {
       <HomeHajjHijriBanner />
 
       {selectedCity ? (
-        <>
-          <NextSalahCountdown
-            prayerTimes={prayerTimes}
-            cityName={selectedCity.name}
-          />
+  <>
+    <NextSalahCountdown
+      prayerTimes={prayerTimes}
+      cityName={selectedCity.name}
+    />
 
-          <SelectedCityHomePanel
-            city={{
-              name: selectedCity.name,
-              slug: selectedCity.slug,
-              timezone: selectedCity.timezone ?? "Europe/London",
-            }}
-            prayerTimes={prayerTimes}
-            prayerTimesSource={prayerTimesSource}
-            prayerTimesUpdatedAt={prayerTimesUpdatedAt}
-          />
+    <SelectedCityHomePanel
+      city={{
+        name: selectedCity.name,
+        slug: selectedCity.slug,
+        timezone: selectedCity.timezone ?? "Europe/London",
+      }}
+      prayerTimes={prayerTimes}
+      prayerTimesSource={prayerTimesSource}
+      prayerTimesUpdatedAt={prayerTimesUpdatedAt}
+    />
 
-          <HomeDailyPanel cityId={selectedCity.id} cityName={selectedCity.name} />
-        </>
-      ) : (
-        <HomeDailyPanel />
-      )}
+    <HomeDailyPanel
+      cityId={selectedCity.id}
+      cityName={selectedCity.name}
+      citySlug={selectedCity.slug}
+      prayerTimes={prayerTimes}
+    />
+  </>
+) : (
+  <>
+    <SelectedCityHomePanel
+      city={null}
+      prayerTimes={null}
+      prayerTimesSource="unavailable"
+      prayerTimesUpdatedAt={null}
+    />
+
+    <HomeDailyPanel />
+  </>
+)}
 
       <section className="rounded-3xl border border-yellow-500/20 bg-black/30 p-8 text-center">
         <div className="text-sm font-bold uppercase tracking-[0.25em] text-yellow-400">
