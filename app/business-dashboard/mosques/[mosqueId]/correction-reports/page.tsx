@@ -35,33 +35,54 @@ type MosqueRow = {
 type CorrectionReportRow = {
   id: string;
   mosque_id: string;
-  report_type: string;
-  report_message: string;
+  report_type: string | null;
+  report_message: string | null;
   reporter_name: string | null;
   reporter_email: string | null;
   page_url: string | null;
   metadata: Record<string, unknown> | null;
-  status: string;
+  status: string | null;
   admin_notes: string | null;
-  created_at: string;
-  updated_at: string;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type Counts = {
+  total: number;
+  open: number;
+  new: number;
+  reviewing: number;
+  resolved: number;
+  rejected: number;
 };
 
 const STATUS_OPTIONS = ["all", "new", "reviewing", "resolved", "rejected"];
 
+function asString(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+
 function formatLabel(value: string | null | undefined) {
-  if (!value) {
+  const label = value?.trim();
+
+  if (!label) {
     return "Unknown";
   }
 
-  return value
+  return label
     .replace(/_/g, " ")
     .replace(/-/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function formatDateTime(value: string | null | undefined) {
+function formatDateTime(value: string | null | undefined, timezone?: string | null) {
   if (!value) {
+    return "Unknown";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
     return "Unknown";
   }
 
@@ -69,10 +90,14 @@ function formatDateTime(value: string | null | undefined) {
     return new Intl.DateTimeFormat("en-GB", {
       dateStyle: "medium",
       timeStyle: "short",
-      timeZone: "Europe/London",
-    }).format(new Date(value));
+      timeZone: timezone || "Europe/London",
+    }).format(date);
   } catch {
-    return value;
+    return new Intl.DateTimeFormat("en-GB", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "Europe/London",
+    }).format(date);
   }
 }
 
@@ -83,8 +108,30 @@ function getMosqueLocation(mosque: MosqueRow) {
   );
 }
 
+function getStatusValue(value: string | null | undefined) {
+  const status = value?.trim().toLowerCase();
+
+  if (status === "reviewing") {
+    return "reviewing";
+  }
+
+  if (status === "resolved") {
+    return "resolved";
+  }
+
+  if (status === "rejected") {
+    return "rejected";
+  }
+
+  return "new";
+}
+
+function getReportTypeValue(value: string | null | undefined) {
+  return value?.trim() || "general";
+}
+
 function getStatusClass(status: string | null | undefined) {
-  const value = (status ?? "").toLowerCase();
+  const value = getStatusValue(status);
 
   if (value === "resolved") {
     return "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
@@ -102,12 +149,15 @@ function getStatusClass(status: string | null | undefined) {
 }
 
 function getTypeClass(reportType: string | null | undefined) {
-  const value = (reportType ?? "").toLowerCase();
+  const value = getReportTypeValue(reportType).toLowerCase();
 
   if (
+    value.includes("time") ||
     value.includes("wrong") ||
     value.includes("missing") ||
-    value.includes("closed")
+    value.includes("closed") ||
+    value.includes("iqamah") ||
+    value.includes("jumu")
   ) {
     return "border-yellow-500/30 bg-yellow-500/10 text-yellow-300";
   }
@@ -116,11 +166,15 @@ function getTypeClass(reportType: string | null | undefined) {
     return "border-purple-500/30 bg-purple-500/10 text-purple-300";
   }
 
+  if (value.includes("location") || value.includes("address")) {
+    return "border-cyan-500/30 bg-cyan-500/10 text-cyan-300";
+  }
+
   return "border-white/10 bg-white/5 text-white/70";
 }
 
 function getReportCardClass(status: string | null | undefined) {
-  const value = (status ?? "").toLowerCase();
+  const value = getStatusValue(status);
 
   if (value === "resolved") {
     return "rounded-3xl border border-emerald-500/20 bg-emerald-500/5 p-6";
@@ -134,7 +188,7 @@ function getReportCardClass(status: string | null | undefined) {
     return "rounded-3xl border border-cyan-500/20 bg-cyan-500/5 p-6";
   }
 
-  return "rounded-3xl border border-white/10 bg-black/25 p-6";
+  return "rounded-3xl border border-yellow-500/20 bg-black/25 p-6";
 }
 
 function getMetadataValue(
@@ -144,7 +198,7 @@ function getMetadataValue(
   const value = metadata?.[key];
 
   if (typeof value === "string" && value.trim()) {
-    return value;
+    return value.trim();
   }
 
   if (typeof value === "number" || typeof value === "boolean") {
@@ -154,21 +208,31 @@ function getMetadataValue(
   return null;
 }
 
-function groupCounts(reports: CorrectionReportRow[]) {
+function groupCounts(reports: CorrectionReportRow[]): Counts {
   return {
     total: reports.length,
-    open: reports.filter(
-      (report) => report.status === "new" || report.status === "reviewing"
+    open: reports.filter((report) => {
+      const status = getStatusValue(report.status);
+      return status === "new" || status === "reviewing";
+    }).length,
+    new: reports.filter((report) => getStatusValue(report.status) === "new")
+      .length,
+    reviewing: reports.filter(
+      (report) => getStatusValue(report.status) === "reviewing"
     ).length,
-    new: reports.filter((report) => report.status === "new").length,
-    reviewing: reports.filter((report) => report.status === "reviewing").length,
-    resolved: reports.filter((report) => report.status === "resolved").length,
-    rejected: reports.filter((report) => report.status === "rejected").length,
+    resolved: reports.filter(
+      (report) => getStatusValue(report.status) === "resolved"
+    ).length,
+    rejected: reports.filter(
+      (report) => getStatusValue(report.status) === "rejected"
+    ).length,
   };
 }
 
 function getUniqueReportTypes(reports: CorrectionReportRow[]) {
-  return Array.from(new Set(reports.map((report) => report.report_type)))
+  return Array.from(
+    new Set(reports.map((report) => getReportTypeValue(report.report_type)))
+  )
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b));
 }
@@ -203,6 +267,8 @@ function reportMatchesSearch(report: CorrectionReportRow, query: string) {
     getMetadataValue(report.metadata, "source"),
     getMetadataValue(report.metadata, "mosque_name"),
     getMetadataValue(report.metadata, "mosque_slug"),
+    getMetadataValue(report.metadata, "reason"),
+    getMetadataValue(report.metadata, "ip_hint"),
   ]
     .filter(Boolean)
     .join(" ")
@@ -224,10 +290,10 @@ function filterReports({
 }) {
   return reports.filter((report) => {
     const statusMatches =
-      statusFilter === "all" || report.status === statusFilter;
+      statusFilter === "all" || getStatusValue(report.status) === statusFilter;
 
     const typeMatches =
-      typeFilter === "all" || report.report_type === typeFilter;
+      typeFilter === "all" || getReportTypeValue(report.report_type) === typeFilter;
 
     const searchMatches = reportMatchesSearch(report, searchQuery);
 
@@ -271,7 +337,10 @@ function ErrorPanel({ message }: { message: string }) {
   return (
     <main className="mx-auto max-w-5xl px-4 py-10">
       <section className="rounded-3xl border border-red-500/20 bg-red-500/10 p-8 text-red-200">
-        {message}
+        <div className="text-sm uppercase tracking-[0.22em] text-red-300">
+          Could not load correction reports
+        </div>
+        <div className="mt-3 text-sm leading-7">{message}</div>
       </section>
     </main>
   );
@@ -304,7 +373,7 @@ function MetricCard({
 
   const className = active
     ? "rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-5"
-    : "rounded-2xl border border-white/10 bg-black/30 p-5 hover:bg-white/[0.03]";
+    : "rounded-2xl border border-white/10 bg-black/30 p-5 transition hover:bg-white/[0.03]";
 
   if (!href) {
     return <div className={className}>{content}</div>;
@@ -330,6 +399,26 @@ function Badge({
     >
       {children}
     </span>
+  );
+}
+
+function QuickActionCard({
+  title,
+  description,
+  href,
+}: {
+  title: string;
+  description: string;
+  href: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="rounded-2xl border border-white/10 bg-black/30 p-4 transition hover:border-yellow-500/30 hover:bg-yellow-500/10"
+    >
+      <div className="font-bold text-white">{title}</div>
+      <p className="mt-2 text-sm leading-6 text-white/55">{description}</p>
+    </Link>
   );
 }
 
@@ -384,13 +473,13 @@ export default async function MosqueCorrectionReportsPage({
     .order("created_at", {
       ascending: false,
     })
-    .limit(200);
+    .limit(250);
 
   if (reportsError) {
     return <ErrorPanel message={reportsError.message} />;
   }
 
-  const reports = (reportsRaw ?? []) as CorrectionReportRow[];
+  const reports = ((reportsRaw ?? []) as unknown) as CorrectionReportRow[];
   const reportTypes = getUniqueReportTypes(reports);
 
   const statusFilter = normaliseFilter(
@@ -447,6 +536,13 @@ export default async function MosqueCorrectionReportsPage({
             Data quality
           </Link>
 
+          <Link
+            href={`/business-dashboard/mosques/${mosque.id}/prayer-times`}
+            className="rounded-xl border border-yellow-500/30 bg-black px-4 py-2 text-xs font-bold text-yellow-400 hover:bg-yellow-500/10"
+          >
+            Prayer times
+          </Link>
+
           {mosque.slug ? (
             <Link
               href={`/mosque/${mosque.slug}`}
@@ -468,8 +564,9 @@ export default async function MosqueCorrectionReportsPage({
         </h2>
 
         <p className="mt-3 max-w-3xl text-sm leading-7 text-white/60">
-          Filter, search, review, and resolve public correction reports before
-          changing timetable, location, facility, or Jumuʿah data.
+          Review reports from the public before changing prayer times,
+          Jumuʿah sessions, location details, facilities, or duplicate mosque
+          records.
         </p>
 
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
@@ -599,6 +696,38 @@ export default async function MosqueCorrectionReportsPage({
         ) : null}
       </section>
 
+      <section className="mt-8 rounded-3xl border border-white/10 bg-black/20 p-6">
+        <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
+          Manager shortcuts
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <QuickActionCard
+            title="Edit prayer times"
+            description="Fix daily beginning and iqamah time reports."
+            href={`/business-dashboard/mosques/${mosque.id}/prayer-times`}
+          />
+
+          <QuickActionCard
+            title="Edit Jumuʿah"
+            description="Update Friday prayer sessions and notes."
+            href={`/business-dashboard/mosques/${mosque.id}/jumuah-times`}
+          />
+
+          <QuickActionCard
+            title="Timetable sources"
+            description="Review imported PDFs, images, and extracted data."
+            href={`/business-dashboard/mosques/${mosque.id}/timetable-sources`}
+          />
+
+          <QuickActionCard
+            title="Data quality"
+            description="Check gaps before resolving public reports."
+            href={`/business-dashboard/mosques/${mosque.id}/data-quality`}
+          />
+        </div>
+      </section>
+
       {reports.length === 0 ? (
         <section className="mt-8 rounded-3xl border border-white/10 bg-black/30 p-8">
           <div className="text-xl font-bold text-white">
@@ -624,45 +753,50 @@ export default async function MosqueCorrectionReportsPage({
       ) : (
         <section className="mt-8 grid gap-5">
           {filteredReports.map((report) => {
+            const reportType = getReportTypeValue(report.report_type);
+            const reportStatus = getStatusValue(report.status);
             const source = getMetadataValue(report.metadata, "source");
             const mosqueName = getMetadataValue(report.metadata, "mosque_name");
             const mosqueSlug = getMetadataValue(report.metadata, "mosque_slug");
+            const message =
+              asString(report.report_message) ||
+              "No message was provided with this correction report.";
 
             return (
               <article
                 key={report.id}
-                className={getReportCardClass(report.status)}
+                className={getReportCardClass(reportStatus)}
               >
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div>
                     <div className="flex flex-wrap gap-2">
-                      <Badge className={getTypeClass(report.report_type)}>
-                        {formatLabel(report.report_type)}
+                      <Badge className={getTypeClass(reportType)}>
+                        {formatLabel(reportType)}
                       </Badge>
 
-                      <Badge className={getStatusClass(report.status)}>
-                        {formatLabel(report.status)}
+                      <Badge className={getStatusClass(reportStatus)}>
+                        {formatLabel(reportStatus)}
                       </Badge>
                     </div>
 
                     <h3 className="mt-4 text-2xl font-black text-white">
-                      {formatLabel(report.report_type)}
+                      {formatLabel(reportType)}
                     </h3>
 
                     <p className="mt-3 max-w-4xl whitespace-pre-wrap text-sm leading-7 text-white/70">
-                      {report.report_message}
+                      {message}
                     </p>
                   </div>
 
                   <div className="shrink-0 rounded-2xl border border-white/10 bg-black/30 p-4 text-sm text-white/60 lg:w-72">
                     <div>
                       <span className="text-white/40">Created:</span>{" "}
-                      {formatDateTime(report.created_at)}
+                      {formatDateTime(report.created_at, mosque.timezone)}
                     </div>
 
                     <div className="mt-2">
                       <span className="text-white/40">Updated:</span>{" "}
-                      {formatDateTime(report.updated_at)}
+                      {formatDateTime(report.updated_at, mosque.timezone)}
                     </div>
 
                     {source ? (
@@ -684,7 +818,7 @@ export default async function MosqueCorrectionReportsPage({
                       {report.reporter_name || "Anonymous"}
                     </div>
 
-                    <div className="mt-1 text-sm text-white/45">
+                    <div className="mt-1 break-words text-sm text-white/45">
                       {report.reporter_email || "No email provided"}
                     </div>
                   </div>
@@ -739,7 +873,7 @@ export default async function MosqueCorrectionReportsPage({
                   <MosqueCorrectionRecommendedActions
                     mosqueId={mosque.id}
                     mosqueSlug={mosque.slug}
-                    reportType={report.report_type}
+                    reportType={reportType}
                   />
                 </div>
 
@@ -747,7 +881,7 @@ export default async function MosqueCorrectionReportsPage({
                   <MosqueCorrectionReportActions
                     reportId={report.id}
                     mosqueId={mosque.id}
-                    currentStatus={report.status}
+                    currentStatus={reportStatus}
                     currentNotes={report.admin_notes}
                   />
                 </div>
