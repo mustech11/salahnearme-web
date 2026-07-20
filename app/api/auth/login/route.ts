@@ -5,6 +5,9 @@ import { supabaseServer } from "@/lib/supabaseServer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const MAX_EMAIL_LENGTH = 254;
+const MAX_PASSWORD_LENGTH = 500;
+
 type LoginBody = {
   email?: unknown;
   password?: unknown;
@@ -19,16 +22,26 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
   });
 }
 
-function cleanString(value: unknown) {
+function cleanString(value: unknown, maxLength = 500) {
   if (typeof value !== "string") {
     return "";
   }
 
-  return value.trim();
+  return value.trim().slice(0, maxLength);
 }
 
 function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function getRequestMeta(req: Request) {
+  return {
+    ip_hint:
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+      req.headers.get("x-real-ip") ??
+      null,
+    user_agent: req.headers.get("user-agent"),
+  };
 }
 
 export async function GET() {
@@ -45,6 +58,18 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
+    const contentType = req.headers.get("content-type") ?? "";
+
+    if (!contentType.toLowerCase().includes("application/json")) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Content-Type must be application/json.",
+        },
+        415
+      );
+    }
+
     const body = (await req.json().catch(() => null)) as LoginBody | null;
 
     if (!body) {
@@ -57,8 +82,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const email = cleanString(body.email).toLowerCase();
-    const password = cleanString(body.password);
+    const email = cleanString(body.email, MAX_EMAIL_LENGTH).toLowerCase();
+    const password = cleanString(body.password, MAX_PASSWORD_LENGTH);
 
     if (!email || !password) {
       return jsonResponse(
@@ -80,6 +105,16 @@ export async function POST(req: Request) {
       );
     }
 
+    if (password.length < 6) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Password is too short.",
+        },
+        400
+      );
+    }
+
     const supabase = await supabaseServer();
 
     const { data, error } = await supabase.auth.signInWithPassword({
@@ -88,10 +123,16 @@ export async function POST(req: Request) {
     });
 
     if (error || !data.user) {
+      console.warn("login failed:", {
+        email,
+        ...getRequestMeta(req),
+        error: error?.message ?? "No user returned",
+      });
+
       return jsonResponse(
         {
           ok: false,
-          error: error?.message ?? "Login failed.",
+          error: "Invalid email or password.",
         },
         401
       );
@@ -102,6 +143,9 @@ export async function POST(req: Request) {
       user: {
         id: data.user.id,
         email: data.user.email,
+      },
+      session: {
+        authenticated: Boolean(data.session),
       },
       message: "Signed in successfully.",
     });
