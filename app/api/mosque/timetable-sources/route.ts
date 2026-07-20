@@ -6,87 +6,111 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const MAX_URL_LENGTH = 900;
+
+const SOURCE_TYPES = ["website", "pdf", "image", "csv", "manual"] as const;
+
+type SourceType = (typeof SOURCE_TYPES)[number];
+
 type Body = {
-  id?: string | null;
-  mosque_id?: string;
-  source_url?: string | null;
-  source_type?: string | null;
-  auto_import_enabled?: boolean | null;
+  id?: unknown;
+  mosque_id?: unknown;
+  source_url?: unknown;
+  source_type?: unknown;
+  auto_import_enabled?: unknown;
 };
 
-function cleanString(value: unknown) {
+function jsonResponse(body: Record<string, unknown>, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+function cleanString(value: unknown, maxLength = 300) {
   if (typeof value !== "string") {
     return null;
   }
 
-  const trimmed = value.trim();
+  const cleaned = value.trim().replace(/\s+/g, " ").slice(0, maxLength);
 
-  return trimmed.length > 0 ? trimmed : null;
+  return cleaned.length > 0 ? cleaned : null;
 }
 
-function isUuid(value: string | null | undefined) {
-  if (!value) {
-    return false;
-  }
-
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value
-  );
+function isUuid(value: string | null): value is string {
+  return Boolean(value && UUID_REGEX.test(value));
 }
 
-function normaliseUrl(value: string | null) {
-  if (!value) {
-    return null;
-  }
+function cleanSourceType(value: unknown): SourceType {
+  const cleaned = cleanString(value, 80);
 
-  if (value.startsWith("http://") || value.startsWith("https://")) {
-    return value;
-  }
-
-  return `https://${value}`;
-}
-
-function cleanSourceType(value: unknown) {
-  const cleaned = cleanString(value);
-
-  const allowed = new Set(["website", "pdf", "image", "csv", "manual"]);
-
-  if (!cleaned || !allowed.has(cleaned)) {
+  if (!cleaned) {
     return "website";
   }
 
-  return cleaned;
+  return SOURCE_TYPES.includes(cleaned as SourceType)
+    ? (cleaned as SourceType)
+    : "website";
+}
+
+function normaliseUrl(value: unknown) {
+  const raw = cleanString(value, MAX_URL_LENGTH);
+
+  if (!raw) {
+    return null;
+  }
+
+  const withProtocol =
+    raw.startsWith("http://") || raw.startsWith("https://")
+      ? raw
+      : `https://${raw}`;
+
+  try {
+    const url = new URL(withProtocol);
+
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return null;
+    }
+
+    return url.toString().slice(0, MAX_URL_LENGTH);
+  } catch {
+    return null;
+  }
+}
+
+function cleanAutoImport(value: unknown) {
+  return value === true;
 }
 
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-
-    const mosqueId = cleanString(searchParams.get("mosque_id"));
+    const mosqueId = cleanString(searchParams.get("mosque_id"), 80);
 
     if (!isUuid(mosqueId)) {
-      return NextResponse.json(
+      return jsonResponse(
         {
           ok: false,
           error: "Missing or invalid mosque_id.",
         },
-        {
-          status: 400,
-        }
+        400
       );
     }
 
     const permission = await requireMosqueManager(mosqueId);
 
     if (!permission.ok) {
-      return NextResponse.json(
+      return jsonResponse(
         {
           ok: false,
           error: permission.error,
         },
-        {
-          status: permission.status,
-        }
+        permission.status
       );
     }
 
@@ -94,43 +118,42 @@ export async function GET(req: Request) {
       .from("mosque_timetable_sources")
       .select("*")
       .eq("mosque_id", mosqueId)
+      .order("auto_import_enabled", {
+        ascending: false,
+      })
       .order("created_at", {
         ascending: false,
       });
 
     if (error) {
-      return NextResponse.json(
+      console.error("timetable sources GET database error:", error);
+
+      return jsonResponse(
         {
           ok: false,
           error: error.message,
         },
-        {
-          status: 500,
-        }
+        500
       );
     }
 
-    return NextResponse.json(
-      {
-        ok: true,
-        count: data?.length ?? 0,
-        sources: data ?? [],
-      },
-      {
-        status: 200,
-      }
-    );
+    return jsonResponse({
+      ok: true,
+      count: data?.length ?? 0,
+      sources: data ?? [],
+    });
   } catch (error) {
     console.error("timetable sources GET route error:", error);
 
-    return NextResponse.json(
+    return jsonResponse(
       {
         ok: false,
-        error: "Could not load timetable sources.",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not load timetable sources.",
       },
-      {
-        status: 500,
-      }
+      500
     );
   }
 }
@@ -139,71 +162,61 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json().catch(() => null)) as Body | null;
 
-    if (!body) {
-      return NextResponse.json(
+    if (!body || typeof body !== "object") {
+      return jsonResponse(
         {
           ok: false,
           error: "Invalid JSON body.",
         },
-        {
-          status: 400,
-        }
+        400
       );
     }
 
-    const id = cleanString(body.id ?? null);
-    const mosqueId = cleanString(body.mosque_id);
-    const sourceUrl = normaliseUrl(cleanString(body.source_url));
+    const id = cleanString(body.id, 80);
+    const mosqueId = cleanString(body.mosque_id, 80);
+    const sourceUrl = normaliseUrl(body.source_url);
     const sourceType = cleanSourceType(body.source_type);
-    const autoImportEnabled = Boolean(body.auto_import_enabled);
+    const autoImportEnabled = cleanAutoImport(body.auto_import_enabled);
 
     if (!isUuid(mosqueId)) {
-      return NextResponse.json(
+      return jsonResponse(
         {
           ok: false,
           error: "Missing or invalid mosque_id.",
         },
-        {
-          status: 400,
-        }
+        400
       );
     }
 
     const permission = await requireMosqueManager(mosqueId);
 
     if (!permission.ok) {
-      return NextResponse.json(
+      return jsonResponse(
         {
           ok: false,
           error: permission.error,
         },
-        {
-          status: permission.status,
-        }
+        permission.status
       );
     }
 
     if (id && !isUuid(id)) {
-      return NextResponse.json(
+      return jsonResponse(
         {
           ok: false,
           error: "Invalid source id.",
         },
-        {
-          status: 400,
-        }
+        400
       );
     }
 
     if (!sourceUrl) {
-      return NextResponse.json(
+      return jsonResponse(
         {
           ok: false,
-          error: "Missing source_url.",
+          error: "Missing or invalid source_url.",
         },
-        {
-          status: 400,
-        }
+        400
       );
     }
 
@@ -224,29 +237,35 @@ export async function POST(req: Request) {
         .eq("id", id)
         .eq("mosque_id", mosqueId)
         .select("*")
-        .single();
+        .maybeSingle();
 
       if (error) {
-        return NextResponse.json(
+        console.error("timetable source update error:", error);
+
+        return jsonResponse(
           {
             ok: false,
             error: error.message,
           },
-          {
-            status: 500,
-          }
+          500
         );
       }
 
-      return NextResponse.json(
-        {
-          ok: true,
-          source: data,
-        },
-        {
-          status: 200,
-        }
-      );
+      if (!data) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: "Timetable source not found for this mosque.",
+          },
+          404
+        );
+      }
+
+      return jsonResponse({
+        ok: true,
+        source: data,
+        message: "Timetable source updated.",
+      });
     }
 
     const { data, error } = await supabaseAdmin
@@ -258,38 +277,37 @@ export async function POST(req: Request) {
       .single();
 
     if (error) {
-      return NextResponse.json(
+      console.error("timetable source upsert error:", error);
+
+      return jsonResponse(
         {
           ok: false,
           error: error.message,
         },
-        {
-          status: 500,
-        }
+        500
       );
     }
 
-    return NextResponse.json(
+    return jsonResponse(
       {
         ok: true,
         source: data,
+        message: "Timetable source saved.",
       },
-      {
-        status: 200,
-      }
+      201
     );
   } catch (error) {
     console.error("timetable sources POST route error:", error);
 
-    return NextResponse.json(
+    return jsonResponse(
       {
         ok: false,
-        error: "Could not save timetable source.",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not save timetable source.",
       },
-      {
-        status: 500,
-      }
+      500
     );
   }
 }
-

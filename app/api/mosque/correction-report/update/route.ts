@@ -6,7 +6,12 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const ALLOWED_STATUSES = ["new", "reviewing", "resolved", "rejected"] as const;
+
+const MAX_ADMIN_NOTES_LENGTH = 2000;
 
 type AllowedStatus = (typeof ALLOWED_STATUSES)[number];
 
@@ -17,46 +22,55 @@ type RequestBody = {
   admin_notes?: unknown;
 };
 
-function isValidUuid(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      value
-    )
-  );
+function jsonResponse(body: Record<string, unknown>, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+    },
+  });
 }
 
-function isAllowedStatus(value: unknown): value is AllowedStatus {
-  return (
-    typeof value === "string" &&
-    ALLOWED_STATUSES.includes(value as AllowedStatus)
-  );
-}
-
-function cleanOptionalNotes(value: unknown) {
+function cleanString(value: unknown, maxLength = 300) {
   if (typeof value !== "string") {
     return null;
   }
 
-  const trimmed = value.trim();
+  const cleaned = value.trim().replace(/\s+/g, " ").slice(0, maxLength);
 
-  if (!trimmed) {
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function isUuid(value: string | null): value is string {
+  return Boolean(value && UUID_REGEX.test(value));
+}
+
+function cleanStatus(value: unknown): AllowedStatus | null {
+  const cleaned = cleanString(value, 40);
+
+  if (!cleaned) {
     return null;
   }
 
-  return trimmed.slice(0, 2000);
+  return ALLOWED_STATUSES.includes(cleaned as AllowedStatus)
+    ? (cleaned as AllowedStatus)
+    : null;
+}
+
+function cleanOptionalNotes(value: unknown) {
+  return cleanString(value, MAX_ADMIN_NOTES_LENGTH);
 }
 
 export async function GET() {
-  return NextResponse.json({
+  return jsonResponse({
     ok: true,
     route: "/api/mosque/correction-report/update",
     method: "POST",
     allowed_statuses: ALLOWED_STATUSES,
     body: {
-      report_id: "uuid",
-      mosque_id: "uuid",
-      status: "reviewing",
+      report_id: "required UUID",
+      mosque_id: "required UUID",
+      status: ALLOWED_STATUSES,
       admin_notes: "optional notes",
     },
   });
@@ -64,144 +78,161 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json().catch(() => ({}))) as RequestBody;
+    const body = (await req.json().catch(() => null)) as RequestBody | null;
 
-    if (!isValidUuid(body.report_id)) {
-      return NextResponse.json(
+    if (!body || typeof body !== "object") {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Invalid JSON body.",
+        },
+        400
+      );
+    }
+
+    const reportId = cleanString(body.report_id, 80);
+    const mosqueId = cleanString(body.mosque_id, 80);
+    const status = cleanStatus(body.status);
+    const adminNotes = cleanOptionalNotes(body.admin_notes);
+
+    if (!isUuid(reportId)) {
+      return jsonResponse(
         {
           ok: false,
           error: "Missing or invalid report_id.",
         },
-        {
-          status: 400,
-        }
+        400
       );
     }
 
-    if (!isValidUuid(body.mosque_id)) {
-      return NextResponse.json(
+    if (!isUuid(mosqueId)) {
+      return jsonResponse(
         {
           ok: false,
           error: "Missing or invalid mosque_id.",
         },
-        {
-          status: 400,
-        }
+        400
       );
     }
 
-    if (!isAllowedStatus(body.status)) {
-      return NextResponse.json(
+    if (!status) {
+      return jsonResponse(
         {
           ok: false,
           error: "Missing or invalid status.",
           allowed_statuses: ALLOWED_STATUSES,
         },
-        {
-          status: 400,
-        }
+        400
       );
     }
-
-    const reportId = body.report_id;
-    const mosqueId = body.mosque_id;
-    const status = body.status;
-    const adminNotes = cleanOptionalNotes(body.admin_notes);
 
     const permission = await requireMosqueManager(mosqueId);
 
     if (!permission.ok) {
-      return NextResponse.json(
+      return jsonResponse(
         {
           ok: false,
           error: permission.error,
         },
-        {
-          status: 403,
-        }
+        permission.status
       );
     }
 
     const { data: existingReport, error: existingError } = await supabaseAdmin
       .from("mosque_correction_reports")
-      .select("id, mosque_id")
+      .select("id, mosque_id, status")
       .eq("id", reportId)
       .eq("mosque_id", mosqueId)
       .maybeSingle();
 
     if (existingError) {
-      return NextResponse.json(
+      console.error("correction report lookup error:", existingError);
+
+      return jsonResponse(
         {
           ok: false,
           error: existingError.message,
         },
-        {
-          status: 500,
-        }
+        500
       );
     }
 
     if (!existingReport) {
-      return NextResponse.json(
+      return jsonResponse(
         {
           ok: false,
           error: "Correction report not found for this mosque.",
         },
-        {
-          status: 404,
-        }
+        404
       );
     }
+
+    const now = new Date().toISOString();
 
     const { data, error } = await supabaseAdmin
       .from("mosque_correction_reports")
       .update({
         status,
         admin_notes: adminNotes,
-        updated_at: new Date().toISOString(),
+        reviewed_at: status === "new" ? null : now,
+        resolved_at: status === "resolved" ? now : null,
+        updated_at: now,
       })
       .eq("id", reportId)
       .eq("mosque_id", mosqueId)
       .select(
-        `
-        id,
-        mosque_id,
-        report_type,
-        status,
-        admin_notes,
-        updated_at
-      `
+        [
+          "id",
+          "mosque_id",
+          "report_type",
+          "status",
+          "admin_notes",
+          "reviewed_at",
+          "resolved_at",
+          "updated_at",
+        ].join(",")
       )
-      .single();
+      .maybeSingle();
 
     if (error) {
-      return NextResponse.json(
+      console.error("correction report update error:", error);
+
+      return jsonResponse(
         {
           ok: false,
           error: error.message,
         },
-        {
-          status: 500,
-        }
+        500
       );
     }
 
-    return NextResponse.json({
+    if (!data) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Correction report could not be updated.",
+        },
+        404
+      );
+    }
+
+    return jsonResponse({
       ok: true,
       report: data,
+      message: "Correction report updated.",
     });
   } catch (error) {
     console.error("correction report update error:", error);
 
-    return NextResponse.json(
+    return jsonResponse(
       {
         ok: false,
-        error: "Could not update correction report.",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not update correction report.",
       },
-      {
-        status: 500,
-      }
+      500
     );
   }
 }
-
