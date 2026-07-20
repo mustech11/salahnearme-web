@@ -1,4 +1,7 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
+
 import { supabaseServer } from "@/lib/supabaseServer";
 
 import BusinessProfileEditor from "@/components/BusinessProfileEditor";
@@ -12,12 +15,20 @@ import BusinessAIInsights from "@/components/BusinessAIInsights";
 import BusinessLeadsInbox from "@/components/BusinessLeadsInbox";
 import BusinessImageUploader from "@/components/BusinessImageUploader";
 
+export const metadata: Metadata = {
+  title: "Business Dashboard | SalahNearMe",
+  description:
+    "Manage your SalahNearMe halal business listing, advertising, analytics, profile, opening hours, media, and mosque sponsorship visibility.",
+};
+
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 type PageProps = {
   searchParams?: Promise<{
     business_id?: string;
+    business?: string;
   }>;
 };
 
@@ -25,48 +36,35 @@ type OpeningHours = Record<string, unknown>;
 
 type Business = {
   id: string;
-
   name: string | null;
   slug: string | null;
-
   city: string | null;
   area: string | null;
-
   address: string | null;
   postcode: string | null;
-
   phone: string | null;
   website: string | null;
   maps_url: string | null;
-
   description: string | null;
-
   logo_url: string | null;
   cover_image_url: string | null;
   gallery_urls: string[] | null;
-
   is_verified: boolean | null;
   featured: boolean | null;
-
   pricing_tier: string | null;
   subscription_type: string | null;
   subscription_status: string | null;
-
-  billing_provider: string | null;
+  billing_provider?: string | null;
   paid_until: string | null;
-
   sponsorship_active: boolean | null;
   city_sponsor: boolean | null;
   mosque_sponsor: boolean | null;
-
-  trust_score: number | null;
-  quality_score: number | null;
-  halal_score: number | null;
-  ranking_score: number | null;
-
+  trust_score?: number | null;
+  quality_score?: number | null;
+  halal_score?: number | null;
+  ranking_score?: number | null;
   opening_hours: OpeningHours | null;
   opening_hours_note: string | null;
-
   created_at: string | null;
 };
 
@@ -81,27 +79,74 @@ type Mosque = {
 };
 
 type BusinessUserRow = {
-  business_id: string;
+  business_id: string | null;
   role: string | null;
   businesses: Business | Business[] | null;
 };
 
 type MosqueUserRow = {
-  mosque_id: string;
+  mosque_id: string | null;
   role: string | null;
   mosques: Mosque | Mosque[] | null;
 };
 
+type LinkedBusiness = {
+  business: Business;
+  role: string | null;
+};
+
+type LinkedMosque = {
+  mosque: Mosque;
+  role: string | null;
+};
+
+const BUSINESS_SELECT = [
+  "id",
+  "name",
+  "slug",
+  "city",
+  "area",
+  "address",
+  "postcode",
+  "phone",
+  "website",
+  "maps_url",
+  "description",
+  "logo_url",
+  "cover_image_url",
+  "gallery_urls",
+  "is_verified",
+  "featured",
+  "pricing_tier",
+  "subscription_type",
+  "subscription_status",
+  "paid_until",
+  "sponsorship_active",
+  "city_sponsor",
+  "mosque_sponsor",
+  "opening_hours",
+  "opening_hours_note",
+  "created_at",
+].join(",");
+
+function clean(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function getBusinessFromRow(row: BusinessUserRow): Business | null {
-  return Array.isArray(row.businesses)
-    ? row.businesses[0] ?? null
-    : row.businesses ?? null;
+  if (Array.isArray(row.businesses)) {
+    return row.businesses[0] ?? null;
+  }
+
+  return row.businesses ?? null;
 }
 
 function getMosqueFromRow(row: MosqueUserRow): Mosque | null {
-  return Array.isArray(row.mosques)
-    ? row.mosques[0] ?? null
-    : row.mosques ?? null;
+  if (Array.isArray(row.mosques)) {
+    return row.mosques[0] ?? null;
+  }
+
+  return row.mosques ?? null;
 }
 
 function isPaidActive(value: string | null | undefined) {
@@ -113,9 +158,11 @@ function isPaidActive(value: string | null | undefined) {
 }
 
 function label(value: string | null | undefined, fallback = "Free") {
-  if (!value) return fallback;
+  const cleaned = clean(value);
 
-  return value
+  if (!cleaned) return fallback;
+
+  return cleaned
     .replace(/_/g, " ")
     .replace(/-/g, " ")
     .replace(/\b\w/g, (m) => m.toUpperCase());
@@ -128,62 +175,115 @@ function formatDate(value: string | null | undefined) {
 
   if (Number.isNaN(date.getTime())) return "Not set";
 
-  return date.toLocaleDateString("en-GB", {
+  return new Intl.DateTimeFormat("en-GB", {
     day: "2-digit",
     month: "short",
     year: "numeric",
-  });
+  }).format(date);
 }
 
-export default async function BusinessDashboardPage({
-  searchParams,
-}: PageProps) {
-  const params = await searchParams;
-  const selectedBusinessId = params?.business_id ?? null;
+function uniqueLinkedBusinesses(items: LinkedBusiness[]) {
+  const seen = new Set<string>();
+  const output: LinkedBusiness[] = [];
 
-  const supabase = await supabaseServer();
+  for (const item of items) {
+    if (!item.business.id || seen.has(item.business.id)) continue;
 
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
-
-  if (userError || !user) {
-    return (
-      <div className="mx-auto max-w-3xl p-10">
-        <div className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-10">
-          <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
-            Business Dashboard
-          </div>
-
-          <h1 className="mt-4 text-4xl font-black text-white">
-            Sign in required
-          </h1>
-
-          <p className="mt-4 text-white/70">
-            Sign in with the account linked to your business or mosque before
-            viewing the dashboard.
-          </p>
-
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Link
-              href="/login?next=/business-dashboard"
-              className="rounded-2xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-black hover:bg-yellow-400"
-            >
-              Sign in
-            </Link>
-
-            <Link
-              href="/business-claim"
-              className="rounded-2xl border border-yellow-500/30 px-5 py-3 text-sm font-semibold text-yellow-400 hover:bg-yellow-500/10"
-            >
-              Claim a business
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
+    seen.add(item.business.id);
+    output.push(item);
   }
+
+  return output.sort((a, b) =>
+    (a.business.name ?? "").localeCompare(b.business.name ?? "")
+  );
+}
+
+function normaliseGallery(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function normaliseBusiness(row: unknown): Business | null {
+  if (!row || typeof row !== "object") return null;
+
+  const value = row as Record<string, unknown>;
+  const id = clean(value.id);
+
+  if (!id) return null;
+
+  return {
+    id,
+    name: typeof value.name === "string" ? value.name : null,
+    slug: typeof value.slug === "string" ? value.slug : null,
+    city: typeof value.city === "string" ? value.city : null,
+    area: typeof value.area === "string" ? value.area : null,
+    address: typeof value.address === "string" ? value.address : null,
+    postcode: typeof value.postcode === "string" ? value.postcode : null,
+    phone: typeof value.phone === "string" ? value.phone : null,
+    website: typeof value.website === "string" ? value.website : null,
+    maps_url: typeof value.maps_url === "string" ? value.maps_url : null,
+    description:
+      typeof value.description === "string" ? value.description : null,
+    logo_url: typeof value.logo_url === "string" ? value.logo_url : null,
+    cover_image_url:
+      typeof value.cover_image_url === "string"
+        ? value.cover_image_url
+        : null,
+    gallery_urls: normaliseGallery(value.gallery_urls),
+    is_verified:
+      typeof value.is_verified === "boolean" ? value.is_verified : false,
+    featured: typeof value.featured === "boolean" ? value.featured : false,
+    pricing_tier:
+      typeof value.pricing_tier === "string" ? value.pricing_tier : "free",
+    subscription_type:
+      typeof value.subscription_type === "string"
+        ? value.subscription_type
+        : "free",
+    subscription_status:
+      typeof value.subscription_status === "string"
+        ? value.subscription_status
+        : "inactive",
+    billing_provider:
+      typeof value.billing_provider === "string"
+        ? value.billing_provider
+        : null,
+    paid_until: typeof value.paid_until === "string" ? value.paid_until : null,
+    sponsorship_active:
+      typeof value.sponsorship_active === "boolean"
+        ? value.sponsorship_active
+        : false,
+    city_sponsor:
+      typeof value.city_sponsor === "boolean" ? value.city_sponsor : false,
+    mosque_sponsor:
+      typeof value.mosque_sponsor === "boolean"
+        ? value.mosque_sponsor
+        : false,
+    trust_score: typeof value.trust_score === "number" ? value.trust_score : 0,
+    quality_score:
+      typeof value.quality_score === "number" ? value.quality_score : 0,
+    halal_score: typeof value.halal_score === "number" ? value.halal_score : 0,
+    ranking_score:
+      typeof value.ranking_score === "number" ? value.ranking_score : 0,
+    opening_hours:
+      value.opening_hours && typeof value.opening_hours === "object"
+        ? (value.opening_hours as OpeningHours)
+        : null,
+    opening_hours_note:
+      typeof value.opening_hours_note === "string"
+        ? value.opening_hours_note
+        : null,
+    created_at:
+      typeof value.created_at === "string" ? value.created_at : null,
+  };
+}
+
+async function getLinkedBusinesses(args: {
+  userId: string;
+  email: string | null;
+}) {
+  const supabase = await supabaseServer();
+  const linked: LinkedBusiness[] = [];
 
   const { data: businessUserRowsRaw, error: businessUserError } = await supabase
     .from("business_users")
@@ -192,51 +292,90 @@ export default async function BusinessDashboardPage({
       business_id,
       role,
       businesses (
-        id,
-        name,
-        slug,
-        city,
-        area,
-        address,
-        postcode,
-        phone,
-        website,
-        maps_url,
-        description,
-        logo_url,
-        cover_image_url,
-        gallery_urls,
-        is_verified,
-        featured,
-        pricing_tier,
-        subscription_type,
-        subscription_status,
-        billing_provider,
-        paid_until,
-        sponsorship_active,
-        city_sponsor,
-        mosque_sponsor,
-        trust_score,
-        quality_score,
-        halal_score,
-        ranking_score,
-        opening_hours,
-        opening_hours_note,
-        created_at
+        ${BUSINESS_SELECT}
       )
     `
     )
-    .eq("user_id", user.id);
+    .eq("user_id", args.userId);
 
   if (businessUserError) {
-    return (
-      <div className="rounded-3xl border border-red-500/20 bg-red-500/10 p-8 text-red-200">
-        {businessUserError.message}
-      </div>
+    console.error("business_users dashboard lookup failed:", {
+      message: businessUserError.message,
+      details: businessUserError.details,
+      hint: businessUserError.hint,
+    });
+  } else {
+    for (const row of ((businessUserRowsRaw ?? []) as unknown) as BusinessUserRow[]) {
+      const business = getBusinessFromRow(row);
+
+      if (business?.id) {
+        linked.push({
+          business: normaliseBusiness(business) ?? business,
+          role: row.role,
+        });
+      }
+    }
+  }
+
+  const fallbackQueries = [
+    supabase
+      .from("businesses")
+      .select(BUSINESS_SELECT)
+      .eq("submitted_by_user_id", args.userId)
+      .limit(50),
+  ];
+
+  if (args.email) {
+    fallbackQueries.push(
+      supabase
+        .from("businesses")
+        .select(BUSINESS_SELECT)
+        .or(
+          [
+            `submitted_by_email.eq.${args.email}`,
+            `claimed_by_email.eq.${args.email}`,
+            `email.eq.${args.email}`,
+          ].join(",")
+        )
+        .limit(50)
     );
   }
 
-  const { data: mosqueUserRowsRaw, error: mosqueUserError } = await supabase
+  const fallbackResults = await Promise.allSettled(fallbackQueries);
+
+  for (const result of fallbackResults) {
+    if (result.status !== "fulfilled") continue;
+
+    const { data, error } = result.value;
+
+    if (error) {
+      console.error("business-dashboard fallback lookup failed:", {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+      continue;
+    }
+
+    for (const row of data ?? []) {
+      const business = normaliseBusiness(row);
+
+      if (business?.id) {
+        linked.push({
+          business,
+          role: "owner",
+        });
+      }
+    }
+  }
+
+  return uniqueLinkedBusinesses(linked);
+}
+
+async function getLinkedMosques(userId: string) {
+  const supabase = await supabaseServer();
+
+  const { data, error } = await supabase
     .from("mosque_users")
     .select(
       `
@@ -253,74 +392,183 @@ export default async function BusinessDashboardPage({
       )
     `
     )
-    .eq("user_id", user.id);
+    .eq("user_id", userId);
 
-  const linkedMosques = mosqueUserError
-    ? []
-    : ((mosqueUserRowsRaw ?? []) as MosqueUserRow[])
-        .map((row) => ({
-          mosque: getMosqueFromRow(row),
-          role: row.role,
-        }))
-        .filter((item): item is { mosque: Mosque; role: string | null } =>
-          Boolean(item.mosque?.id)
-        )
-        .sort((a, b) =>
-          (a.mosque.name ?? "").localeCompare(b.mosque.name ?? "")
-        );
+  if (error) {
+    console.error("mosque_users dashboard lookup failed:", {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
 
-  const linkedBusinesses = ((businessUserRowsRaw ?? []) as BusinessUserRow[])
+    return {
+      linkedMosques: [] as LinkedMosque[],
+      errorMessage: error.message,
+    };
+  }
+
+  const linkedMosques = (((data ?? []) as unknown) as MosqueUserRow[])
     .map((row) => ({
-      business: getBusinessFromRow(row),
+      mosque: getMosqueFromRow(row),
       role: row.role,
     }))
-    .filter((item): item is { business: Business; role: string | null } =>
-      Boolean(item.business?.id)
-    )
+    .filter((item): item is LinkedMosque => Boolean(item.mosque?.id))
     .sort((a, b) =>
-      (a.business.name ?? "").localeCompare(b.business.name ?? "")
+      (a.mosque.name ?? "").localeCompare(b.mosque.name ?? "")
     );
 
-  if (linkedBusinesses.length === 0 && linkedMosques.length === 0) {
-    return (
-      <div className="mx-auto max-w-3xl p-10">
-        <div className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-10">
-          <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
-            SalahNearMe
+  return {
+    linkedMosques,
+    errorMessage: null,
+  };
+}
+
+function DashboardCard({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6">
+      <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
+        {title}
+      </div>
+
+      <div className="mt-4 text-2xl font-black text-white">{value}</div>
+    </div>
+  );
+}
+
+function StatusPanel({
+  title,
+  items,
+}: {
+  title: string;
+  items: Array<[string, string]>;
+}) {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6">
+      <div className="text-lg font-bold text-white">{title}</div>
+
+      <div className="mt-5 space-y-3 text-sm text-white/70">
+        {items.map(([labelText, value]) => (
+          <div key={labelText} className="flex justify-between gap-4">
+            <span>{labelText}</span>
+            <span className="text-right font-semibold text-white">{value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EmptyAccessState({ email }: { email: string | null }) {
+  return (
+    <div className="mx-auto max-w-4xl p-6 md:p-10">
+      <div className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8 md:p-10">
+        <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
+          Business Dashboard
+        </div>
+
+        <h1 className="mt-4 text-4xl font-black text-white">
+          No dashboard access found
+        </h1>
+
+        <p className="mt-4 max-w-3xl text-white/70">
+          Your account is signed in
+          {email ? (
+            <>
+              {" "}
+              as <span className="font-semibold text-yellow-400">{email}</span>
+            </>
+          ) : null}
+          , but it is not linked to a business or mosque listing yet.
+        </p>
+
+        <div className="mt-6 grid gap-4 md:grid-cols-3">
+          <div className="rounded-2xl border border-white/10 bg-black/30 p-5">
+            <div className="font-bold text-white">Add a business</div>
+            <p className="mt-2 text-sm text-white/60">
+              Submit a new halal business for review.
+            </p>
           </div>
 
-          <h1 className="mt-4 text-4xl font-black text-white">
-            No dashboard access found
-          </h1>
+          <div className="rounded-2xl border border-white/10 bg-black/30 p-5">
+            <div className="font-bold text-white">Claim a listing</div>
+            <p className="mt-2 text-sm text-white/60">
+              Connect your account to an existing business.
+            </p>
+          </div>
 
-          <p className="mt-4 text-white/70">
-            Your account is signed in, but it is not linked to a business or
-            mosque listing yet.
-          </p>
-
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Link
-              href="/business-claim"
-              className="inline-flex rounded-2xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-black hover:bg-yellow-400"
-            >
-              Claim a business
-            </Link>
-
-            <Link
-              href="/mosque"
-              className="inline-flex rounded-2xl border border-yellow-500/30 px-5 py-3 text-sm font-semibold text-yellow-400 hover:bg-yellow-500/10"
-            >
-              Find a mosque
-            </Link>
+          <div className="rounded-2xl border border-white/10 bg-black/30 p-5">
+            <div className="font-bold text-white">Advertise</div>
+            <p className="mt-2 text-sm text-white/60">
+              Choose visibility after your business is linked.
+            </p>
           </div>
         </div>
+
+        <div className="mt-7 flex flex-wrap gap-3">
+          <Link
+            href="/add-business"
+            className="rounded-2xl bg-yellow-500 px-5 py-3 text-sm font-bold text-black hover:bg-yellow-400"
+          >
+            Add business
+          </Link>
+
+          <Link
+            href="/businesses"
+            className="rounded-2xl border border-yellow-500/30 bg-black px-5 py-3 text-sm font-bold text-yellow-400 hover:bg-yellow-500/10"
+          >
+            Browse businesses
+          </Link>
+
+          <Link
+            href="/advertise"
+            className="rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-bold text-white/80 hover:bg-white/10"
+          >
+            Advertising options
+          </Link>
+        </div>
       </div>
-    );
+    </div>
+  );
+}
+
+export default async function BusinessDashboardPage({
+  searchParams,
+}: PageProps) {
+  const params = await searchParams;
+  const selectedBusinessId = clean(params?.business_id ?? params?.business);
+
+  const supabase = await supabaseServer();
+
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    redirect("/login?next=/business-dashboard");
+  }
+
+  const email = user.email?.toLowerCase() ?? null;
+
+  const [linkedBusinesses, mosqueResult] = await Promise.all([
+    getLinkedBusinesses({
+      userId: user.id,
+      email,
+    }),
+    getLinkedMosques(user.id),
+  ]);
+
+  const linkedMosques = mosqueResult.linkedMosques;
+
+  if (linkedBusinesses.length === 0 && linkedMosques.length === 0) {
+    return <EmptyAccessState email={email} />;
   }
 
   const selectedBusiness =
     linkedBusinesses.find((item) => item.business.id === selectedBusinessId)
-      ?.business ?? linkedBusinesses[0]?.business ?? null;
+      ?.business ??
+    linkedBusinesses[0]?.business ??
+    null;
 
   const selectedRole = selectedBusiness
     ? linkedBusinesses.find((item) => item.business.id === selectedBusiness.id)
@@ -344,42 +592,53 @@ export default async function BusinessDashboardPage({
     <div className="space-y-8">
       {selectedBusiness ? (
         <>
-          <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8 md:p-10">
-            <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
-              Business Dashboard
-            </div>
+          <section className="relative overflow-hidden rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8 md:p-10">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(212,175,55,0.16),transparent_36%)]" />
 
-            <h1 className="mt-4 text-4xl font-black tracking-[-0.04em] text-white md:text-6xl">
-              {selectedBusiness.name ?? "Business"}
-            </h1>
+            <div className="relative z-10">
+              <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
+                Business Dashboard
+              </div>
 
-            <p className="mt-4 max-w-3xl text-white/70">
-              Manage your listing, sponsorships, analytics, AI insights,
-              notifications, opening hours, payments, trust score, and
-              visibility.
-            </p>
+              <h1 className="mt-4 text-4xl font-black tracking-[-0.04em] text-white md:text-6xl">
+                {selectedBusiness.name ?? "Business"}
+              </h1>
 
-            <div className="mt-6 flex flex-wrap gap-3">
-              {selectedBusiness.slug && (
+              <p className="mt-4 max-w-3xl text-white/70">
+                Manage your listing, sponsorships, analytics, AI insights,
+                notifications, opening hours, payments, trust score, media, and
+                visibility.
+              </p>
+
+              <div className="mt-6 flex flex-wrap gap-3">
+                {selectedBusiness.slug ? (
+                  <Link
+                    href={`/business/${selectedBusiness.slug}`}
+                    target="_blank"
+                    className="rounded-2xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-black hover:bg-yellow-400"
+                  >
+                    View public listing
+                  </Link>
+                ) : null}
+
                 <Link
-                  href={`/business/${selectedBusiness.slug}`}
-                  target="_blank"
-                  className="rounded-2xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-black hover:bg-yellow-400"
+                  href="/add-business"
+                  className="rounded-2xl border border-yellow-500/30 bg-black px-5 py-3 text-sm font-semibold text-yellow-400 hover:bg-yellow-500/10"
                 >
-                  View public listing
+                  Add another business
                 </Link>
-              )}
 
-              <Link
-                href="/"
-                className="rounded-2xl border border-white/10 px-5 py-3 text-sm font-semibold text-white hover:bg-white/5"
-              >
-                Back to website
-              </Link>
+                <Link
+                  href="/advertise"
+                  className="rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white hover:bg-white/10"
+                >
+                  Advertising options
+                </Link>
+              </div>
             </div>
           </section>
 
-          {linkedBusinesses.length > 1 && (
+          {linkedBusinesses.length > 1 ? (
             <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
@@ -408,7 +667,7 @@ export default async function BusinessDashboardPage({
                 </div>
               </div>
             </section>
-          )}
+          ) : null}
 
           <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <DashboardCard
@@ -492,15 +751,10 @@ export default async function BusinessDashboardPage({
           </section>
 
           <BusinessAnalyticsSummary businessId={selectedBusiness.id} />
-
           <BusinessAIInsights businessId={selectedBusiness.id} />
-
           <BusinessLeadsInbox businessId={selectedBusiness.id} />
-
           <BusinessUpgradePlans businessId={selectedBusiness.id} />
-
           <BusinessDashboardAnalytics businessId={selectedBusiness.id} />
-
           <BusinessDashboardNotifications businessId={selectedBusiness.id} />
 
           <BusinessProfileEditor business={selectedBusiness} />
@@ -521,26 +775,25 @@ export default async function BusinessDashboardPage({
       ) : null}
 
       <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
-        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          <div>
-            <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
-              Mosque Dashboard
-            </div>
-
-            <h2 className="mt-3 text-3xl font-black text-white">
-              Your Mosques
-            </h2>
-
-            <p className="mt-3 max-w-3xl text-white/70">
-              Manage mosque prayer times, Jumuʿah sessions, facilities, live
-              status, and public mosque page details.
-            </p>
+        <div>
+          <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
+            Mosque Dashboard
           </div>
+
+          <h2 className="mt-3 text-3xl font-black text-white">
+            Your Mosques
+          </h2>
+
+          <p className="mt-3 max-w-3xl text-white/70">
+            Manage mosque prayer times, Jumuʿah sessions, facilities, live
+            status, and public mosque page details.
+          </p>
         </div>
 
-        {mosqueUserError ? (
-          <div className="mt-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-5 text-sm text-red-200">
-            Could not load mosque access: {mosqueUserError.message}
+        {mosqueResult.errorMessage ? (
+          <div className="mt-6 rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-5 text-sm text-yellow-100">
+            Mosque access could not be loaded right now. Business dashboard
+            access is still available.
           </div>
         ) : linkedMosques.length === 0 ? (
           <div className="mt-6 rounded-2xl border border-white/10 bg-black/30 p-6 text-white/60">
@@ -623,39 +876,3 @@ export default async function BusinessDashboardPage({
     </div>
   );
 }
-
-function DashboardCard({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6">
-      <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
-        {title}
-      </div>
-
-      <div className="mt-4 text-2xl font-black text-white">{value}</div>
-    </div>
-  );
-}
-
-function StatusPanel({
-  title,
-  items,
-}: {
-  title: string;
-  items: Array<[string, string]>;
-}) {
-  return (
-    <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6">
-      <div className="text-lg font-bold text-white">{title}</div>
-
-      <div className="mt-5 space-y-3 text-sm text-white/70">
-        {items.map(([labelText, value]) => (
-          <div key={labelText} className="flex justify-between gap-4">
-            <span>{labelText}</span>
-            <span className="font-semibold text-white">{value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-

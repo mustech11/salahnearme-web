@@ -4,7 +4,7 @@ import Link from "next/link";
 export const metadata: Metadata = {
   title: "Advertise on SalahNearMe | Halal Business Sponsorship",
   description:
-    "Promote your halal business across SalahNearMe city pages, mosque pages, halal listings, and multi-city Muslim community campaigns.",
+    "Promote your halal business across SalahNearMe city pages, mosque pages, halal listings, prayer-time pages, and multi-city Muslim community campaigns.",
   alternates: {
     canonical: "/advertise",
   },
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
 };
 
 type AdvertisingPackage = {
-  key: string;
+  key: "city_featured" | "mosque_sponsor" | "multi_mosque" | "multi_city";
   name: string;
   price: string;
   badge: string;
@@ -36,10 +36,10 @@ const packages: AdvertisingPackage[] = [
     key: "city_featured",
     name: "Featured City Listing",
     price: "From £49",
-    badge: "Best for one city",
+    badge: "Best starter package",
     audience: "Local halal customers",
     description:
-      "Increase visibility on a city halal business page where people are actively looking for local Muslim-friendly services.",
+      "Increase visibility on a city halal business page where people are actively looking for Muslim-friendly local services.",
     features: [
       "Featured placement on selected city page",
       "Priority visibility above standard listings",
@@ -57,7 +57,7 @@ const packages: AdvertisingPackage[] = [
     badge: "High-intent audience",
     audience: "Mosque visitors nearby",
     description:
-      "Place your business on a specific mosque page and reach users who are checking prayer times, mosque details, maps, and local services.",
+      "Place your business on a specific mosque page and reach users checking prayer times, mosque details, maps, and nearby services.",
     features: [
       "Placement on a selected mosque profile",
       "Useful for businesses close to a mosque",
@@ -105,19 +105,19 @@ const packages: AdvertisingPackage[] = [
 
 const stats = [
   {
-    label: "City visibility",
-    value: "UK-wide",
-    text: "Reach users browsing city pages for mosques, prayer times, and halal services.",
+    label: "Search intent",
+    value: "High",
+    text: "Users arrive looking for mosques, prayer times, halal food, shops, and services.",
   },
   {
-    label: "Mosque intent",
-    value: "High trust",
-    text: "Appear close to mosque discovery, salah-time searches, and local Muslim community activity.",
+    label: "Placement types",
+    value: "City + Mosque",
+    text: "Promote your business where location, prayer, and community intent already meet.",
   },
   {
-    label: "Business growth",
+    label: "Growth path",
     value: "Scalable",
-    text: "Start with one listing and expand into mosque, city, and multi-city campaigns.",
+    text: "Start with one listing, then expand into mosque, city, and multi-city campaigns.",
   },
 ];
 
@@ -134,6 +134,21 @@ const steps = [
     title: "Go live after review",
     text: "Approved campaigns can appear on relevant pages with clear, respectful visibility.",
   },
+];
+
+const goodFitBusinesses = [
+  "Halal restaurants",
+  "Halal takeaways",
+  "Halal butchers",
+  "Halal groceries",
+  "Islamic bookshops",
+  "Muslim clothing shops",
+  "Tuition centres",
+  "Dental and health clinics",
+  "Travel and Umrah services",
+  "Charities and community services",
+  "Trades and home services",
+  "Muslim-friendly family services",
 ];
 
 const faqs = [
@@ -179,7 +194,7 @@ function PackageCard({ pkg }: { pkg: AdvertisingPackage }) {
         </span>
       </div>
 
-      <div className="mt-5 text-xl font-bold text-white">{pkg.name}</div>
+      <h3 className="mt-5 text-xl font-bold text-white">{pkg.name}</h3>
 
       <div className="mt-3 text-3xl font-black text-yellow-400">
         {pkg.price}
@@ -237,10 +252,17 @@ export default function AdvertisePage() {
       "@type": "Service",
       name: pkg.name,
       description: pkg.description,
+      serviceType: "Halal business advertising",
+      provider: {
+        "@type": "Organization",
+        name: "SalahNearMe",
+      },
       offers: {
         "@type": "Offer",
         priceCurrency: "GBP",
-        price: pkg.price.replace("From £", "").replace("Custom", "0"),
+        price: pkg.price.startsWith("From £")
+          ? pkg.price.replace("From £", "")
+          : "0",
         availability: "https://schema.org/InStock",
       },
     })),
@@ -272,9 +294,8 @@ export default function AdvertisePage() {
 
             <p className="mt-5 max-w-3xl text-lg leading-8 text-white/72">
               Promote your halal business across city pages, mosque pages, halal
-              business listings, and future multi-city Muslim community
-              campaigns. SalahNearMe connects users with prayer times, mosques,
-              trusted local services, Hajj, Umrah, and Muslim travel guidance.
+              business listings, prayer-time journeys, and future multi-city
+              Muslim community campaigns.
             </p>
 
             <div className="mt-7 flex flex-wrap gap-3">
@@ -312,7 +333,7 @@ export default function AdvertisePage() {
                   Intent-driven visitors
                 </div>
                 <p className="mt-2 leading-6 text-white/65">
-                  Users are already looking for mosques, prayer times, halal
+                  Users are already looking for mosques, salah times, halal
                   food, shops, services, or Muslim-friendly places.
                 </p>
               </div>
@@ -329,11 +350,11 @@ export default function AdvertisePage() {
 
               <div className="rounded-2xl border border-white/10 bg-[rgb(var(--card))] p-4">
                 <div className="font-semibold text-white">
-                  Supports a community platform
+                  Ethical visibility
                 </div>
                 <p className="mt-2 leading-6 text-white/65">
-                  Advertising helps keep mosque discovery and community
-                  information accessible.
+                  Promotion stays clear, relevant, and respectful to the prayer
+                  and community purpose of the platform.
                 </p>
               </div>
             </div>
@@ -358,7 +379,7 @@ export default function AdvertisePage() {
         ))}
       </section>
 
-      <section id="packages" className="space-y-5">
+      <section id="packages" className="scroll-mt-24 space-y-5">
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
           <div>
             <div className="text-sm uppercase tracking-[0.26em] text-yellow-400">
@@ -443,18 +464,7 @@ export default function AdvertisePage() {
           </h2>
 
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
-            {[
-              "Halal restaurants",
-              "Halal takeaways",
-              "Halal butchers",
-              "Halal groceries",
-              "Islamic bookshops",
-              "Muslim clothing shops",
-              "Tuition centres",
-              "Dental and health clinics",
-              "Travel and Umrah services",
-              "Charities and community services",
-            ].map((item) => (
+            {goodFitBusinesses.map((item) => (
               <div
                 key={item}
                 className="rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm font-semibold text-white/75"
@@ -492,7 +502,7 @@ export default function AdvertisePage() {
 
       <section className="relative overflow-hidden rounded-3xl border border-yellow-500/20 bg-yellow-500 p-8 text-black md:p-10">
         <div className="max-w-4xl">
-          <div className="text-sm uppercase tracking-[0.24em] font-black">
+          <div className="text-sm font-black uppercase tracking-[0.24em]">
             Ready to grow?
           </div>
 
@@ -501,8 +511,8 @@ export default function AdvertisePage() {
           </h2>
 
           <p className="mt-4 max-w-3xl text-base font-semibold text-black/75">
-            Submit your listing first. Then choose whether you want standard
-            visibility, city promotion, mosque sponsorship, or a wider campaign.
+            Submit your listing first. Then choose standard visibility, city
+            promotion, mosque sponsorship, or a wider campaign.
           </p>
 
           <div className="mt-7 flex flex-wrap gap-3">
