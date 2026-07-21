@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -6,6 +7,7 @@ import { requireMosqueManager } from "@/lib/mosqueManagerAuth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type PageProps = {
   params: Promise<{
@@ -22,6 +24,23 @@ type MosqueRow = {
   postcode: string | null;
   verified_status: string | null;
 };
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export const metadata: Metadata = {
+  title: "Mosque Analytics | SalahNearMe",
+  description:
+    "View mosque profile views, engagement, live report activity, and public trust signals inside the SalahNearMe mosque manager dashboard.",
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
+
+function isUuid(value: string) {
+  return UUID_REGEX.test(value);
+}
 
 function formatLabel(value: string | null | undefined) {
   if (!value) {
@@ -41,10 +60,68 @@ function getMosqueLocation(mosque: MosqueRow) {
   );
 }
 
+function ErrorPanel({
+  title = "Dashboard error",
+  message,
+}: {
+  title?: string;
+  message: string;
+}) {
+  return (
+    <main className="mx-auto max-w-5xl px-4 py-10">
+      <section className="rounded-3xl border border-red-500/20 bg-red-500/10 p-8">
+        <div className="text-sm uppercase tracking-[0.24em] text-red-300">
+          {title}
+        </div>
+
+        <h1 className="mt-3 text-3xl font-black text-white">
+          Something needs attention
+        </h1>
+
+        <p className="mt-3 text-sm leading-7 text-red-100/80">{message}</p>
+
+        <Link
+          href="/business-dashboard/mosques"
+          className="mt-6 inline-flex rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm font-bold text-white/80 hover:bg-white/10"
+        >
+          Back to mosque dashboard
+        </Link>
+      </section>
+    </main>
+  );
+}
+
+function ManagerLink({
+  href,
+  children,
+  primary = false,
+}: {
+  href: string;
+  children: React.ReactNode;
+  primary?: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      className={
+        primary
+          ? "rounded-xl bg-yellow-500 px-4 py-3 text-xs font-black text-black hover:bg-yellow-400"
+          : "rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-xs font-black text-yellow-400 hover:bg-yellow-500/10"
+      }
+    >
+      {children}
+    </Link>
+  );
+}
+
 export default async function MosqueAnalyticsDashboardPage({
   params,
 }: PageProps) {
   const { mosqueId } = await params;
+
+  if (!isUuid(mosqueId)) {
+    notFound();
+  }
 
   const { data: mosqueRaw, error: mosqueError } = await supabaseAdmin
     .from("mosques")
@@ -53,13 +130,7 @@ export default async function MosqueAnalyticsDashboardPage({
     .maybeSingle();
 
   if (mosqueError) {
-    return (
-      <main className="mx-auto max-w-5xl px-4 py-10">
-        <section className="rounded-3xl border border-red-500/20 bg-red-500/10 p-8 text-red-200">
-          {mosqueError.message}
-        </section>
-      </main>
-    );
+    return <ErrorPanel message={mosqueError.message} />;
   }
 
   if (!mosqueRaw) {
@@ -72,17 +143,21 @@ export default async function MosqueAnalyticsDashboardPage({
 
   if (!permission.ok) {
     return (
-      <main className="mx-auto max-w-5xl px-4 py-10">
-        <section className="rounded-3xl border border-red-500/20 bg-red-500/10 p-8 text-red-200">
-          {permission.error}
-        </section>
-      </main>
+      <ErrorPanel
+        title="Access denied"
+        message={
+          permission.error ||
+          "You do not have permission to view analytics for this mosque."
+        }
+      />
     );
   }
 
+  const location = getMosqueLocation(mosque);
+
   return (
     <main className="mx-auto max-w-7xl px-4 py-10">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <Link
             href="/business-dashboard/mosques"
@@ -91,61 +166,68 @@ export default async function MosqueAnalyticsDashboardPage({
             ← Back to mosque dashboard
           </Link>
 
-          <h1 className="mt-4 text-3xl font-black text-white">
+          <h1 className="mt-4 text-4xl font-black text-white">
             Mosque analytics
           </h1>
 
-          <div className="mt-3 text-sm text-white/50">
-            {[mosque.name, mosque.area, mosque.city, mosque.postcode]
-              .filter(Boolean)
-              .join(" • ") || "Location not available"}
-          </div>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-white/60">
+            Track public interest, profile engagement, live report activity, and
+            mosque data performance for this managed mosque.
+          </p>
         </div>
 
-        <span className="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-1 text-xs font-semibold text-green-300">
+        <span className="rounded-full border border-green-500/30 bg-green-500/10 px-4 py-2 text-xs font-black text-green-300">
           {formatLabel(mosque.verified_status)}
         </span>
       </div>
 
       <section className="mb-8 rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6">
-        <div className="text-xs uppercase tracking-[0.22em] text-yellow-400">
+        <div className="text-xs uppercase tracking-[0.24em] text-yellow-400">
           Managed mosque
         </div>
 
-        <h2 className="mt-2 text-2xl font-black text-white">
+        <h2 className="mt-3 text-3xl font-black text-white">
           {mosque.name ?? "Mosque"}
         </h2>
 
-        <p className="mt-2 text-sm text-white/60">
-          {getMosqueLocation(mosque)}
-        </p>
+        <p className="mt-2 text-sm text-white/60">{location}</p>
 
-        <div className="mt-5 flex flex-wrap gap-3">
-          <Link
+        <div className="mt-6 flex flex-wrap gap-3">
+          <ManagerLink
             href={`/business-dashboard/mosques/${mosque.id}/prayer-times`}
-            className="rounded-xl border border-yellow-500/30 bg-black px-4 py-2 text-xs font-bold text-yellow-400 hover:bg-yellow-500/10"
+            primary
           >
             Edit prayer times
-          </Link>
+          </ManagerLink>
 
-          <Link
+          <ManagerLink
             href={`/business-dashboard/mosques/${mosque.id}/jumuah-times`}
-            className="rounded-xl border border-yellow-500/30 bg-black px-4 py-2 text-xs font-bold text-yellow-400 hover:bg-yellow-500/10"
           >
-            Edit Jumu’ah times
-          </Link>
+            Edit Jumu’ah
+          </ManagerLink>
 
-          <Link
+          <ManagerLink
             href={`/business-dashboard/mosques/${mosque.id}/timetable-sources`}
-            className="rounded-xl border border-yellow-500/30 bg-black px-4 py-2 text-xs font-bold text-yellow-400 hover:bg-yellow-500/10"
           >
             Timetable sources
-          </Link>
+          </ManagerLink>
+
+          <ManagerLink
+            href={`/business-dashboard/mosques/${mosque.id}/data-quality`}
+          >
+            Data quality
+          </ManagerLink>
+
+          <ManagerLink
+            href={`/business-dashboard/mosques/${mosque.id}/correction-reports`}
+          >
+            Correction reports
+          </ManagerLink>
 
           {mosque.slug ? (
             <Link
               href={`/mosque/${mosque.slug}`}
-              className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white/80 hover:bg-white/10"
+              className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-xs font-black text-white/80 hover:bg-white/10"
             >
               View public page
             </Link>
