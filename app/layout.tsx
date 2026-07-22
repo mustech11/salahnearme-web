@@ -1,6 +1,7 @@
 import "./globals.css";
 
 import type { Metadata, Viewport } from "next";
+import { unstable_cache } from "next/cache";
 import { Sora } from "next/font/google";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -9,17 +10,21 @@ import InstallAppPrompt from "@/components/InstallAppPrompt";
 import Nav from "@/components/Nav";
 import { supabasePublic } from "@/lib/supabaseServer";
 
-const siteName = "SalahNearMe";
+const SITE_NAME = "SalahNearMe";
 
-const siteUrl =
+const SITE_URL =
   process.env.NEXT_PUBLIC_SITE_URL ||
   process.env.NEXT_PUBLIC_APP_URL ||
   "https://www.salahnearme.com";
 
-const cleanSiteUrl = siteUrl.replace(/\/+$/, "");
+const CLEAN_SITE_URL = SITE_URL.replace(/\/+$/, "");
 
-const siteDescription =
+const SITE_DESCRIPTION =
   "Find mosques near you, prayer times, iqamah times, halal businesses, Hajj guides, Umrah guides, and Muslim travel essentials with SalahNearMe.";
+
+const NAV_CITIES_LIMIT = 300;
+const NAV_CITIES_TIMEOUT_MS = 8_000;
+const NAV_CITIES_REVALIDATE_SECONDS = 21_600;
 
 const sora = Sora({
   subsets: ["latin"],
@@ -33,15 +38,21 @@ type CityNavRow = {
   name: string;
 };
 
+type CityNavDatabaseRow = {
+  slug: string | null;
+  name: string | null;
+};
+
 export const metadata: Metadata = {
-  metadataBase: new URL(cleanSiteUrl),
+  metadataBase: new URL(CLEAN_SITE_URL),
 
   title: {
-    default: "SalahNearMe | Mosques, Prayer Times & Halal Businesses Near You",
-    template: `%s | ${siteName}`,
+    default:
+      "SalahNearMe | Mosques, Prayer Times & Halal Businesses Near You",
+    template: `%s | ${SITE_NAME}`,
   },
 
-  description: siteDescription,
+  description: SITE_DESCRIPTION,
 
   keywords: [
     "mosques near me",
@@ -61,14 +72,14 @@ export const metadata: Metadata = {
 
   authors: [
     {
-      name: siteName,
-      url: cleanSiteUrl,
+      name: SITE_NAME,
+      url: CLEAN_SITE_URL,
     },
   ],
 
-  creator: siteName,
-  publisher: siteName,
-  applicationName: siteName,
+  creator: SITE_NAME,
+  publisher: SITE_NAME,
+  applicationName: SITE_NAME,
   generator: "Next.js",
 
   alternates: {
@@ -93,6 +104,7 @@ export const metadata: Metadata = {
         type: "image/png",
       },
     ],
+
     apple: [
       {
         url: "/icon-192.png",
@@ -100,12 +112,13 @@ export const metadata: Metadata = {
         type: "image/png",
       },
     ],
+
     shortcut: ["/favicon.ico"],
   },
 
   appleWebApp: {
     capable: true,
-    title: siteName,
+    title: SITE_NAME,
     statusBarStyle: "black-translucent",
   },
 
@@ -119,6 +132,7 @@ export const metadata: Metadata = {
     index: true,
     follow: true,
     nocache: false,
+
     googleBot: {
       index: true,
       follow: true,
@@ -132,10 +146,11 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "en_GB",
-    url: cleanSiteUrl,
-    siteName,
+    url: CLEAN_SITE_URL,
+    siteName: SITE_NAME,
     title: "SalahNearMe | Find Mosques, Prayer Times & Halal Places",
-    description: siteDescription,
+    description: SITE_DESCRIPTION,
+
     images: [
       {
         url: "/social-icon.png",
@@ -149,7 +164,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "SalahNearMe | Mosques, Prayer Times & Halal Businesses",
-    description: siteDescription,
+    description: SITE_DESCRIPTION,
     images: ["/social-icon.png"],
   },
 
@@ -164,56 +179,117 @@ export const viewport: Viewport = {
   maximumScale: 5,
 };
 
-async function getNavCities(): Promise<CityNavRow[]> {
-  try {
-    const supabase = supabasePublic();
+function cleanText(value: string | null | undefined): string | null {
+  const cleaned = value?.trim();
 
-    const { data, error } = await supabase
-      .from("cities")
-      .select("slug,name")
-      .eq("is_active", true)
-      .not("slug", "is", null)
-      .order("name", { ascending: true });
+  return cleaned ? cleaned : null;
+}
 
-    if (error) {
-      console.error("RootLayout cities error:", error.message);
-      return [];
+function isSafeCitySlug(value: string): boolean {
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
+}
+
+async function loadNavCities(): Promise<CityNavRow[]> {
+  const supabase = supabasePublic();
+
+  const { data, error } = await supabase
+    .from("cities")
+    .select("slug,name")
+    .eq("is_active", true)
+    .not("slug", "is", null)
+    .not("name", "is", null)
+    .order("name", {
+      ascending: true,
+    })
+    .limit(NAV_CITIES_LIMIT)
+    .abortSignal(AbortSignal.timeout(NAV_CITIES_TIMEOUT_MS));
+
+  if (error) {
+    throw new Error(
+      `Unable to load navigation cities: ${error.message}`
+    );
+  }
+
+  const seenSlugs = new Set<string>();
+  const cities: CityNavRow[] = [];
+
+  for (const row of (data ?? []) as CityNavDatabaseRow[]) {
+    const slug = cleanText(row.slug);
+    const name = cleanText(row.name);
+
+    if (
+      !slug ||
+      !name ||
+      !isSafeCitySlug(slug) ||
+      seenSlugs.has(slug)
+    ) {
+      continue;
     }
 
-    return ((data ?? []) as CityNavRow[]).filter((city) => {
-      return Boolean(city.slug && city.name);
+    seenSlugs.add(slug);
+
+    cities.push({
+      slug,
+      name,
     });
-  } catch (error) {
-    console.error("RootLayout cities exception:", error);
-    return [];
   }
+
+  return cities;
+}
+
+const getCachedNavCities = unstable_cache(
+  loadNavCities,
+  ["root-layout-navigation-cities-v1"],
+  {
+    revalidate: NAV_CITIES_REVALIDATE_SECONDS,
+    tags: ["navigation-cities"],
+  }
+);
+
+let navCitiesPromise: Promise<CityNavRow[]> | null = null;
+
+async function getNavCities(): Promise<CityNavRow[]> {
+  if (!navCitiesPromise) {
+    navCitiesPromise = getCachedNavCities().catch((error: unknown) => {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unknown navigation cities error";
+
+      console.error("RootLayout cities unavailable:", message);
+
+      return [];
+    });
+  }
+
+  return navCitiesPromise;
 }
 
 export default async function RootLayout({
   children,
-}: {
+}: Readonly<{
   children: ReactNode;
-}) {
+}>) {
   const cities = await getNavCities();
 
   const organizationJsonLd = {
     "@context": "https://schema.org",
     "@type": "Organization",
-    name: siteName,
-    url: cleanSiteUrl,
-    logo: `${cleanSiteUrl}/logo-horizontal.png`,
+    name: SITE_NAME,
+    url: CLEAN_SITE_URL,
+    logo: `${CLEAN_SITE_URL}/logo-horizontal.png`,
     sameAs: [],
   };
 
   const websiteJsonLd = {
     "@context": "https://schema.org",
     "@type": "WebSite",
-    name: siteName,
-    url: cleanSiteUrl,
-    description: siteDescription,
+    name: SITE_NAME,
+    url: CLEAN_SITE_URL,
+    description: SITE_DESCRIPTION,
     potentialAction: {
       "@type": "SearchAction",
-      target: `${cleanSiteUrl}/businesses?q={search_term_string}`,
+      target: `${CLEAN_SITE_URL}/businesses?q={search_term_string}`,
       "query-input": "required name=search_term_string",
     },
   };
@@ -275,23 +351,38 @@ export default async function RootLayout({
                 </div>
 
                 <div className="flex flex-wrap gap-4">
-                  <Link href="/privacy" className="hover:text-yellow-400">
+                  <Link
+                    href="/privacy"
+                    className="transition hover:text-yellow-400"
+                  >
                     Privacy
                   </Link>
 
-                  <Link href="/terms" className="hover:text-yellow-400">
+                  <Link
+                    href="/terms"
+                    className="transition hover:text-yellow-400"
+                  >
                     Terms
                   </Link>
 
-                  <Link href="/disclaimer" className="hover:text-yellow-400">
+                  <Link
+                    href="/disclaimer"
+                    className="transition hover:text-yellow-400"
+                  >
                     Disclaimer
                   </Link>
 
-                  <Link href="/hajj" className="hover:text-yellow-400">
+                  <Link
+                    href="/hajj"
+                    className="transition hover:text-yellow-400"
+                  >
                     Hajj Guide
                   </Link>
 
-                  <Link href="/umrah" className="hover:text-yellow-400">
+                  <Link
+                    href="/umrah"
+                    className="transition hover:text-yellow-400"
+                  >
                     Umrah Guide
                   </Link>
                 </div>

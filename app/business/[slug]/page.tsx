@@ -12,6 +12,7 @@ import { sortBusinessesByRank } from "@/lib/businessRanking";
 import { supabasePublic } from "@/lib/supabaseServer";
 
 export const revalidate = 300;
+export const dynamicParams = true;
 
 type PageProps = {
   params: Promise<{
@@ -218,26 +219,21 @@ function buildEmbedMapUrl(business: BusinessRow) {
     : null;
 }
 
-export async function generateStaticParams() {
-  const supabase = supabasePublic();
-
-  const { data } = await supabase
-    .from("businesses")
-    .select("slug")
-    .not("slug", "is", null)
-    .eq("is_live", true);
-
-  return (data ?? [])
-    .filter((item) => Boolean(item.slug))
-    .map((item) => ({
-      slug: item.slug as string,
-    }));
-}
-
 export async function generateMetadata({
   params,
 }: PageProps): Promise<Metadata> {
   const { slug } = await params;
+
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    return {
+      title: "Business Not Found | SalahNearMe",
+      robots: {
+        index: false,
+        follow: false,
+      },
+    };
+  }
+
   const supabase = supabasePublic();
 
   const { data } = await supabase
@@ -280,8 +276,13 @@ export async function generateMetadata({
 
 export default async function BusinessPage({ params }: PageProps) {
   const { slug } = await params;
-  const supabase = supabasePublic();
 
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    notFound();
+  }
+
+  const supabase = supabasePublic();
+  
   const { data: businessRaw, error } = await supabase
     .from("businesses")
     .select(

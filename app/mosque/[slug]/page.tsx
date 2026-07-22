@@ -18,6 +18,7 @@ import { buildLiveStatus } from "@/lib/mosqueLive";
 import { supabasePublic } from "@/lib/supabaseServer";
 
 export const revalidate = 300;
+export const dynamicParams = true;
 
 type PageProps = {
   params: Promise<{
@@ -154,7 +155,7 @@ type LiveReportRow = {
 
 const DEFAULT_TIMEZONE = "Europe/London";
 const DEFAULT_COUNTRY = "United Kingdom";
-const MAX_STATIC_MOSQUE_PARAMS = 1000;
+
 
 function cleanText(value: string | null | undefined) {
   const trimmed = value?.trim();
@@ -424,25 +425,6 @@ function buildMosqueJsonLd({
   }
 
   return jsonLd;
-}
-
-export async function generateStaticParams() {
-  const supabase = supabasePublic();
-
-  const { data } = await supabase
-    .from("mosques")
-    .select("slug")
-    .not("slug", "is", null)
-    .eq("is_active", true)
-    .order("updated_at", { ascending: false })
-    .limit(MAX_STATIC_MOSQUE_PARAMS);
-
-  return (data ?? [])
-    .map((mosque) => cleanText(mosque.slug as string | null))
-    .filter((slug): slug is string => Boolean(slug))
-    .map((slug) => ({
-      slug,
-    }));
 }
 
 export async function generateMetadata({
