@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 type Body = {
   import_id?: unknown;
@@ -71,11 +72,33 @@ type TimetableImportRow = {
   status: string | null;
 };
 
+type UpdatedImportRow = {
+  id: string;
+  mosque_id: string | null;
+  source_id: string | null;
+  status: string | null;
+  confidence_score: number | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  updated_at: string | null;
+};
+
+type TimeResult =
+  | {
+      ok: true;
+      value: string | null;
+    }
+  | {
+      ok: false;
+    };
+
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
-const TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/;
+
+const TIME_REGEX =
+  /^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/;
 
 const MAX_ROWS = 370;
 
@@ -86,6 +109,22 @@ const APPROVABLE_STATUSES = new Set([
   "approved",
 ]);
 
+const TIME_FIELDS = [
+  "fajr_begins",
+  "fajr_iqamah",
+  "sunrise",
+  "dhuhr_begins",
+  "dhuhr_iqamah",
+  "asr_begins",
+  "asr_iqamah",
+  "maghrib_begins",
+  "maghrib_iqamah",
+  "isha_begins",
+  "isha_iqamah",
+] as const;
+
+type TimeField = (typeof TIME_FIELDS)[number];
+
 function jsonResponse(
   body: Record<string, unknown>,
   status = 200
@@ -93,7 +132,10 @@ function jsonResponse(
   return NextResponse.json(body, {
     status,
     headers: {
-      "Cache-Control": "no-store, max-age=0",
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate, max-age=0",
+      Pragma: "no-cache",
+      Expires: "0",
     },
   });
 }
@@ -112,14 +154,6 @@ function isUuid(value: string | null): value is string {
   return Boolean(value && UUID_REGEX.test(value));
 }
 
-function isJsonRequest(request: Request): boolean {
-  const contentType = request.headers.get("content-type");
-
-  return Boolean(
-    contentType?.toLowerCase().includes("application/json")
-  );
-}
-
 function isPlainObject(
   value: unknown
 ): value is Record<string, unknown> {
@@ -128,6 +162,27 @@ function isPlainObject(
       typeof value === "object" &&
       !Array.isArray(value)
   );
+}
+
+function isJsonRequest(request: Request): boolean {
+  const contentType =
+    request.headers.get("content-type")?.toLowerCase() ?? "";
+
+  return contentType.includes("application/json");
+}
+
+async function readBody(request: Request): Promise<Body | null> {
+  try {
+    const value: unknown = await request.json();
+
+    if (!isPlainObject(value)) {
+      return null;
+    }
+
+    return value as Body;
+  } catch {
+    return null;
+  }
 }
 
 function cleanDate(value: unknown): string | null {
@@ -156,28 +211,41 @@ function cleanDate(value: unknown): string | null {
   return cleaned;
 }
 
-function cleanTime(value: unknown): string | null {
+function parseTime(value: unknown): TimeResult {
   if (
     value === null ||
     value === undefined ||
     value === ""
   ) {
-    return null;
+    return {
+      ok: true,
+      value: null,
+    };
   }
 
   const cleaned = cleanString(value);
 
   if (!cleaned) {
-    return null;
+    return {
+      ok: true,
+      value: null,
+    };
   }
 
   const match = TIME_REGEX.exec(cleaned);
 
   if (!match) {
-    return null;
+    return {
+      ok: false,
+    };
   }
 
-  return `${match[1]}:${match[2]}:${match[3] ?? "00"}`;
+  return {
+    ok: true,
+    value: `${match[1]}:${match[2]}:${
+      match[3] ?? "00"
+    }`,
+  };
 }
 
 function getParsedRows(
@@ -212,19 +280,121 @@ function getConfidence(
 function hasAtLeastOnePrayerTime(
   row: MosquePrayerTimeUpsert
 ): boolean {
-  return Boolean(
-    row.fajr_begins ||
-      row.fajr_iqamah ||
-      row.sunrise ||
-      row.dhuhr_begins ||
-      row.dhuhr_iqamah ||
-      row.asr_begins ||
-      row.asr_iqamah ||
-      row.maghrib_begins ||
-      row.maghrib_iqamah ||
-      row.isha_begins ||
-      row.isha_iqamah
+  return TIME_FIELDS.some(
+    (field) => Boolean(row[field])
   );
+}
+
+function formatFieldName(field: TimeField): string {
+  return field
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (character) =>
+      character.toUpperCase()
+    );
+}
+
+function buildPrayerTimeRow({
+  parsedRow,
+  rowNumber,
+  mosqueId,
+  importId,
+  confidence,
+  updatedAt,
+}: {
+  parsedRow: ParsedPrayerRow;
+  rowNumber: number;
+  mosqueId: string;
+  importId: string;
+  confidence: "verified" | "needs_review";
+  updatedAt: string;
+}):
+  | {
+      ok: true;
+      row: MosquePrayerTimeUpsert;
+    }
+  | {
+      ok: false;
+      error: string;
+    } {
+  const prayerDate = cleanDate(parsedRow.date);
+
+  if (!prayerDate) {
+    return {
+      ok: false,
+      error: `Row ${rowNumber} has a missing or invalid date.`,
+    };
+  }
+
+  const parsedTimes: Record<
+    TimeField,
+    string | null
+  > = {
+    fajr_begins: null,
+    fajr_iqamah: null,
+    sunrise: null,
+    dhuhr_begins: null,
+    dhuhr_iqamah: null,
+    asr_begins: null,
+    asr_iqamah: null,
+    maghrib_begins: null,
+    maghrib_iqamah: null,
+    isha_begins: null,
+    isha_iqamah: null,
+  };
+
+  for (const field of TIME_FIELDS) {
+    const result = parseTime(parsedRow[field]);
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        error: `Row ${rowNumber} contains an invalid ${formatFieldName(
+          field
+        )} time. Use 24-hour HH:MM format.`,
+      };
+    }
+
+    parsedTimes[field] = result.value;
+  }
+
+  const row: MosquePrayerTimeUpsert = {
+    mosque_id: mosqueId,
+    prayer_date: prayerDate,
+
+    fajr_begins: parsedTimes.fajr_begins,
+    fajr_iqamah: parsedTimes.fajr_iqamah,
+
+    sunrise: parsedTimes.sunrise,
+
+    dhuhr_begins: parsedTimes.dhuhr_begins,
+    dhuhr_iqamah: parsedTimes.dhuhr_iqamah,
+
+    asr_begins: parsedTimes.asr_begins,
+    asr_iqamah: parsedTimes.asr_iqamah,
+
+    maghrib_begins: parsedTimes.maghrib_begins,
+    maghrib_iqamah: parsedTimes.maghrib_iqamah,
+
+    isha_begins: parsedTimes.isha_begins,
+    isha_iqamah: parsedTimes.isha_iqamah,
+
+    source: "imported",
+    confidence,
+    notes: `Imported from timetable import ${importId}`,
+    updated_at: updatedAt,
+  };
+
+  if (!hasAtLeastOnePrayerTime(row)) {
+    return {
+      ok: false,
+      error: `Row ${rowNumber} does not contain any valid prayer times.`,
+    };
+  }
+
+  return {
+    ok: true,
+    row,
+  };
 }
 
 export async function POST(request: Request) {
@@ -239,11 +409,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = (await request
-      .json()
-      .catch(() => null)) as Body | null;
+    const body = await readBody(request);
 
-    if (!body || typeof body !== "object") {
+    if (!body) {
       return jsonResponse(
         {
           ok: false,
@@ -265,21 +433,23 @@ export async function POST(request: Request) {
       );
     }
 
-    const {
-      data: importRowRaw,
-      error: lookupError,
-    } = await supabaseAdmin
-      .from("mosque_timetable_imports")
-      .select(
-        "id, mosque_id, source_id, extracted_json, confidence_score, status"
-      )
-      .eq("id", importId)
-      .maybeSingle();
+    const { data: importRowRaw, error: lookupError } =
+      await supabaseAdmin
+        .from("mosque_timetable_imports")
+        .select(
+          "id,mosque_id,source_id,extracted_json,confidence_score,status"
+        )
+        .eq("id", importId)
+        .maybeSingle();
 
     if (lookupError) {
       console.error(
-        "timetable approve lookup error:",
-        lookupError
+        "Timetable approval lookup failed:",
+        {
+          importId,
+          code: lookupError.code,
+          message: lookupError.message,
+        }
       );
 
       return jsonResponse(
@@ -313,7 +483,7 @@ export async function POST(request: Request) {
           error:
             "The timetable import is not linked to a valid mosque.",
         },
-        400
+        409
       );
     }
 
@@ -331,10 +501,11 @@ export async function POST(request: Request) {
     }
 
     const importStatus =
-      cleanString(importRow.status);
+      cleanString(importRow.status)?.toLowerCase() ??
+      null;
 
     if (
-      importStatus &&
+      !importStatus ||
       !APPROVABLE_STATUSES.has(importStatus)
     ) {
       return jsonResponse(
@@ -373,6 +544,7 @@ export async function POST(request: Request) {
     }
 
     const now = new Date().toISOString();
+
     const confidence = getConfidence(
       importRow.confidence_score
     );
@@ -387,79 +559,41 @@ export async function POST(request: Request) {
       index < parsedRows.length;
       index += 1
     ) {
-      const row = parsedRows[index];
-      const prayerDate = cleanDate(row.date);
-
-      if (!prayerDate) {
-        return jsonResponse(
-          {
-            ok: false,
-            error: `Row ${
-              index + 1
-            } has a missing or invalid date.`,
-          },
-          400
-        );
-      }
-
-      if (rowsByDate.has(prayerDate)) {
-        return jsonResponse(
-          {
-            ok: false,
-            error: `Duplicate timetable date detected: ${prayerDate}.`,
-          },
-          400
-        );
-      }
-
-      const upsertRow: MosquePrayerTimeUpsert = {
-        mosque_id: mosqueId,
-        prayer_date: prayerDate,
-
-        fajr_begins: cleanTime(row.fajr_begins),
-        fajr_iqamah: cleanTime(row.fajr_iqamah),
-
-        sunrise: cleanTime(row.sunrise),
-
-        dhuhr_begins: cleanTime(
-          row.dhuhr_begins
-        ),
-        dhuhr_iqamah: cleanTime(
-          row.dhuhr_iqamah
-        ),
-
-        asr_begins: cleanTime(row.asr_begins),
-        asr_iqamah: cleanTime(row.asr_iqamah),
-
-        maghrib_begins: cleanTime(
-          row.maghrib_begins
-        ),
-        maghrib_iqamah: cleanTime(
-          row.maghrib_iqamah
-        ),
-
-        isha_begins: cleanTime(row.isha_begins),
-        isha_iqamah: cleanTime(row.isha_iqamah),
-
-        source: "imported",
+      const result = buildPrayerTimeRow({
+        parsedRow: parsedRows[index],
+        rowNumber: index + 1,
+        mosqueId,
+        importId,
         confidence,
-        notes: `Imported from timetable import ${importId}`,
-        updated_at: now,
-      };
+        updatedAt: now,
+      });
 
-      if (!hasAtLeastOnePrayerTime(upsertRow)) {
+      if (!result.ok) {
         return jsonResponse(
           {
             ok: false,
-            error: `Row ${
-              index + 1
-            } does not contain any valid prayer times.`,
+            error: result.error,
           },
           400
         );
       }
 
-      rowsByDate.set(prayerDate, upsertRow);
+      if (
+        rowsByDate.has(result.row.prayer_date)
+      ) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: `Duplicate timetable date detected: ${result.row.prayer_date}.`,
+          },
+          400
+        );
+      }
+
+      rowsByDate.set(
+        result.row.prayer_date,
+        result.row
+      );
     }
 
     const rowsToUpsert = Array.from(
@@ -475,12 +609,19 @@ export async function POST(request: Request) {
         .from("mosque_prayer_times")
         .upsert(rowsToUpsert, {
           onConflict: "mosque_id,prayer_date",
+          ignoreDuplicates: false,
         });
 
     if (upsertError) {
       console.error(
-        "timetable approve upsert error:",
-        upsertError
+        "Timetable approval prayer-time upsert failed:",
+        {
+          importId,
+          mosqueId,
+          rowCount: rowsToUpsert.length,
+          code: upsertError.code,
+          message: upsertError.message,
+        }
       );
 
       return jsonResponse(
@@ -494,7 +635,7 @@ export async function POST(request: Request) {
     }
 
     const {
-      data: updatedImport,
+      data: updatedImportRaw,
       error: updateError,
     } = await supabaseAdmin
       .from("mosque_timetable_imports")
@@ -507,13 +648,21 @@ export async function POST(request: Request) {
       })
       .eq("id", importId)
       .eq("mosque_id", mosqueId)
-      .select("*")
+      .eq("status", importStatus)
+      .select(
+        "id,mosque_id,source_id,status,confidence_score,reviewed_by,reviewed_at,updated_at"
+      )
       .maybeSingle();
 
     if (updateError) {
       console.error(
-        "timetable approve status update error:",
-        updateError
+        "Timetable approval status update failed:",
+        {
+          importId,
+          mosqueId,
+          code: updateError.code,
+          message: updateError.message,
+        }
       );
 
       return jsonResponse(
@@ -528,18 +677,21 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!updatedImport) {
+    if (!updatedImportRaw) {
       return jsonResponse(
         {
           ok: false,
           error:
-            "The timetable rows were published, but the import record was not updated.",
+            "The timetable rows were published, but the import changed during approval. Refresh the page before trying again.",
           published: true,
           approved_rows: rowsToUpsert.length,
         },
         409
       );
     }
+
+    const updatedImport =
+      updatedImportRaw as UpdatedImportRow;
 
     const sourceId = cleanString(
       importRow.source_id
@@ -560,15 +712,21 @@ export async function POST(request: Request) {
 
       if (sourceUpdateError) {
         console.error(
-          "timetable approve source update error:",
-          sourceUpdateError
+          "Timetable approval source update failed:",
+          {
+            importId,
+            mosqueId,
+            sourceId,
+            code: sourceUpdateError.code,
+            message: sourceUpdateError.message,
+          }
         );
       }
     }
 
     return jsonResponse({
       ok: true,
-      message: `${rowsToUpsert.length} timetable row${
+      message: `${rowsToUpsert.length.toLocaleString()} timetable row${
         rowsToUpsert.length === 1 ? " was" : "s were"
       } approved and published successfully.`,
       approved_rows: rowsToUpsert.length,
@@ -576,7 +734,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error(
-      "timetable approve route error:",
+      "Timetable approval route failed:",
       error
     );
 

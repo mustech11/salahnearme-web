@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 type Body = {
   import_id?: unknown;
@@ -15,6 +16,16 @@ type TimetableImportLookup = {
   id: string;
   mosque_id: string | null;
   source_id: string | null;
+  status: string | null;
+};
+
+type UpdatedImportRow = {
+  id: string;
+  mosque_id: string | null;
+  source_id: string | null;
+  status: string | null;
+  confidence_score: number | null;
+  updated_at: string | null;
 };
 
 const UUID_REGEX =
@@ -23,6 +34,10 @@ const UUID_REGEX =
 const MIN_RAW_TEXT_LENGTH = 20;
 const MAX_RAW_TEXT_LENGTH = 100_000;
 
+const LOCKED_STATUSES = new Set([
+  "approved",
+]);
+
 function jsonResponse(
   body: Record<string, unknown>,
   status = 200
@@ -30,7 +45,10 @@ function jsonResponse(
   return NextResponse.json(body, {
     status,
     headers: {
-      "Cache-Control": "no-store, max-age=0",
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate, max-age=0",
+      Pragma: "no-cache",
+      Expires: "0",
     },
   });
 }
@@ -49,12 +67,47 @@ function isUuid(value: string | null): value is string {
   return Boolean(value && UUID_REGEX.test(value));
 }
 
-function isJsonRequest(request: Request): boolean {
-  const contentType = request.headers.get("content-type");
-
+function isPlainObject(
+  value: unknown
+): value is Record<string, unknown> {
   return Boolean(
-    contentType?.toLowerCase().includes("application/json")
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value)
   );
+}
+
+function isJsonRequest(request: Request): boolean {
+  const contentType =
+    request.headers.get("content-type")?.toLowerCase() ?? "";
+
+  return contentType.includes("application/json");
+}
+
+function calculateConfidenceScore(rawText: string): number {
+  if (rawText.length >= 2_000) {
+    return 55;
+  }
+
+  if (rawText.length >= 500) {
+    return 50;
+  }
+
+  return 40;
+}
+
+async function readBody(request: Request): Promise<Body | null> {
+  try {
+    const value: unknown = await request.json();
+
+    if (!isPlainObject(value)) {
+      return null;
+    }
+
+    return value as Body;
+  } catch {
+    return null;
+  }
 }
 
 export async function POST(request: Request) {
@@ -69,11 +122,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = (await request
-      .json()
-      .catch(() => null)) as Body | null;
+    const body = await readBody(request);
 
-    if (!body || typeof body !== "object") {
+    if (!body) {
       return jsonResponse(
         {
           ok: false,
@@ -126,19 +177,21 @@ export async function POST(request: Request) {
       );
     }
 
-    const {
-      data: importRowRaw,
-      error: lookupError,
-    } = await supabaseAdmin
-      .from("mosque_timetable_imports")
-      .select("id, mosque_id, source_id")
-      .eq("id", importId)
-      .maybeSingle();
+    const { data: importRowRaw, error: lookupError } =
+      await supabaseAdmin
+        .from("mosque_timetable_imports")
+        .select("id,mosque_id,source_id,status")
+        .eq("id", importId)
+        .maybeSingle();
 
     if (lookupError) {
       console.error(
-        "manual raw text import lookup error:",
-        lookupError
+        "Manual raw text import lookup failed:",
+        {
+          importId,
+          code: lookupError.code,
+          message: lookupError.message,
+        }
       );
 
       return jsonResponse(
@@ -172,7 +225,7 @@ export async function POST(request: Request) {
           error:
             "The timetable import is not linked to a valid mosque.",
         },
-        400
+        409
       );
     }
 
@@ -189,29 +242,69 @@ export async function POST(request: Request) {
       );
     }
 
-    const now = new Date().toISOString();
+    const currentStatus =
+      cleanString(importRow.status)?.toLowerCase() ?? null;
 
-    const { data: updatedImport, error: updateError } =
-      await supabaseAdmin
-        .from("mosque_timetable_imports")
-        .update({
-          raw_text: rawText,
-          extracted_json: null,
-          status: "extracted",
-          confidence_score:
-            rawText.length >= 500 ? 50 : 40,
-          error_message: null,
-          updated_at: now,
-        })
-        .eq("id", importId)
-        .eq("mosque_id", mosqueId)
-        .select("*")
-        .maybeSingle();
+    if (
+      currentStatus &&
+      LOCKED_STATUSES.has(currentStatus)
+    ) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "This timetable has already been approved. Create a new import before replacing its raw text.",
+        },
+        409
+      );
+    }
+
+    const now = new Date().toISOString();
+    const confidenceScore =
+      calculateConfidenceScore(rawText);
+
+    let updateQuery = supabaseAdmin
+      .from("mosque_timetable_imports")
+      .update({
+        raw_text: rawText,
+        extracted_json: null,
+        status: "extracted",
+        confidence_score: confidenceScore,
+        error_message: null,
+        reviewed_by: null,
+        reviewed_at: null,
+        updated_at: now,
+      })
+      .eq("id", importId)
+      .eq("mosque_id", mosqueId);
+
+    if (currentStatus) {
+      updateQuery = updateQuery.eq(
+        "status",
+        currentStatus
+      );
+    } else {
+      updateQuery = updateQuery.is("status", null);
+    }
+
+    const {
+      data: updatedImportRaw,
+      error: updateError,
+    } = await updateQuery
+      .select(
+        "id,mosque_id,source_id,status,confidence_score,updated_at"
+      )
+      .maybeSingle();
 
     if (updateError) {
       console.error(
-        "manual raw text import update error:",
-        updateError
+        "Manual raw text import update failed:",
+        {
+          importId,
+          mosqueId,
+          code: updateError.code,
+          message: updateError.message,
+        }
       );
 
       return jsonResponse(
@@ -224,16 +317,19 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!updatedImport) {
+    if (!updatedImportRaw) {
       return jsonResponse(
         {
           ok: false,
           error:
-            "The timetable import could not be updated.",
+            "The timetable import changed while it was being edited. Refresh the page and try again.",
         },
         409
       );
     }
+
+    const updatedImport =
+      updatedImportRaw as UpdatedImportRow;
 
     const sourceId = cleanString(importRow.source_id);
 
@@ -252,8 +348,14 @@ export async function POST(request: Request) {
 
       if (sourceUpdateError) {
         console.error(
-          "manual raw text source update error:",
-          sourceUpdateError
+          "Manual raw text source update failed:",
+          {
+            importId,
+            mosqueId,
+            sourceId,
+            code: sourceUpdateError.code,
+            message: sourceUpdateError.message,
+          }
         );
       }
     }
@@ -261,13 +363,13 @@ export async function POST(request: Request) {
     return jsonResponse({
       ok: true,
       message:
-        "Raw timetable text saved successfully.",
+        "Raw timetable text saved successfully. It is ready to be parsed.",
       raw_text_length: rawText.length,
       import: updatedImport,
     });
   } catch (error) {
     console.error(
-      "manual raw text route error:",
+      "Manual raw text route failed:",
       error
     );
 
