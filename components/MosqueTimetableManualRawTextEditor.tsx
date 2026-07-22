@@ -37,8 +37,39 @@ const EXAMPLE_TEXT =
   "1 Fajr 03:15 04:15 Sunrise 04:40 Dhuhr 13:15 14:00 Asr 17:15 18:00 Maghrib 21:35 21:35 Isha 22:40 23:00\n" +
   "2 Fajr 03:14 04:15 Sunrise 04:39 Dhuhr 13:15 14:00 Asr 17:16 18:00 Maghrib 21:36 21:36 Isha 22:41 23:00";
 
-function cleanString(value: string) {
-  return value.trim();
+function cleanString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getStoredLength(
+  value: unknown,
+  fallback: number
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0
+  ) {
+    return fallback;
+  }
+
+  return Math.trunc(value);
+}
+
+async function readSaveResponse(
+  response: Response
+): Promise<SaveResponse> {
+  try {
+    const value: unknown = await response.json();
+
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return {};
+    }
+
+    return value as SaveResponse;
+  } catch {
+    return {};
+  }
 }
 
 export default function MosqueTimetableManualRawTextEditor({
@@ -46,9 +77,16 @@ export default function MosqueTimetableManualRawTextEditor({
   initialRawText,
 }: Props) {
   const router = useRouter();
+
   const panelId = useId();
+  const textareaId = useId();
+  const helpId = useId();
+  const validationId = useId();
+  const successId = useId();
+  const errorId = useId();
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
 
   const initialText = useMemo(
     () => initialRawText ?? "",
@@ -62,32 +100,39 @@ export default function MosqueTimetableManualRawTextEditor({
 
   const [open, setOpen] = useState(false);
   const [rawText, setRawText] = useState(initialText);
+  const [savedText, setSavedText] = useState(initialText);
+
   const [saveState, setSaveState] =
     useState<SaveState>("idle");
+
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
-    setRawText(initialText);
-    setSaveState("idle");
-    setMessage("");
-    setErrorMessage("");
-  }, [initialText]);
+    mountedRef.current = true;
 
-  useEffect(() => {
     return () => {
+      mountedRef.current = false;
       abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
     };
   }, []);
 
+  useEffect(() => {
+    setRawText(initialText);
+    setSavedText(initialText);
+    setSaveState("idle");
+    setMessage("");
+    setErrorMessage("");
+  }, [initialText, cleanImportId]);
+
   const trimmedRawText = useMemo(
-    () => cleanString(rawText),
+    () => rawText.trim(),
     [rawText]
   );
 
   const characterCount = rawText.length;
-
-  const hasUnsavedChanges = rawText !== initialText;
+  const hasUnsavedChanges = rawText !== savedText;
 
   const validationError = useMemo(() => {
     if (!UUID_REGEX.test(cleanImportId)) {
@@ -110,15 +155,41 @@ export default function MosqueTimetableManualRawTextEditor({
   ]);
 
   const isSaving = saveState === "saving";
-  const isSaveDisabled =
-    isSaving || Boolean(validationError) || !hasUnsavedChanges;
 
-  const resetText = useCallback(() => {
-    setRawText(initialText);
+  const isSaveDisabled =
+    isSaving ||
+    Boolean(validationError) ||
+    !hasUnsavedChanges;
+
+  const clearFeedback = useCallback(() => {
     setSaveState("idle");
     setMessage("");
     setErrorMessage("");
-  }, [initialText]);
+  }, []);
+
+  const resetText = useCallback(() => {
+    setRawText(savedText);
+    clearFeedback();
+  }, [clearFeedback, savedText]);
+
+  const clearText = useCallback(() => {
+    setRawText("");
+    clearFeedback();
+  }, [clearFeedback]);
+
+  const togglePanel = useCallback(() => {
+    if (open && hasUnsavedChanges) {
+      const confirmed = window.confirm(
+        "You have unsaved timetable text. Hide the editor without saving it?"
+      );
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setOpen((current) => !current);
+  }, [hasUnsavedChanges, open]);
 
   const saveRawText = useCallback(async () => {
     if (isSaving) {
@@ -139,13 +210,16 @@ export default function MosqueTimetableManualRawTextEditor({
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
+    let timedOut = false;
+
     const timeoutId = window.setTimeout(() => {
+      timedOut = true;
       controller.abort();
     }, REQUEST_TIMEOUT_MS);
 
-    try {
-      setSaveState("saving");
+    setSaveState("saving");
 
+    try {
       const response = await fetch(
         "/api/mosque/timetable-imports/manual-raw-text",
         {
@@ -164,29 +238,34 @@ export default function MosqueTimetableManualRawTextEditor({
         }
       );
 
-      const data = (await response
-        .json()
-        .catch(() => ({}))) as SaveResponse;
+      const data = await readSaveResponse(response);
+
+      if (!mountedRef.current) {
+        return;
+      }
 
       if (!response.ok || data.ok !== true) {
         setSaveState("error");
         setErrorMessage(
-          cleanString(data.error ?? "") ||
+          cleanString(data.error) ||
+            cleanString(data.message) ||
             DEFAULT_ERROR_MESSAGE
         );
         return;
       }
 
-      const storedLength =
-        typeof data.raw_text_length === "number" &&
-        Number.isFinite(data.raw_text_length)
-          ? Math.max(0, Math.trunc(data.raw_text_length))
-          : trimmedRawText.length;
+      const storedLength = getStoredLength(
+        data.raw_text_length,
+        trimmedRawText.length
+      );
 
       setRawText(trimmedRawText);
+      setSavedText(trimmedRawText);
       setSaveState("success");
+      setErrorMessage("");
+
       setMessage(
-        cleanString(data.message ?? "") ||
+        cleanString(data.message) ||
           `${storedLength.toLocaleString()} character${
             storedLength === 1 ? " was" : "s were"
           } saved. The timetable is ready to be parsed.`
@@ -194,6 +273,10 @@ export default function MosqueTimetableManualRawTextEditor({
 
       router.refresh();
     } catch (error) {
+      if (!mountedRef.current) {
+        return;
+      }
+
       setSaveState("error");
 
       if (
@@ -201,10 +284,17 @@ export default function MosqueTimetableManualRawTextEditor({
         error.name === "AbortError"
       ) {
         setErrorMessage(
-          "The save request took too long or was cancelled. Please try again."
+          timedOut
+            ? "The save request timed out. Please try again."
+            : "The save request was cancelled. Please try again."
         );
         return;
       }
+
+      console.error(
+        "Manual timetable raw text save failed:",
+        error
+      );
 
       setErrorMessage(DEFAULT_ERROR_MESSAGE);
     } finally {
@@ -214,11 +304,13 @@ export default function MosqueTimetableManualRawTextEditor({
         abortControllerRef.current = null;
       }
 
-      setSaveState((currentState) =>
-        currentState === "saving"
-          ? "idle"
-          : currentState
-      );
+      if (mountedRef.current) {
+        setSaveState((currentState) =>
+          currentState === "saving"
+            ? "idle"
+            : currentState
+        );
+      }
     }
   }, [
     cleanImportId,
@@ -228,13 +320,20 @@ export default function MosqueTimetableManualRawTextEditor({
     validationError,
   ]);
 
+  const describedBy = [
+    helpId,
+    validationError ? validationId : null,
+    message ? successId : null,
+    errorMessage ? errorId : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <div className="mt-3">
       <button
         type="button"
-        onClick={() => {
-          setOpen((current) => !current);
-        }}
+        onClick={togglePanel}
         aria-expanded={open}
         aria-controls={panelId}
         className="inline-flex min-h-10 items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-xs font-bold text-white transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
@@ -247,18 +346,26 @@ export default function MosqueTimetableManualRawTextEditor({
       {open ? (
         <section
           id={panelId}
+          aria-labelledby={`${panelId}-heading`}
           className="mt-4 rounded-2xl border border-white/10 bg-black/40 p-4"
         >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-yellow-400">
+              <h3
+                id={`${panelId}-heading`}
+                className="text-sm font-bold text-yellow-400"
+              >
                 Manual timetable text
               </h3>
 
-              <p className="mt-2 max-w-3xl text-xs leading-5 text-white/50">
-                Paste timetable text copied from a mosque website,
-                PDF, OCR result, message, spreadsheet or document.
-                Save the text before selecting Parse timetable.
+              <p
+                id={helpId}
+                className="mt-2 max-w-3xl text-xs leading-5 text-white/50"
+              >
+                Paste timetable text copied from a mosque
+                website, PDF, OCR result, message, spreadsheet
+                or document. Save it before selecting Parse
+                timetable.
               </p>
             </div>
 
@@ -266,30 +373,35 @@ export default function MosqueTimetableManualRawTextEditor({
               <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
                 Unsaved changes
               </div>
+            ) : saveState === "success" ? (
+              <div className="rounded-xl border border-green-500/30 bg-green-500/10 px-3 py-2 text-xs text-green-300">
+                Saved
+              </div>
             ) : null}
           </div>
 
           <label
-            htmlFor={`${panelId}-raw-text`}
+            htmlFor={textareaId}
             className="sr-only"
           >
             Raw timetable text
           </label>
 
           <textarea
-            id={`${panelId}-raw-text`}
+            id={textareaId}
             value={rawText}
             onChange={(event) => {
               setRawText(event.target.value);
-              setSaveState("idle");
-              setMessage("");
-              setErrorMessage("");
+              clearFeedback();
             }}
             rows={12}
             maxLength={MAX_RAW_TEXT_LENGTH}
             spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
             placeholder={EXAMPLE_TEXT}
             aria-invalid={Boolean(validationError)}
+            aria-describedby={describedBy || undefined}
             className="mt-4 min-h-64 w-full resize-y rounded-2xl border border-yellow-500/20 bg-black p-4 font-mono text-xs leading-5 text-white outline-none transition placeholder:text-white/25 focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400/40"
           />
 
@@ -306,7 +418,8 @@ export default function MosqueTimetableManualRawTextEditor({
             </span>
 
             <span className="text-white/40">
-              Whitespace is trimmed before saving.
+              Leading and trailing whitespace is removed before
+              saving.
             </span>
           </div>
 
@@ -328,7 +441,8 @@ export default function MosqueTimetableManualRawTextEditor({
                   />
                   Saving...
                 </>
-              ) : saveState === "success" ? (
+              ) : saveState === "success" &&
+                !hasUnsavedChanges ? (
                 "Saved"
               ) : (
                 "Save raw text"
@@ -346,12 +460,7 @@ export default function MosqueTimetableManualRawTextEditor({
 
             <button
               type="button"
-              onClick={() => {
-                setRawText("");
-                setSaveState("idle");
-                setMessage("");
-                setErrorMessage("");
-              }}
+              onClick={clearText}
               disabled={isSaving || rawText.length === 0}
               className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-2 text-xs font-bold text-red-300 transition hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -360,7 +469,10 @@ export default function MosqueTimetableManualRawTextEditor({
           </div>
 
           {validationError && !errorMessage ? (
-            <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-5 text-amber-300">
+            <div
+              id={validationId}
+              className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-5 text-amber-300"
+            >
               {validationError}
             </div>
           ) : null}
@@ -368,6 +480,7 @@ export default function MosqueTimetableManualRawTextEditor({
           <div aria-live="polite" aria-atomic="true">
             {message ? (
               <div
+                id={successId}
                 role="status"
                 className="mt-3 rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-xs leading-5 text-green-300"
               >
@@ -377,6 +490,7 @@ export default function MosqueTimetableManualRawTextEditor({
 
             {errorMessage ? (
               <div
+                id={errorId}
                 role="alert"
                 className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs leading-5 text-red-300"
               >
