@@ -48,48 +48,120 @@ type BusinessRow = {
   import_source?: string | null;
 };
 
-type BusinessWithDistance = BusinessRow & {
-  distanceMiles: number | null;
-};
+type BusinessWithDistance =
+  BusinessRow & {
+    distanceMiles: number | null;
+  };
 
-function label(value: string | null | undefined) {
-  if (!value) {
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const SLUG_REGEX =
+  /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+const QUERY_LIMIT = 80;
+const DISPLAY_LIMIT = 6;
+
+function cleanText(
+  value: string | null | undefined
+): string | null {
+  const cleaned = value?.trim();
+
+  return cleaned ? cleaned : null;
+}
+
+function formatLabel(
+  value: string | null | undefined
+): string {
+  const cleaned = cleanText(value);
+
+  if (!cleaned) {
     return "Halal business";
   }
 
-  return value
+  return cleaned
     .replace(/_/g, " ")
     .replace(/-/g, " ")
-    .replace(/\b\w/g, (m) => m.toUpperCase());
+    .replace(/\b\w/g, (character) =>
+      character.toUpperCase()
+    );
 }
 
-function normaliseExternalUrl(value: string | null | undefined) {
-  if (!value) {
+function normaliseExternalUrl(
+  value: string | null | undefined
+): string | null {
+  const cleaned = cleanText(value);
+
+  if (!cleaned) {
     return null;
   }
 
-  const trimmed = value.trim();
+  const candidate = /^https?:\/\//i.test(
+    cleaned
+  )
+    ? cleaned
+    : `https://${cleaned}`;
 
-  if (!trimmed) {
+  try {
+    const url = new URL(candidate);
+
+    if (
+      url.protocol !== "http:" &&
+      url.protocol !== "https:"
+    ) {
+      return null;
+    }
+
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function normalisePhone(
+  value: string | null | undefined
+): string | null {
+  const cleaned = cleanText(value);
+
+  if (!cleaned) {
     return null;
   }
 
-  if (
-    trimmed.startsWith("http://") ||
-    trimmed.startsWith("https://")
-  ) {
-    return trimmed;
-  }
+  const phone = cleaned.replace(
+    /[^\d+]/g,
+    ""
+  );
 
-  return `https://${trimmed}`;
+  return phone.length >= 6 ? phone : null;
 }
 
-function getCardImage(business: BusinessRow) {
+function getCardImage(
+  business: BusinessRow
+): string | null {
+  const candidates = [
+    business.cover_image_url,
+    business.logo_url,
+    ...(business.gallery_urls ?? []),
+  ];
+
+  for (const candidate of candidates) {
+    const url =
+      normaliseExternalUrl(candidate);
+
+    if (url) {
+      return url;
+    }
+  }
+
+  return null;
+}
+
+function isCoordinate(
+  value: number | null
+): value is number {
   return (
-    business.cover_image_url ||
-    business.logo_url ||
-    business.gallery_urls?.[0] ||
-    null
+    typeof value === "number" &&
+    Number.isFinite(value)
   );
 }
 
@@ -98,20 +170,37 @@ function haversineMiles(
   lon1: number,
   lat2: number,
   lon2: number
-) {
+): number {
   const radiusMiles = 3958.8;
-  const toRad = (n: number) => (n * Math.PI) / 180;
 
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
+  const toRadians = (value: number) =>
+    (value * Math.PI) / 180;
+
+  const latitudeDifference =
+    toRadians(lat2 - lat1);
+
+  const longitudeDifference =
+    toRadians(lon2 - lon1);
 
   const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLon / 2) ** 2;
+    Math.sin(latitudeDifference / 2) ** 2 +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(
+        longitudeDifference / 2
+      ) **
+        2;
 
-  return 2 * radiusMiles * Math.asin(Math.sqrt(a));
+  const bounded = Math.min(
+    1,
+    Math.max(0, a)
+  );
+
+  return (
+    2 *
+    radiusMiles *
+    Math.asin(Math.sqrt(bounded))
+  );
 }
 
 function getDistance(
@@ -119,21 +208,32 @@ function getDistance(
   mosqueLng: number | null,
   businessLat: number | null,
   businessLng: number | null
-) {
+): number | null {
   if (
-    typeof mosqueLat !== "number" ||
-    typeof mosqueLng !== "number" ||
-    typeof businessLat !== "number" ||
-    typeof businessLng !== "number"
+    !isCoordinate(mosqueLat) ||
+    !isCoordinate(mosqueLng) ||
+    !isCoordinate(businessLat) ||
+    !isCoordinate(businessLng)
   ) {
     return null;
   }
 
-  return haversineMiles(mosqueLat, mosqueLng, businessLat, businessLng);
+  return haversineMiles(
+    mosqueLat,
+    mosqueLng,
+    businessLat,
+    businessLng
+  );
 }
 
-function formatDistance(distance: number | null) {
-  if (distance === null) {
+function formatDistance(
+  distance: number | null
+): string | null {
+  if (
+    distance === null ||
+    !Number.isFinite(distance) ||
+    distance < 0
+  ) {
     return null;
   }
 
@@ -144,35 +244,72 @@ function formatDistance(distance: number | null) {
   return `${distance.toFixed(1)} miles`;
 }
 
-function isPaidActive(value: string | null | undefined) {
+function isPaidActive(
+  value: string | null | undefined
+): boolean {
   if (!value) {
     return false;
   }
 
-  const time = new Date(value).getTime();
+  const timestamp = new Date(
+    value
+  ).getTime();
 
-  return Number.isFinite(time) && time > Date.now();
+  return (
+    Number.isFinite(timestamp) &&
+    timestamp > Date.now()
+  );
 }
 
-function getBusinessTrust(business: BusinessWithDistance) {
+function getBusinessTrust(
+  business: BusinessWithDistance
+) {
   return calculateTrustScore({
     is_verified: business.is_verified,
     featured: business.featured,
     pricing_tier: business.pricing_tier,
     paid_until: business.paid_until,
-    halal_confidence: business.halal_confidence,
+    halal_confidence:
+      business.halal_confidence,
     halal_score: business.halal_score,
-    review_status: business.review_status,
+    review_status:
+      business.review_status,
     is_live: business.is_live,
-    quality_status: business.quality_status,
+    quality_status:
+      business.quality_status,
     source: business.import_source,
-    distance_miles: business.distanceMiles,
+    distance_miles:
+      business.distanceMiles,
     has_coordinates:
-      typeof business.latitude === "number" &&
-      typeof business.longitude === "number",
-    has_phone: !!business.phone,
-    has_website: !!business.website,
-    has_address: !!business.address,
+      isCoordinate(business.latitude) &&
+      isCoordinate(business.longitude),
+    has_phone: Boolean(
+      cleanText(business.phone)
+    ),
+    has_website: Boolean(
+      cleanText(business.website)
+    ),
+    has_address: Boolean(
+      cleanText(business.address)
+    ),
+  });
+}
+
+function getSafeBusinessRows(
+  rows: BusinessRow[]
+): BusinessRow[] {
+  const seen = new Set<string>();
+
+  return rows.filter((business) => {
+    if (
+      !UUID_REGEX.test(business.id) ||
+      seen.has(business.id)
+    ) {
+      return false;
+    }
+
+    seen.add(business.id);
+    return true;
   });
 }
 
@@ -184,11 +321,26 @@ export default async function MosqueNearbyBusinesses({
   latitude,
   longitude,
 }: Props) {
-  const supabase = supabasePublic();
+  const safeMosqueId = UUID_REGEX.test(
+    mosqueId
+  )
+    ? mosqueId
+    : null;
 
-  if (!cityName) {
+  const safeMosqueSlug =
+    mosqueSlug &&
+    SLUG_REGEX.test(mosqueSlug)
+      ? mosqueSlug
+      : null;
+
+  const cleanCityName =
+    cleanText(cityName);
+
+  if (!safeMosqueId || !cleanCityName) {
     return null;
   }
+
+  const supabase = supabasePublic();
 
   const { data, error } = await supabase
     .from("businesses")
@@ -224,91 +376,177 @@ export default async function MosqueNearbyBusinesses({
       import_source
     `
     )
-    .eq("city", cityName)
+    .eq("city", cleanCityName)
     .eq("is_live", true)
     .eq("is_active", true)
     .order("featured", {
       ascending: false,
     })
-    .limit(80);
+    .limit(QUERY_LIMIT);
 
   if (error) {
+    console.error(
+      "Nearby mosque businesses load failed:",
+      {
+        mosqueId: safeMosqueId,
+        cityName: cleanCityName,
+        code: error.code,
+        message: error.message,
+      }
+    );
+
     return (
-      <section className="rounded-3xl border border-red-500/20 bg-red-500/10 p-6 text-red-200">
-        {error.message}
+      <section
+        role="alert"
+        className="rounded-3xl border border-red-500/20 bg-red-500/10 p-6 text-sm text-red-200"
+      >
+        Nearby halal businesses are temporarily
+        unavailable.
       </section>
     );
   }
 
-  const ranked = sortBusinessesByRank((data ?? []) as BusinessRow[], {
-    mosqueId,
-    cityName,
-  }) as BusinessRow[];
+  const safeRows = getSafeBusinessRows(
+    (data ?? []) as BusinessRow[]
+  );
 
-  const businesses: BusinessWithDistance[] = ranked
-    .map((business) => ({
-      ...business,
-      distanceMiles: getDistance(
-        latitude,
-        longitude,
-        business.latitude,
-        business.longitude
-      ),
-    }))
-    .sort((a, b) => {
-      const aSponsored = a.sponsor_mosque_id === mosqueId ? 1 : 0;
-      const bSponsored = b.sponsor_mosque_id === mosqueId ? 1 : 0;
+  const ranked = sortBusinessesByRank(
+    safeRows,
+    {
+      mosqueId: safeMosqueId,
+      cityName: cleanCityName,
+    }
+  ) as BusinessRow[];
 
-      if (aSponsored !== bSponsored) {
-        return bSponsored - aSponsored;
-      }
+  const businesses: BusinessWithDistance[] =
+    ranked
+      .map((business) => ({
+        ...business,
+        distanceMiles: getDistance(
+          latitude,
+          longitude,
+          business.latitude,
+          business.longitude
+        ),
+      }))
+      .sort((first, second) => {
+        const firstSponsored =
+          first.sponsor_mosque_id ===
+          safeMosqueId
+            ? 1
+            : 0;
 
-      const aFeatured =
-        a.featured && isPaidActive(a.paid_until) ? 1 : 0;
-      const bFeatured =
-        b.featured && isPaidActive(b.paid_until) ? 1 : 0;
+        const secondSponsored =
+          second.sponsor_mosque_id ===
+          safeMosqueId
+            ? 1
+            : 0;
 
-      if (aFeatured !== bFeatured) {
-        return bFeatured - aFeatured;
-      }
+        if (
+          firstSponsored !==
+          secondSponsored
+        ) {
+          return (
+            secondSponsored -
+            firstSponsored
+          );
+        }
 
-      const trustA = getBusinessTrust(a).score;
-      const trustB = getBusinessTrust(b).score;
+        const firstFeatured =
+          first.featured &&
+          isPaidActive(first.paid_until)
+            ? 1
+            : 0;
 
-      if (trustA !== trustB) {
-        return trustB - trustA;
-      }
+        const secondFeatured =
+          second.featured &&
+          isPaidActive(second.paid_until)
+            ? 1
+            : 0;
 
-      if (a.distanceMiles !== null && b.distanceMiles !== null) {
-        return a.distanceMiles - b.distanceMiles;
-      }
+        if (
+          firstFeatured !==
+          secondFeatured
+        ) {
+          return (
+            secondFeatured -
+            firstFeatured
+          );
+        }
 
-      return (a.name ?? "").localeCompare(b.name ?? "");
-    })
-    .slice(0, 6);
+        const firstTrust =
+          getBusinessTrust(first).score;
+
+        const secondTrust =
+          getBusinessTrust(second).score;
+
+        if (firstTrust !== secondTrust) {
+          return secondTrust - firstTrust;
+        }
+
+        if (
+          first.distanceMiles !== null &&
+          second.distanceMiles !== null
+        ) {
+          return (
+            first.distanceMiles -
+            second.distanceMiles
+          );
+        }
+
+        if (
+          first.distanceMiles !== null
+        ) {
+          return -1;
+        }
+
+        if (
+          second.distanceMiles !== null
+        ) {
+          return 1;
+        }
+
+        return (
+          cleanText(first.name) ?? ""
+        ).localeCompare(
+          cleanText(second.name) ?? "",
+          "en-GB"
+        );
+      })
+      .slice(0, DISPLAY_LIMIT);
 
   return (
-    <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
+    <section
+      aria-labelledby="nearby-halal-businesses-heading"
+      className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8"
+    >
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
-            Nearby Halal Businesses
+            Nearby halal businesses
           </div>
 
-          <h2 className="mt-3 text-3xl font-bold text-white">
-            Halal places near {mosqueName ?? "this mosque"}
+          <h2
+            id="nearby-halal-businesses-heading"
+            className="mt-3 text-3xl font-bold text-white"
+          >
+            Halal places near{" "}
+            {cleanText(mosqueName) ??
+              "this mosque"}
           </h2>
 
-          <p className="mt-3 max-w-3xl text-white/70">
-            Approved halal businesses near this mosque. Sponsored, verified, and
-            trusted businesses appear with stronger visibility.
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-white/70">
+            Discover live halal business listings
+            near this mosque. Sponsorship,
+            verification, trust and distance help
+            determine visibility.
           </p>
         </div>
 
-        {mosqueSlug ? (
+        {safeMosqueSlug ? (
           <Link
-            href={`/sponsor/mosque/${mosqueSlug}`}
-            className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-black hover:bg-yellow-400"
+            href={`/sponsor/mosque/${safeMosqueSlug}`}
+            className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300"
           >
             Promote near this mosque
           </Link>
@@ -318,50 +556,128 @@ export default async function MosqueNearbyBusinesses({
       {businesses.length > 0 ? (
         <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {businesses.map((business) => {
-            const distance = formatDistance(business.distanceMiles);
-            const sponsored = business.sponsor_mosque_id === mosqueId;
-            const trust = getBusinessTrust(business);
-            const cardImage = getCardImage(business);
-            const websiteUrl = normaliseExternalUrl(business.website);
-            const mapsUrl = normaliseExternalUrl(business.maps_url);
+            const distance = formatDistance(
+              business.distanceMiles
+            );
 
-            const smartBadges = getSmartBadges({
-              is_verified: business.is_verified,
-              featured: business.featured,
-              sponsor_mosque_id: business.sponsor_mosque_id,
-              mosqueId,
-              pricing_tier: business.pricing_tier,
-              paid_until: business.paid_until,
-              halal_confidence: business.halal_confidence,
-              review_status: business.review_status,
-              is_live: business.is_live,
-              distance_miles: business.distanceMiles,
-              has_coordinates:
-                typeof business.latitude === "number" &&
-                typeof business.longitude === "number",
-              has_phone: !!business.phone,
-              has_website: !!business.website,
-            });
+            const sponsored =
+              business.sponsor_mosque_id ===
+              safeMosqueId;
+
+            const paidFeatured =
+              business.featured === true &&
+              isPaidActive(
+                business.paid_until
+              );
+
+            const trust =
+              getBusinessTrust(business);
+
+            const cardImage =
+              getCardImage(business);
+
+            const logoUrl =
+              normaliseExternalUrl(
+                business.logo_url
+              );
+
+            const websiteUrl =
+              normaliseExternalUrl(
+                business.website
+              );
+
+            const mapsUrl =
+              normaliseExternalUrl(
+                business.maps_url
+              );
+
+            const phone =
+              normalisePhone(
+                business.phone
+              );
+
+            const safeSlug =
+              business.slug &&
+              SLUG_REGEX.test(
+                business.slug
+              )
+                ? business.slug
+                : null;
+
+            const smartBadges =
+              getSmartBadges({
+                is_verified:
+                  business.is_verified,
+                featured:
+                  business.featured,
+                sponsor_mosque_id:
+                  business.sponsor_mosque_id,
+                mosqueId:
+                  safeMosqueId,
+                pricing_tier:
+                  business.pricing_tier,
+                paid_until:
+                  business.paid_until,
+                halal_confidence:
+                  business.halal_confidence,
+                review_status:
+                  business.review_status,
+                is_live:
+                  business.is_live,
+                distance_miles:
+                  business.distanceMiles,
+                has_coordinates:
+                  isCoordinate(
+                    business.latitude
+                  ) &&
+                  isCoordinate(
+                    business.longitude
+                  ),
+                has_phone:
+                  Boolean(phone),
+                has_website:
+                  Boolean(websiteUrl),
+              });
+
+            const address = [
+              cleanText(business.address),
+              cleanText(business.postcode),
+            ]
+              .filter(Boolean)
+              .join(" • ");
 
             return (
               <article
                 key={business.id}
-                className="overflow-hidden rounded-2xl border border-yellow-500/20 bg-black/30 transition hover:border-yellow-400/50"
+                className={`overflow-hidden rounded-2xl border bg-black/30 transition ${
+                  sponsored
+                    ? "border-yellow-500/40 shadow-[0_0_28px_rgba(212,175,55,0.08)]"
+                    : "border-yellow-500/20 hover:border-yellow-400/50"
+                }`}
               >
                 {cardImage ? (
-                  <div className="relative h-36 overflow-hidden">
+                  <div className="relative h-36 overflow-hidden bg-black">
                     <img
                       src={cardImage}
-                      alt={`${business.name ?? "Business"} image`}
+                      alt={`${cleanText(
+                        business.name
+                      ) ?? "Business"} image`}
+                      loading="lazy"
+                      decoding="async"
                       className="h-full w-full object-cover"
                     />
 
                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
 
-                    {business.logo_url && business.cover_image_url ? (
+                    {logoUrl &&
+                    business.cover_image_url ? (
                       <img
-                        src={business.logo_url}
-                        alt={`${business.name ?? "Business"} logo`}
+                        src={logoUrl}
+                        alt={`${cleanText(
+                          business.name
+                        ) ?? "Business"} logo`}
+                        loading="lazy"
+                        decoding="async"
                         className="absolute bottom-3 left-3 h-14 w-14 rounded-2xl border border-yellow-500/30 bg-black object-cover p-1"
                       />
                     ) : null}
@@ -371,38 +687,56 @@ export default async function MosqueNearbyBusinesses({
                 <div className="p-5">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      {business.slug ? (
+                      {safeSlug ? (
                         <BusinessTrackedLink
                           businessId={business.id}
-                          href={`/business/${business.slug}`}
+                          href={`/business/${safeSlug}`}
                           eventType="profile_click"
                           source="mosque_nearby_businesses"
                           pageType="mosque_nearby_businesses"
-                          className="text-lg font-bold text-white hover:text-yellow-400"
+                          className="break-words text-lg font-bold text-white transition hover:text-yellow-400"
                           metadata={{
-                            mosque_id: mosqueId,
+                            mosque_id:
+                              safeMosqueId,
                           }}
                         >
-                          {business.name ?? "Unnamed business"}
+                          {cleanText(
+                            business.name
+                          ) ??
+                            "Unnamed business"}
                         </BusinessTrackedLink>
                       ) : (
-                        <div className="text-lg font-bold text-white">
-                          {business.name ?? "Unnamed business"}
+                        <div className="break-words text-lg font-bold text-white">
+                          {cleanText(
+                            business.name
+                          ) ??
+                            "Unnamed business"}
                         </div>
                       )}
 
                       <div className="mt-2 text-sm text-white/60">
-                        {[label(business.category), business.area]
+                        {[
+                          formatLabel(
+                            business.category
+                          ),
+                          cleanText(
+                            business.area
+                          ),
+                        ]
                           .filter(Boolean)
                           .join(" • ")}
                       </div>
 
                       <div className="mt-3">
-                        <TrustBadge result={trust} />
+                        <TrustBadge
+                          result={trust}
+                        />
                       </div>
 
                       <div className="mt-3">
-                        <SmartBadges badges={smartBadges} />
+                        <SmartBadges
+                          badges={smartBadges}
+                        />
                       </div>
                     </div>
 
@@ -413,7 +747,7 @@ export default async function MosqueNearbyBusinesses({
                         </span>
                       ) : null}
 
-                      {business.featured ? (
+                      {paidFeatured ? (
                         <span className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-1 text-[10px] font-semibold text-yellow-400">
                           Featured
                         </span>
@@ -427,37 +761,41 @@ export default async function MosqueNearbyBusinesses({
                     </div>
                   </div>
 
-                  {business.address ? (
-                    <div className="mt-4 text-sm text-white/70">
-                      {business.address}
+                  {address ? (
+                    <div className="mt-4 text-sm leading-6 text-white/70">
+                      {address}
                     </div>
                   ) : null}
 
                   <div className="mt-4 flex flex-wrap gap-2 text-xs">
                     {distance ? (
                       <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-white/70">
-                        📍 {distance}
+                        {distance}
                       </span>
                     ) : null}
 
                     {business.halal_confidence ? (
                       <span className="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-1 text-green-300">
-                        {label(business.halal_confidence)} halal confidence
+                        {formatLabel(
+                          business.halal_confidence
+                        )}{" "}
+                        halal confidence
                       </span>
                     ) : null}
                   </div>
 
                   <div className="mt-5 flex flex-wrap gap-2">
-                    {business.slug ? (
+                    {safeSlug ? (
                       <BusinessTrackedLink
                         businessId={business.id}
-                        href={`/business/${business.slug}`}
+                        href={`/business/${safeSlug}`}
                         eventType="profile_click"
                         source="mosque_nearby_businesses"
                         pageType="mosque_nearby_businesses"
-                        className="rounded-xl border border-yellow-500/30 bg-black px-3 py-2 text-xs font-semibold text-yellow-400 hover:bg-yellow-500/10"
+                        className="rounded-xl border border-yellow-500/30 bg-black px-3 py-2 text-xs font-semibold text-yellow-400 transition hover:bg-yellow-500/10"
                         metadata={{
-                          mosque_id: mosqueId,
+                          mosque_id:
+                            safeMosqueId,
                         }}
                       >
                         View
@@ -472,10 +810,11 @@ export default async function MosqueNearbyBusinesses({
                         source="mosque_nearby_businesses"
                         pageType="mosque_nearby_businesses"
                         target="_blank"
-                        rel="noreferrer"
-                        className="rounded-xl border border-yellow-500/30 bg-black px-3 py-2 text-xs font-semibold text-yellow-400 hover:bg-yellow-500/10"
+                        rel="noopener noreferrer"
+                        className="rounded-xl border border-yellow-500/30 bg-black px-3 py-2 text-xs font-semibold text-yellow-400 transition hover:bg-yellow-500/10"
                         metadata={{
-                          mosque_id: mosqueId,
+                          mosque_id:
+                            safeMosqueId,
                         }}
                       >
                         Map
@@ -490,26 +829,28 @@ export default async function MosqueNearbyBusinesses({
                         source="mosque_nearby_businesses"
                         pageType="mosque_nearby_businesses"
                         target="_blank"
-                        rel="noreferrer"
-                        className="rounded-xl border border-white/10 bg-black px-3 py-2 text-xs font-semibold text-white hover:border-yellow-500/30"
+                        rel="noopener noreferrer"
+                        className="rounded-xl border border-white/10 bg-black px-3 py-2 text-xs font-semibold text-white transition hover:border-yellow-500/30"
                         metadata={{
-                          mosque_id: mosqueId,
+                          mosque_id:
+                            safeMosqueId,
                         }}
                       >
                         Website
                       </BusinessTrackedLink>
                     ) : null}
 
-                    {business.phone ? (
+                    {phone ? (
                       <BusinessTrackedLink
                         businessId={business.id}
-                        href={`tel:${business.phone}`}
+                        href={`tel:${phone}`}
                         eventType="phone_click"
                         source="mosque_nearby_businesses"
                         pageType="mosque_nearby_businesses"
-                        className="rounded-xl border border-white/10 bg-black px-3 py-2 text-xs font-semibold text-white hover:border-yellow-500/30"
+                        className="rounded-xl border border-white/10 bg-black px-3 py-2 text-xs font-semibold text-white transition hover:border-yellow-500/30"
                         metadata={{
-                          mosque_id: mosqueId,
+                          mosque_id:
+                            safeMosqueId,
                         }}
                       >
                         Call
@@ -522,11 +863,11 @@ export default async function MosqueNearbyBusinesses({
           })}
         </div>
       ) : (
-        <div className="mt-6 rounded-2xl border border-white/10 bg-black/30 p-6 text-white/60">
-          No approved halal businesses are live near this mosque yet.
+        <div className="mt-6 rounded-2xl border border-white/10 bg-black/30 p-6 text-sm text-white/60">
+          No approved halal businesses are live near
+          this mosque yet.
         </div>
       )}
     </section>
   );
 }
-
