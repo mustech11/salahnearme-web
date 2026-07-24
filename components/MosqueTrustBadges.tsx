@@ -28,11 +28,22 @@ type PrayerTimeRow = {
 };
 
 type JumuahRow = {
-  is_active?: boolean | null;
-  start_time?: string | null;
-  khutbah_time?: string | null;
-  prayer_time?: string | null;
+  is_active: boolean | null;
+  start_time: string | null;
+  khutbah_time: string | null;
+  prayer_time: string | null;
 };
+
+type BadgeTone =
+  | "good"
+  | "warning"
+  | "danger"
+  | "neutral";
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const DAYS_TO_CHECK = 30;
 
 const BEGINS_FIELDS = [
   "fajr_begins",
@@ -51,23 +62,66 @@ const IQAMAH_FIELDS = [
   "isha_iqamah",
 ] as const;
 
-function getTodayDateForTimezone(timezone: string | null | undefined) {
+function cleanString(
+  value: string | null | undefined
+): string {
+  return value?.trim() ?? "";
+}
+
+function getSafeTimezone(
+  value: string | null | undefined
+): string {
+  const timezone = cleanString(value);
+
+  if (!timezone) {
+    return "Europe/London";
+  }
+
   try {
-    const formatter = new Intl.DateTimeFormat("en-GB", {
-      timeZone: timezone || "Europe/London",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone,
+    }).format(new Date());
 
-    const parts = formatter.formatToParts(new Date());
+    return timezone;
+  } catch {
+    return "Europe/London";
+  }
+}
 
-    const day = parts.find((part) => part.type === "day")?.value;
-    const month = parts.find((part) => part.type === "month")?.value;
-    const year = parts.find((part) => part.type === "year")?.value;
+function getTodayDateForTimezone(
+  timezone: string
+): string {
+  try {
+    const formatter = new Intl.DateTimeFormat(
+      "en-GB",
+      {
+        timeZone: timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }
+    );
+
+    const parts = formatter.formatToParts(
+      new Date()
+    );
+
+    const day = parts.find(
+      (part) => part.type === "day"
+    )?.value;
+
+    const month = parts.find(
+      (part) => part.type === "month"
+    )?.value;
+
+    const year = parts.find(
+      (part) => part.type === "year"
+    )?.value;
 
     if (!day || !month || !year) {
-      return new Date().toISOString().slice(0, 10);
+      return new Date()
+        .toISOString()
+        .slice(0, 10);
     }
 
     return `${year}-${month}-${day}`;
@@ -76,59 +130,104 @@ function getTodayDateForTimezone(timezone: string | null | undefined) {
   }
 }
 
-function addDays(dateString: string, days: number) {
-  const date = new Date(`${dateString}T00:00:00.000Z`);
+function addDays(
+  dateString: string,
+  days: number
+): string {
+  const date = new Date(
+    `${dateString}T00:00:00.000Z`
+  );
+
+  if (Number.isNaN(date.getTime())) {
+    return dateString;
+  }
+
   date.setUTCDate(date.getUTCDate() + days);
+
   return date.toISOString().slice(0, 10);
 }
 
-function isMissing(value: string | null | undefined) {
-  return !value || value.trim().length === 0;
+function isMissing(
+  value: string | null | undefined
+): boolean {
+  return cleanString(value).length === 0;
 }
 
-function formatLabel(value: string | null | undefined) {
-  if (!value) {
-    return "Unknown";
+function formatLabel(
+  value: string | null | undefined
+): string {
+  const cleaned = cleanString(value);
+
+  if (!cleaned) {
+    return "Verification not confirmed";
   }
 
-  return value
+  return cleaned
     .replace(/_/g, " ")
     .replace(/-/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    .replace(/\b\w/g, (letter) =>
+      letter.toUpperCase()
+    );
 }
 
-function getMissingBeginsCount(row: PrayerTimeRow) {
-  return BEGINS_FIELDS.filter((field) => isMissing(row[field])).length;
+function getMissingBeginsCount(
+  row: PrayerTimeRow
+): number {
+  return BEGINS_FIELDS.filter((field) =>
+    isMissing(row[field])
+  ).length;
 }
 
-function getMissingIqamahCount(row: PrayerTimeRow) {
-  return IQAMAH_FIELDS.filter((field) => isMissing(row[field])).length;
+function getMissingIqamahCount(
+  row: PrayerTimeRow
+): number {
+  return IQAMAH_FIELDS.filter((field) =>
+    isMissing(row[field])
+  ).length;
 }
 
-function getConfidenceStatus(row: PrayerTimeRow) {
-  const text = `${row.confidence ?? ""} ${row.source ?? ""}`.toLowerCase();
+function getConfidenceStatus(
+  row: PrayerTimeRow
+): BadgeTone {
+  const confidence =
+    cleanString(row.confidence).toLowerCase();
+
+  const source =
+    cleanString(row.source).toLowerCase();
+
+  const combined = `${confidence} ${source}`;
 
   if (
-    text.includes("official") ||
-    text.includes("verified") ||
-    text.includes("mosque")
+    combined.includes("low") ||
+    combined.includes("needs_review") ||
+    combined.includes("needs review") ||
+    combined.includes("unverified") ||
+    combined.includes("failed")
   ) {
-    return "good";
+    return "danger";
   }
 
   if (
-    text.includes("needs") ||
-    text.includes("low") ||
-    text.includes("unverified")
+    combined.includes("official") ||
+    combined.includes("verified") ||
+    combined.includes("approved") ||
+    combined.includes("manager") ||
+    combined.includes("mosque")
   ) {
-    return "danger";
+    return "good";
   }
 
   return "warning";
 }
 
-function jumuahHasTime(row: JumuahRow) {
-  return Boolean(row.start_time || row.khutbah_time || row.prayer_time);
+function jumuahHasTime(
+  row: JumuahRow
+): boolean {
+  return Boolean(
+    cleanString(row.start_time) ||
+      cleanString(row.khutbah_time) ||
+      cleanString(row.prayer_time)
+  );
 }
 
 function calculateHealthScore({
@@ -145,10 +244,13 @@ function calculateHealthScore({
   missingIqamah: number;
   lowConfidenceRows: number;
   activeJumuahRows: number;
-}) {
-  let score = 100;
+}): number {
+  const missingDays = Math.max(
+    0,
+    totalDays - existingRows
+  );
 
-  const missingDays = Math.max(0, totalDays - existingRows);
+  let score = 100;
 
   score -= missingDays * 3;
   score -= missingBegins * 2;
@@ -159,36 +261,109 @@ function calculateHealthScore({
     score -= 10;
   }
 
-  return Math.max(0, Math.min(100, Math.round(score)));
+  return Math.max(
+    0,
+    Math.min(100, Math.round(score))
+  );
 }
 
-function scoreLabel(score: number) {
-  if (score >= 85) return "Strong";
-  if (score >= 70) return "Good";
-  if (score >= 50) return "Needs attention";
+function scoreLabel(score: number): string {
+  if (score >= 85) {
+    return "Strong";
+  }
+
+  if (score >= 70) {
+    return "Good";
+  }
+
+  if (score >= 50) {
+    return "Needs attention";
+  }
+
   return "Weak";
 }
 
-function badgeClass(type: "good" | "warning" | "danger" | "neutral") {
-  if (type === "good") {
+function healthTone(score: number): BadgeTone {
+  if (score >= 70) {
+    return "good";
+  }
+
+  if (score >= 50) {
+    return "warning";
+  }
+
+  return "danger";
+}
+
+function coverageTone(
+  rowCount: number
+): BadgeTone {
+  if (rowCount >= 25) {
+    return "good";
+  }
+
+  if (rowCount >= 15) {
+    return "warning";
+  }
+
+  return "danger";
+}
+
+function gapTone(
+  gapCount: number,
+  warningLimit: number
+): BadgeTone {
+  if (gapCount === 0) {
+    return "good";
+  }
+
+  if (gapCount <= warningLimit) {
+    return "warning";
+  }
+
+  return "danger";
+}
+
+function verificationTone(
+  value: string | null | undefined
+): BadgeTone {
+  const cleaned =
+    cleanString(value).toLowerCase();
+
+  if (
+    cleaned.includes("verified") ||
+    cleaned.includes("approved")
+  ) {
+    return "good";
+  }
+
+  if (
+    cleaned.includes("auto") ||
+    cleaned.includes("pending") ||
+    cleaned.includes("community")
+  ) {
+    return "warning";
+  }
+
+  return "neutral";
+}
+
+function badgeClass(
+  tone: BadgeTone
+): string {
+  if (tone === "good") {
     return "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
   }
 
-  if (type === "danger") {
-    return "border-red-500/30 bg-red-500/10 text-red-300";
-  }
-
-  if (type === "warning") {
+  if (tone === "warning") {
     return "border-yellow-500/30 bg-yellow-500/10 text-yellow-300";
   }
 
-  return "border-white/10 bg-white/5 text-white/70";
-}
+  if (tone === "danger") {
+    return "border-red-500/30 bg-red-500/10 text-red-300";
+  }
 
-function healthType(score: number) {
-  if (score >= 70) return "good";
-  if (score >= 50) return "warning";
-  return "danger";
+  return "border-white/10 bg-white/5 text-white/70";
 }
 
 export default async function MosqueTrustBadges({
@@ -198,67 +373,157 @@ export default async function MosqueTrustBadges({
   verifiedStatus,
   showManagerLink = false,
 }: Props) {
-  const today = getTodayDateForTimezone(timezone);
-  const days = 30;
-  const endDate = addDays(today, days - 1);
+  const cleanMosqueId = mosqueId.trim();
 
-  const { data: prayerRowsRaw } = await supabaseAdmin
-    .from("mosque_prayer_times")
-    .select(
+  if (!UUID_REGEX.test(cleanMosqueId)) {
+    return (
+      <TrustUnavailable
+        mosqueSlug={mosqueSlug}
+        message="Timetable reliability information is unavailable for this mosque."
+      />
+    );
+  }
+
+  const safeTimezone =
+    getSafeTimezone(timezone);
+
+  const today =
+    getTodayDateForTimezone(safeTimezone);
+
+  const endDate = addDays(
+    today,
+    DAYS_TO_CHECK - 1
+  );
+
+  const [
+    prayerTimesResult,
+    jumuahTimesResult,
+  ] = await Promise.all([
+    supabaseAdmin
+      .from("mosque_prayer_times")
+      .select(
+        `
+        prayer_date,
+        fajr_begins,
+        fajr_iqamah,
+        sunrise,
+        dhuhr_begins,
+        dhuhr_iqamah,
+        asr_begins,
+        asr_iqamah,
+        maghrib_begins,
+        maghrib_iqamah,
+        isha_begins,
+        isha_iqamah,
+        source,
+        confidence
       `
-      prayer_date,
-      fajr_begins,
-      fajr_iqamah,
-      sunrise,
-      dhuhr_begins,
-      dhuhr_iqamah,
-      asr_begins,
-      asr_iqamah,
-      maghrib_begins,
-      maghrib_iqamah,
-      isha_begins,
-      isha_iqamah,
-      source,
-      confidence
-    `
-    )
-    .eq("mosque_id", mosqueId)
-    .gte("prayer_date", today)
-    .lte("prayer_date", endDate);
+      )
+      .eq("mosque_id", cleanMosqueId)
+      .gte("prayer_date", today)
+      .lte("prayer_date", endDate)
+      .order("prayer_date", {
+        ascending: true,
+      }),
 
-  const { data: jumuahRowsRaw } = await supabaseAdmin
-    .from("mosque_jumuah_times")
-    .select("is_active, start_time, khutbah_time, prayer_time")
-    .eq("mosque_id", mosqueId);
+    supabaseAdmin
+      .from("mosque_jumuah_times")
+      .select(
+        `
+        is_active,
+        start_time,
+        khutbah_time,
+        prayer_time
+      `
+      )
+      .eq("mosque_id", cleanMosqueId),
+  ]);
 
-  const prayerRows = (prayerRowsRaw ?? []) as PrayerTimeRow[];
-  const jumuahRows = (jumuahRowsRaw ?? []) as JumuahRow[];
+  if (prayerTimesResult.error) {
+    console.error(
+      "MosqueTrustBadges prayer-time query error:",
+      {
+        mosqueId: cleanMosqueId,
+        code: prayerTimesResult.error.code,
+        message:
+          prayerTimesResult.error.message,
+      }
+    );
+  }
+
+  if (jumuahTimesResult.error) {
+    console.error(
+      "MosqueTrustBadges Jumuah query error:",
+      {
+        mosqueId: cleanMosqueId,
+        code: jumuahTimesResult.error.code,
+        message:
+          jumuahTimesResult.error.message,
+      }
+    );
+  }
+
+  if (
+    prayerTimesResult.error &&
+    jumuahTimesResult.error
+  ) {
+    return (
+      <TrustUnavailable
+        mosqueSlug={mosqueSlug}
+        message="Timetable reliability information is temporarily unavailable."
+      />
+    );
+  }
+
+  const prayerRows = (
+    prayerTimesResult.data ?? []
+  ) as PrayerTimeRow[];
+
+  const jumuahRows = (
+    jumuahTimesResult.data ?? []
+  ) as JumuahRow[];
+
+  const uniquePrayerDates = new Set(
+    prayerRows
+      .map((row) =>
+        cleanString(row.prayer_date)
+      )
+      .filter(Boolean)
+  );
+
+  const existingDays =
+    uniquePrayerDates.size;
 
   const missingBegins = prayerRows.reduce(
-    (total, row) => total + getMissingBeginsCount(row),
+    (total, row) =>
+      total + getMissingBeginsCount(row),
     0
   );
 
   const missingIqamah = prayerRows.reduce(
-    (total, row) => total + getMissingIqamahCount(row),
+    (total, row) =>
+      total + getMissingIqamahCount(row),
     0
   );
 
-  const lowConfidenceRows = prayerRows.filter(
-    (row) => getConfidenceStatus(row) === "danger"
-  ).length;
+  const lowConfidenceRows =
+    prayerRows.filter(
+      (row) =>
+        getConfidenceStatus(row) === "danger"
+    ).length;
 
-  const activeJumuahRows = jumuahRows.filter((row) => {
-    if (row.is_active === false) {
-      return false;
-    }
+  const activeJumuahRows =
+    jumuahRows.filter((row) => {
+      if (row.is_active === false) {
+        return false;
+      }
 
-    return jumuahHasTime(row);
-  }).length;
+      return jumuahHasTime(row);
+    }).length;
 
   const healthScore = calculateHealthScore({
-    totalDays: days,
-    existingRows: prayerRows.length,
+    totalDays: DAYS_TO_CHECK,
+    existingRows: existingDays,
     missingBegins,
     missingIqamah,
     lowConfidenceRows,
@@ -266,36 +531,37 @@ export default async function MosqueTrustBadges({
   });
 
   const health = scoreLabel(healthScore);
-  const coverageType =
-    prayerRows.length >= 25 ? "good" : prayerRows.length >= 15 ? "warning" : "danger";
-
-  const iqamahType =
-    missingIqamah === 0 ? "good" : missingIqamah <= 10 ? "warning" : "danger";
-
-  const jumuahType = activeJumuahRows > 0 ? "good" : "warning";
 
   return (
-    <section className="rounded-3xl border border-white/10 bg-black/20 p-5">
+    <section
+      aria-labelledby="mosque-trust-heading"
+      className="rounded-3xl border border-white/10 bg-black/20 p-5"
+    >
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <div className="text-xs uppercase tracking-[0.22em] text-yellow-400">
+          <div className="text-xs font-semibold uppercase tracking-[0.22em] text-yellow-400">
             Mosque data trust
           </div>
 
-          <h2 className="mt-2 text-xl font-black text-white">
+          <h2
+            id="mosque-trust-heading"
+            className="mt-2 text-xl font-black text-white"
+          >
             Timetable reliability
           </h2>
 
           <p className="mt-2 max-w-3xl text-sm leading-7 text-white/55">
-            These badges help users understand whether the timetable is complete,
-            verified, imported, or still needs mosque review.
+            These indicators show timetable coverage,
+            iqamah completeness, Jumu’ah availability
+            and data confidence for the next{" "}
+            {DAYS_TO_CHECK} days.
           </p>
         </div>
 
         {showManagerLink ? (
           <Link
-            href={`/business-dashboard/mosques/${mosqueId}/data-quality`}
-            className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-xs font-bold text-cyan-300 hover:bg-cyan-500/20"
+            href={`/business-dashboard/mosques/${cleanMosqueId}/data-quality`}
+            className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-xs font-bold text-cyan-300 transition hover:bg-cyan-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
           >
             View data quality
           </Link>
@@ -305,12 +571,22 @@ export default async function MosqueTrustBadges({
       <div className="mt-5 flex flex-wrap gap-3">
         <TrustBadge
           label={`Timetable health: ${health}`}
-          className={badgeClass(healthType(healthScore))}
+          title={`Calculated health score: ${healthScore}/100`}
+          tone={healthTone(healthScore)}
         />
 
         <TrustBadge
-          label={`30-day coverage: ${prayerRows.length}/${days}`}
-          className={badgeClass(coverageType)}
+          label={`${DAYS_TO_CHECK}-day coverage: ${existingDays}/${DAYS_TO_CHECK}`}
+          tone={coverageTone(existingDays)}
+        />
+
+        <TrustBadge
+          label={
+            missingBegins === 0
+              ? "Beginning times complete"
+              : `Beginning-time gaps: ${missingBegins}`
+          }
+          tone={gapTone(missingBegins, 8)}
         />
 
         <TrustBadge
@@ -319,71 +595,124 @@ export default async function MosqueTrustBadges({
               ? "Iqamah data complete"
               : `Iqamah gaps: ${missingIqamah}`
           }
-          className={badgeClass(iqamahType)}
+          tone={gapTone(missingIqamah, 10)}
         />
 
         <TrustBadge
           label={
             activeJumuahRows > 0
-              ? `${activeJumuahRows} Jumuʿah session${
-                  activeJumuahRows === 1 ? "" : "s"
-                }`
-              : "Jumuʿah time not confirmed"
+              ? `${activeJumuahRows} Jumu’ah session${
+                  activeJumuahRows === 1
+                    ? ""
+                    : "s"
+                } confirmed`
+              : "Jumu’ah time not confirmed"
           }
-          className={badgeClass(jumuahType)}
+          tone={
+            activeJumuahRows > 0
+              ? "good"
+              : "warning"
+          }
         />
 
         <TrustBadge
           label={formatLabel(verifiedStatus)}
-          className={badgeClass(
-            (verifiedStatus ?? "").toLowerCase().includes("verified") ||
-              (verifiedStatus ?? "").toLowerCase().includes("approved")
-              ? "good"
-              : (verifiedStatus ?? "").toLowerCase().includes("auto")
-                ? "warning"
-                : "neutral"
+          tone={verificationTone(
+            verifiedStatus
           )}
         />
 
-        {lowConfidenceRows > 0 ? (
-          <TrustBadge
-            label={`${lowConfidenceRows} low-confidence rows`}
-            className={badgeClass("warning")}
-          />
-        ) : (
-          <TrustBadge
-            label="No low-confidence rows"
-            className={badgeClass("good")}
-          />
-        )}
+        <TrustBadge
+          label={
+            lowConfidenceRows === 0
+              ? "No low-confidence rows"
+              : `${lowConfidenceRows} low-confidence row${
+                  lowConfidenceRows === 1
+                    ? ""
+                    : "s"
+                }`
+          }
+          tone={
+            lowConfidenceRows === 0
+              ? "good"
+              : "warning"
+          }
+        />
       </div>
 
-      {mosqueSlug ? (
-        <div className="mt-4 text-xs text-white/40">
-          Public timetable:{" "}
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-white/40">
+        <span>
+          Window: {today} to {endDate} ·{" "}
+          {safeTimezone}
+        </span>
+
+        {mosqueSlug ? (
           <Link
-            href={`/mosque/${mosqueSlug}/timetable`}
-            className="text-yellow-300 underline hover:text-yellow-200"
+            href={`/mosque/${cleanString(
+              mosqueSlug
+            )}/timetable`}
+            className="font-bold text-yellow-300 underline underline-offset-4 transition hover:text-yellow-200"
           >
-            view monthly timetable
+            View monthly timetable
           </Link>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </section>
   );
 }
 
 function TrustBadge({
   label,
-  className,
+  tone,
+  title,
 }: {
   label: string;
-  className: string;
+  tone: BadgeTone;
+  title?: string;
 }) {
   return (
-    <span className={`rounded-full border px-3 py-2 text-xs font-bold ${className}`}>
+    <span
+      title={title}
+      className={`rounded-full border px-3 py-2 text-xs font-bold ${badgeClass(
+        tone
+      )}`}
+    >
       {label}
     </span>
   );
 }
 
+function TrustUnavailable({
+  mosqueSlug,
+  message,
+}: {
+  mosqueSlug?: string | null;
+  message: string;
+}) {
+  const cleanSlug = cleanString(mosqueSlug);
+
+  return (
+    <section className="rounded-3xl border border-white/10 bg-black/20 p-5">
+      <div className="text-xs font-semibold uppercase tracking-[0.22em] text-yellow-400">
+        Mosque data trust
+      </div>
+
+      <h2 className="mt-2 text-xl font-black text-white">
+        Timetable reliability
+      </h2>
+
+      <p className="mt-3 text-sm leading-7 text-white/55">
+        {message}
+      </p>
+
+      {cleanSlug ? (
+        <Link
+          href={`/mosque/${cleanSlug}/timetable`}
+          className="mt-4 inline-flex rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-2 text-xs font-bold text-yellow-300 transition hover:bg-yellow-500/20"
+        >
+          View public timetable
+        </Link>
+      ) : null}
+    </section>
+  );
+}
