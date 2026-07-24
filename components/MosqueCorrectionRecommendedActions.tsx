@@ -20,6 +20,7 @@ type ActionItem = {
   href?: string;
   tone: ActionTone;
   actionLabel?: string;
+  external?: boolean;
 };
 
 type ReportType =
@@ -53,13 +54,18 @@ function normaliseReportType(
     .replace(/-/g, "_");
 
   if (
-    type === "prayer_time_wrong" ||
+    type ===
+      "prayer_time_wrong" ||
     type === "iqamah_missing" ||
-    type === "jumuah_time_wrong" ||
+    type ===
+      "jumuah_time_wrong" ||
     type === "location_wrong" ||
-    type === "facilities_wrong" ||
-    type === "mosque_closed_or_moved" ||
-    type === "duplicate_mosque"
+    type ===
+      "facilities_wrong" ||
+    type ===
+      "mosque_closed_or_moved" ||
+    type ===
+      "duplicate_mosque"
   ) {
     return type;
   }
@@ -67,8 +73,11 @@ function normaliseReportType(
   return "other";
 }
 
-function formatReportType(value: string): string {
-  const cleaned = cleanText(value);
+function formatReportType(
+  value: string
+): string {
+  const cleaned =
+    cleanText(value);
 
   if (!cleaned) {
     return "General Report";
@@ -87,186 +96,298 @@ function getActionItems({
   mosqueSlug,
   reportType,
 }: Props): ActionItem[] {
-  const type = normaliseReportType(reportType);
+  const type =
+    normaliseReportType(
+      reportType
+    );
 
-  const safeMosqueId = UUID_REGEX.test(mosqueId)
-    ? mosqueId
-    : null;
-
-  const safeMosqueSlug =
-    mosqueSlug && SLUG_REGEX.test(mosqueSlug)
-      ? mosqueSlug
+  const safeMosqueId =
+    UUID_REGEX.test(mosqueId)
+      ? mosqueId
       : null;
 
-  const publicMosquePage = safeMosqueSlug
-    ? `/mosque/${safeMosqueSlug}`
-    : null;
+  const cleanedSlug =
+    cleanText(
+      mosqueSlug
+    ).toLowerCase();
 
-  const publicTimetablePage = safeMosqueSlug
-    ? `/mosque/${safeMosqueSlug}/timetable`
-    : null;
+  const safeMosqueSlug =
+    SLUG_REGEX.test(cleanedSlug)
+      ? cleanedSlug
+      : null;
 
-  const prayerEditorPage = safeMosqueId
-    ? `/business-dashboard/mosques/${safeMosqueId}/prayer-times`
-    : null;
+  const publicMosquePage =
+    safeMosqueSlug
+      ? `/mosque/${safeMosqueSlug}`
+      : null;
 
-  const jumuahEditorPage = safeMosqueId
-    ? `/business-dashboard/mosques/${safeMosqueId}/jumuah-times`
-    : null;
+  const publicTimetablePage =
+    safeMosqueSlug
+      ? `/mosque/${safeMosqueSlug}/timetable`
+      : null;
 
-  const dataQualityPage = safeMosqueId
-    ? `/business-dashboard/mosques/${safeMosqueId}/data-quality`
-    : null;
+  const prayerEditorPage =
+    safeMosqueId
+      ? `/business-dashboard/mosques/${safeMosqueId}/prayer-times`
+      : null;
+
+  const jumuahEditorPage =
+    safeMosqueId
+      ? `/business-dashboard/mosques/${safeMosqueId}/jumuah-times`
+      : null;
+
+  const dataQualityPage =
+    safeMosqueId
+      ? `/business-dashboard/mosques/${safeMosqueId}/data-quality`
+      : null;
 
   if (
-    type === "prayer_time_wrong" ||
+    type ===
+      "prayer_time_wrong" ||
     type === "iqamah_missing"
   ) {
     return [
       {
         id: "edit-prayer-times",
-        label: "Edit prayer times",
+        label:
+          "Edit prayer times",
         description:
-          "Open the mosque prayer-time editor and correct the affected beginning or iqamah time.",
-        href: prayerEditorPage ?? undefined,
-        actionLabel: "Open editor",
+          "Open the mosque prayer-time editor and correct the affected beginning or iqamah value.",
+        href:
+          prayerEditorPage ??
+          undefined,
+        actionLabel:
+          "Open editor",
         tone: "gold",
       },
       {
         id: "check-data-quality",
-        label: "Check timetable quality",
+        label:
+          "Check timetable quality",
         description:
-          "Review timetable coverage, missing iqamah values and low-confidence records before resolving the report.",
-        href: dataQualityPage ?? undefined,
-        actionLabel: "Review quality",
+          "Review coverage, missing iqamah values and low-confidence rows before resolving the report.",
+        href:
+          dataQualityPage ??
+          undefined,
+        actionLabel:
+          "Review quality",
         tone: "cyan",
       },
       ...(publicTimetablePage
         ? [
             {
               id: "view-public-timetable",
-              label: "View public timetable",
+              label:
+                "View public timetable",
               description:
-                "Compare the submitted report with the timetable currently shown to visitors.",
-              href: publicTimetablePage,
-              actionLabel: "View timetable",
-              tone: "green" as const,
+                "Compare the submitted correction with the timetable currently shown to visitors.",
+              href:
+                publicTimetablePage,
+              actionLabel:
+                "View timetable",
+              tone:
+                "green" as const,
             },
           ]
         : []),
     ];
   }
 
-  if (type === "jumuah_time_wrong") {
+  if (
+    type ===
+    "jumuah_time_wrong"
+  ) {
     return [
       {
         id: "edit-jumuah-times",
-        label: "Edit Jumu’ah times",
+        label:
+          "Edit Jumuʿah times",
         description:
-          "Open the Jumu’ah editor and correct the relevant khutbah or salah session.",
-        href: jumuahEditorPage ?? undefined,
-        actionLabel: "Open editor",
+          "Open the Jumuʿah editor and correct the relevant khutbah or salah session.",
+        href:
+          jumuahEditorPage ??
+          undefined,
+        actionLabel:
+          "Open editor",
         tone: "gold",
       },
       ...(publicMosquePage
         ? [
             {
               id: "view-jumuah-public",
-              label: "Check public information",
+              label:
+                "Check public information",
               description:
-                "Review how Jumu’ah sessions currently appear on the mosque profile.",
-              href: publicMosquePage,
-              actionLabel: "View mosque",
-              tone: "green" as const,
-            },
-          ]
-        : []),
-    ];
-  }
-
-  if (type === "location_wrong") {
-    return [
-      ...(publicMosquePage
-        ? [
-            {
-              id: "view-location-public",
-              label: "Check public location",
-              description:
-                "Review the public address, map destination and directions before making any changes.",
-              href: publicMosquePage,
-              actionLabel: "View mosque",
-              tone: "green" as const,
+                "Review how the Jumuʿah sessions currently appear on the mosque profile.",
+              href:
+                publicMosquePage,
+              actionLabel:
+                "View mosque",
+              tone:
+                "green" as const,
             },
           ]
         : []),
       {
-        id: "verify-location",
-        label: "Verify before updating",
+        id: "verify-jumuah-source",
+        label:
+          "Confirm official source",
         description:
-          "Confirm the location through the mosque website, direct contact or reliable mapping evidence.",
-        tone: "red",
-      },
-    ];
-  }
-
-  if (type === "facilities_wrong") {
-    return [
-      ...(publicMosquePage
-        ? [
-            {
-              id: "view-facilities-public",
-              label: "Review public facilities",
-              description:
-                "Compare the report with the facilities currently displayed on the mosque profile.",
-              href: publicMosquePage,
-              actionLabel: "View mosque",
-              tone: "green" as const,
-            },
-          ]
-        : []),
-      {
-        id: "verify-facilities",
-        label: "Confirm facility details",
-        description:
-          "Check the mosque website or contact the mosque before updating accessibility, women’s space or service information.",
+          "Check an official mosque timetable, website, announcement or direct mosque confirmation.",
         tone: "cyan",
       },
     ];
   }
 
-  if (type === "mosque_closed_or_moved") {
+  if (
+    type === "location_wrong"
+  ) {
+    return [
+      ...(publicMosquePage
+        ? [
+            {
+              id: "view-location-public",
+              label:
+                "Check public location",
+              description:
+                "Review the current address, postcode, map destination and directions.",
+              href:
+                publicMosquePage,
+              actionLabel:
+                "View mosque",
+              tone:
+                "green" as const,
+            },
+          ]
+        : []),
+      {
+        id: "verify-location",
+        label:
+          "Verify location evidence",
+        description:
+          "Confirm the address using the official mosque website, direct contact or reliable mapping evidence.",
+        tone: "red",
+      },
+      {
+        id: "check-coordinates",
+        label:
+          "Check map coordinates",
+        description:
+          "Ensure the latitude and longitude point to the mosque entrance rather than a postcode centre.",
+        tone: "cyan",
+      },
+    ];
+  }
+
+  if (
+    type ===
+    "facilities_wrong"
+  ) {
+    return [
+      ...(publicMosquePage
+        ? [
+            {
+              id: "view-facilities-public",
+              label:
+                "Review public facilities",
+              description:
+                "Compare the report with the facilities and services displayed on the public profile.",
+              href:
+                publicMosquePage,
+              actionLabel:
+                "View mosque",
+              tone:
+                "green" as const,
+            },
+          ]
+        : []),
+      {
+        id: "verify-facilities",
+        label:
+          "Confirm facility details",
+        description:
+          "Check accessibility, parking, women’s space and other facilities with an official mosque source.",
+        tone: "cyan",
+      },
+      {
+        id: "avoid-assumptions",
+        label:
+          "Do not infer availability",
+        description:
+          "Only mark a facility available or unavailable when reliable evidence exists.",
+        tone: "gold",
+      },
+    ];
+  }
+
+  if (
+    type ===
+    "mosque_closed_or_moved"
+  ) {
     return [
       ...(publicMosquePage
         ? [
             {
               id: "view-closure-public",
-              label: "Review public listing",
+              label:
+                "Review public listing",
               description:
-                "Inspect the listing before deciding whether it should be updated, relocated or hidden.",
-              href: publicMosquePage,
-              actionLabel: "View mosque",
-              tone: "green" as const,
+                "Inspect the current public page before changing its visibility or address.",
+              href:
+                publicMosquePage,
+              actionLabel:
+                "View mosque",
+              tone:
+                "green" as const,
             },
           ]
         : []),
       {
         id: "verify-closure",
-        label: "Admin verification required",
+        label:
+          "Admin verification required",
         description:
-          "Closure and relocation reports should be independently verified before public availability is changed.",
+          "Closure or relocation must be independently verified before the listing is hidden or moved.",
         tone: "red",
+      },
+      {
+        id: "preserve-history",
+        label:
+          "Preserve useful history",
+        description:
+          "Where possible, redirect an old listing to the verified replacement rather than deleting it immediately.",
+        tone: "cyan",
       },
     ];
   }
 
-  if (type === "duplicate_mosque") {
+  if (
+    type === "duplicate_mosque"
+  ) {
     return [
       {
         id: "duplicate-review",
-        label: "Duplicate review required",
+        label:
+          "Duplicate review required",
         description:
-          "Compare names, addresses, coordinates, contact details and source quality before merging records.",
+          "Compare names, addresses, coordinates, contacts, timetable data and source quality.",
         tone: "purple",
+      },
+      {
+        id: "choose-primary",
+        label:
+          "Choose the strongest record",
+        description:
+          "Keep the most complete and trusted record before transferring missing information.",
+        tone: "gold",
+      },
+      {
+        id: "protect-linked-data",
+        label:
+          "Protect linked records",
+        description:
+          "Confirm claims, timetables, reports and sponsorships are safely reassigned before merging.",
+        tone: "red",
       },
     ];
   }
@@ -276,12 +397,16 @@ function getActionItems({
       ? [
           {
             id: "view-public-general",
-            label: "Review public mosque page",
+            label:
+              "Review public mosque page",
             description:
-              "Open the public mosque page and compare the displayed information with the report.",
-            href: publicMosquePage,
-            actionLabel: "View mosque",
-            tone: "green" as const,
+              "Compare the displayed mosque information with the submitted report.",
+            href:
+              publicMosquePage,
+            actionLabel:
+              "View mosque",
+            tone:
+              "green" as const,
           },
         ]
       : []),
@@ -289,13 +414,23 @@ function getActionItems({
       id: "manual-review",
       label: "Manual review",
       description:
-        "Read the full report, verify the evidence and identify which mosque information needs to be updated.",
+        "Read the complete report, verify the evidence and identify which mosque information requires attention.",
       tone: "cyan",
+    },
+    {
+      id: "record-outcome",
+      label:
+        "Record the evidence",
+      description:
+        "Add manager notes explaining what was checked and why the report was resolved or rejected.",
+      tone: "gold",
     },
   ];
 }
 
-function toneClass(tone: ActionTone): string {
+function toneClass(
+  tone: ActionTone
+): string {
   if (tone === "green") {
     return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
   }
@@ -315,7 +450,9 @@ function toneClass(tone: ActionTone): string {
   return "border-yellow-500/25 bg-yellow-500/10 text-yellow-100";
 }
 
-function buttonClass(tone: ActionTone): string {
+function buttonClass(
+  tone: ActionTone
+): string {
   if (tone === "green") {
     return "border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10 focus-visible:ring-emerald-300";
   }
@@ -340,11 +477,12 @@ export default function MosqueCorrectionRecommendedActions({
   mosqueSlug,
   reportType,
 }: Props) {
-  const actions = getActionItems({
-    mosqueId,
-    mosqueSlug,
-    reportType,
-  });
+  const actions =
+    getActionItems({
+      mosqueId,
+      mosqueSlug,
+      reportType,
+    });
 
   return (
     <section
@@ -360,11 +498,15 @@ export default function MosqueCorrectionRecommendedActions({
         className="mt-2 text-lg font-black text-white"
       >
         Suggested actions for{" "}
-        {formatReportType(reportType)}
+        {formatReportType(
+          reportType
+        )}
       </h4>
 
       <p className="mt-2 text-sm leading-6 text-white/55">
-        Verify the report before changing public mosque
+        Verify the report and record
+        the supporting evidence before
+        changing public mosque
         information.
       </p>
 
@@ -372,7 +514,7 @@ export default function MosqueCorrectionRecommendedActions({
         {actions.map((action) => (
           <article
             key={action.id}
-            className={`rounded-2xl border p-4 ${toneClass(
+            className={`flex h-full flex-col rounded-2xl border p-4 ${toneClass(
               action.tone
             )}`}
           >
@@ -380,21 +522,32 @@ export default function MosqueCorrectionRecommendedActions({
               {action.label}
             </div>
 
-            <p className="mt-2 text-sm leading-6 opacity-80">
+            <p className="mt-2 flex-1 text-sm leading-6 opacity-80">
               {action.description}
             </p>
 
             {action.href ? (
               <Link
                 href={action.href}
-                className={`mt-4 inline-flex min-h-10 items-center justify-center rounded-xl border px-4 py-2 text-xs font-black transition focus-visible:outline-none focus-visible:ring-2 ${buttonClass(
+                target={
+                  action.external
+                    ? "_blank"
+                    : undefined
+                }
+                rel={
+                  action.external
+                    ? "noopener noreferrer"
+                    : undefined
+                }
+                className={`mt-4 inline-flex min-h-10 w-fit items-center justify-center rounded-xl border px-4 py-2 text-xs font-black transition focus-visible:outline-none focus-visible:ring-2 ${buttonClass(
                   action.tone
                 )}`}
               >
-                {action.actionLabel ?? "Open"}
+                {action.actionLabel ??
+                  "Open"}
               </Link>
             ) : (
-              <div className="mt-4 rounded-xl border border-white/10 bg-black/20 px-4 py-2 text-xs font-bold text-white/50">
+              <div className="mt-4 w-fit rounded-xl border border-white/10 bg-black/20 px-4 py-2 text-xs font-bold text-white/50">
                 Verification required
               </div>
             )}

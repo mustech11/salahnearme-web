@@ -33,6 +33,12 @@ type UpdateResponse = {
   ok?: boolean;
   error?: string;
   message?: string;
+  unchanged?: boolean;
+  report?: {
+    id?: string;
+    status?: string;
+    admin_notes?: string | null;
+  };
 };
 
 const UUID_REGEX =
@@ -63,11 +69,16 @@ const STATUSES: ReadonlyArray<{
   },
 ];
 
-const ALLOWED_STATUSES = new Set<ReportStatus>(
-  STATUSES.map((item) => item.value)
-);
+const ALLOWED_STATUSES =
+  new Set<ReportStatus>(
+    STATUSES.map(
+      (item) => item.value
+    )
+  );
 
-function cleanString(value: unknown): string {
+function cleanString(
+  value: unknown
+): string {
   return typeof value === "string"
     ? value.trim()
     : "";
@@ -76,13 +87,15 @@ function cleanString(value: unknown): string {
 function normaliseStatus(
   value: unknown
 ): ReportStatus {
+  const cleaned =
+    cleanString(value).toLowerCase();
+
   if (
-    typeof value === "string" &&
     ALLOWED_STATUSES.has(
-      value as ReportStatus
+      cleaned as ReportStatus
     )
   ) {
-    return value as ReportStatus;
+    return cleaned as ReportStatus;
   }
 
   return "new";
@@ -110,7 +123,8 @@ async function readResponse(
   response: Response
 ): Promise<UpdateResponse> {
   try {
-    const value: unknown = await response.json();
+    const value: unknown =
+      await response.json();
 
     if (
       !value ||
@@ -144,7 +158,10 @@ export default function MosqueCorrectionReportActions({
   const mountedRef = useRef(true);
 
   const initialStatus = useMemo(
-    () => normaliseStatus(currentStatus),
+    () =>
+      normaliseStatus(
+        currentStatus
+      ),
     [currentStatus]
   );
 
@@ -154,23 +171,39 @@ export default function MosqueCorrectionReportActions({
   );
 
   const [status, setStatus] =
-    useState<ReportStatus>(initialStatus);
+    useState<ReportStatus>(
+      initialStatus
+    );
 
   const [notes, setNotes] =
     useState(initialNotes);
 
-  const [savedStatus, setSavedStatus] =
-    useState<ReportStatus>(initialStatus);
+  const [
+    savedStatus,
+    setSavedStatus,
+  ] = useState<ReportStatus>(
+    initialStatus
+  );
 
-  const [savedNotes, setSavedNotes] =
-    useState(initialNotes);
+  const [
+    savedNotes,
+    setSavedNotes,
+  ] = useState(initialNotes);
 
-  const [submitState, setSubmitState] =
-    useState<SubmitState>("idle");
+  const [
+    submitState,
+    setSubmitState,
+  ] = useState<SubmitState>(
+    "idle"
+  );
 
-  const [message, setMessage] = useState("");
-  const [errorMessage, setErrorMessage] =
+  const [message, setMessage] =
     useState("");
+
+  const [
+    errorMessage,
+    setErrorMessage,
+  ] = useState("");
 
   useEffect(() => {
     mountedRef.current = true;
@@ -197,58 +230,83 @@ export default function MosqueCorrectionReportActions({
     reportId,
   ]);
 
+  const normalisedNotes =
+    notes.trim();
+
+  const savedNormalisedNotes =
+    savedNotes.trim();
+
   const hasUnsavedChanges =
     status !== savedStatus ||
-    notes !== savedNotes;
+    normalisedNotes !==
+      savedNormalisedNotes;
 
-  const validationError = useMemo(() => {
-    if (!UUID_REGEX.test(reportId)) {
-      return "A valid correction report is required.";
-    }
+  const validationError =
+    useMemo(() => {
+      if (
+        !UUID_REGEX.test(reportId)
+      ) {
+        return "A valid correction report is required.";
+      }
 
-    if (!UUID_REGEX.test(mosqueId)) {
-      return "A valid mosque is required.";
-    }
+      if (
+        !UUID_REGEX.test(mosqueId)
+      ) {
+        return "A valid mosque is required.";
+      }
 
-    if (!ALLOWED_STATUSES.has(status)) {
-      return "Select a valid report status.";
-    }
+      if (
+        !ALLOWED_STATUSES.has(
+          status
+        )
+      ) {
+        return "Select a valid report status.";
+      }
 
-    if (notes.length > MAX_NOTES_LENGTH) {
-      return `Manager notes must not exceed ${MAX_NOTES_LENGTH.toLocaleString()} characters.`;
-    }
+      if (
+        notes.length >
+        MAX_NOTES_LENGTH
+      ) {
+        return `Manager notes must not exceed ${MAX_NOTES_LENGTH.toLocaleString(
+          "en-GB"
+        )} characters.`;
+      }
 
-    if (
-      (status === "resolved" ||
-        status === "rejected") &&
-      !notes.trim()
-    ) {
-      return "Add manager notes before resolving or rejecting this report.";
-    }
+      if (
+        (status === "resolved" ||
+          status === "rejected") &&
+        !normalisedNotes
+      ) {
+        return "Add manager notes before resolving or rejecting this report.";
+      }
 
-    return "";
-  }, [
-    mosqueId,
-    notes,
-    reportId,
-    status,
-  ]);
+      return "";
+    }, [
+      mosqueId,
+      normalisedNotes,
+      notes.length,
+      reportId,
+      status,
+    ]);
 
   const isSaving =
     submitState === "saving";
 
-  const clearFeedback = useCallback(() => {
-    setSubmitState("idle");
-    setMessage("");
-    setErrorMessage("");
-  }, []);
+  const clearFeedback =
+    useCallback(() => {
+      setSubmitState("idle");
+      setMessage("");
+      setErrorMessage("");
+    }, []);
 
   const quickSet = useCallback(
     (nextStatus: ReportStatus) => {
       setStatus(nextStatus);
 
       const quickNote =
-        getQuickNote(nextStatus);
+        getQuickNote(
+          nextStatus
+        );
 
       if (
         quickNote &&
@@ -262,155 +320,241 @@ export default function MosqueCorrectionReportActions({
     [clearFeedback, notes]
   );
 
-  const resetChanges = useCallback(() => {
-    setStatus(savedStatus);
-    setNotes(savedNotes);
-    clearFeedback();
-  }, [
-    clearFeedback,
-    savedNotes,
-    savedStatus,
-  ]);
+  const resetChanges =
+    useCallback(() => {
+      setStatus(savedStatus);
+      setNotes(savedNotes);
+      clearFeedback();
+    }, [
+      clearFeedback,
+      savedNotes,
+      savedStatus,
+    ]);
 
-  const saveUpdate = useCallback(async () => {
-    if (isSaving) {
-      return;
-    }
-
-    setMessage("");
-    setErrorMessage("");
-
-    if (validationError) {
-      setSubmitState("error");
-      setErrorMessage(validationError);
-      return;
-    }
-
-    if (!hasUnsavedChanges) {
-      return;
-    }
-
-    abortControllerRef.current?.abort();
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    let timedOut = false;
-
-    const timeoutId = window.setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, REQUEST_TIMEOUT_MS);
-
-    setSubmitState("saving");
-
-    try {
-      const cleanNotes = notes.trim();
-
-      const response = await fetch(
-        "/api/mosque/correction-report/update",
-        {
-          method: "POST",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-          credentials: "same-origin",
-          cache: "no-store",
-          signal: controller.signal,
-          body: JSON.stringify({
-            report_id: reportId,
-            mosque_id: mosqueId,
-            status,
-            admin_notes: cleanNotes,
-          }),
-        }
-      );
-
-      const json = await readResponse(response);
-
-      if (!mountedRef.current) {
+  const saveUpdate =
+    useCallback(async () => {
+      if (isSaving) {
         return;
       }
 
-      if (
-        !response.ok ||
-        json.ok !== true
-      ) {
+      setMessage("");
+      setErrorMessage("");
+
+      if (validationError) {
         setSubmitState("error");
         setErrorMessage(
-          cleanString(json.error) ||
-            cleanString(json.message) ||
-            "Could not update the correction report."
+          validationError
         );
         return;
       }
 
-      setNotes(cleanNotes);
-      setSavedNotes(cleanNotes);
-      setSavedStatus(status);
-      setSubmitState("success");
-      setErrorMessage("");
-      setMessage(
-        cleanString(json.message) ||
-          "Correction report updated successfully."
-      );
-
-      router.refresh();
-    } catch (error) {
-      if (!mountedRef.current) {
+      if (!hasUnsavedChanges) {
+        setSubmitState("success");
+        setMessage(
+          "No changes need to be saved."
+        );
         return;
       }
 
-      setSubmitState("error");
+      abortControllerRef.current?.abort();
 
-      if (
-        error instanceof DOMException &&
-        error.name === "AbortError"
-      ) {
+      const controller =
+        new AbortController();
+
+      abortControllerRef.current =
+        controller;
+
+      let timedOut = false;
+
+      const timeoutId =
+        window.setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, REQUEST_TIMEOUT_MS);
+
+      setSubmitState("saving");
+
+      try {
+        const response = await fetch(
+          "/api/mosque/correction-report/update",
+          {
+            method: "POST",
+            headers: {
+              Accept:
+                "application/json",
+              "Content-Type":
+                "application/json",
+            },
+            credentials: "same-origin",
+            cache: "no-store",
+            signal:
+              controller.signal,
+            body: JSON.stringify({
+              report_id: reportId,
+              mosque_id: mosqueId,
+              status,
+              admin_notes:
+                normalisedNotes ||
+                null,
+            }),
+          }
+        );
+
+        const json =
+          await readResponse(
+            response
+          );
+
+        if (!mountedRef.current) {
+          return;
+        }
+
+        if (
+          !response.ok ||
+          json.ok !== true
+        ) {
+          setSubmitState("error");
+
+          if (
+            response.status === 401
+          ) {
+            setErrorMessage(
+              cleanString(
+                json.error
+              ) ||
+                "Your session has expired. Sign in again before updating this report."
+            );
+            return;
+          }
+
+          if (
+            response.status === 403
+          ) {
+            setErrorMessage(
+              cleanString(
+                json.error
+              ) ||
+                "You do not have permission to update this report."
+            );
+            return;
+          }
+
+          setErrorMessage(
+            cleanString(
+              json.error
+            ) ||
+              cleanString(
+                json.message
+              ) ||
+              "Could not update the correction report."
+          );
+          return;
+        }
+
+        const returnedStatus =
+          normaliseStatus(
+            json.report?.status ??
+              status
+          );
+
+        const returnedNotes =
+          cleanString(
+            json.report
+              ?.admin_notes
+          );
+
+        setStatus(
+          returnedStatus
+        );
+
+        setNotes(returnedNotes);
+
+        setSavedStatus(
+          returnedStatus
+        );
+
+        setSavedNotes(
+          returnedNotes
+        );
+
+        setSubmitState(
+          "success"
+        );
+
+        setErrorMessage("");
+
+        setMessage(
+          cleanString(
+            json.message
+          ) ||
+            (json.unchanged
+              ? "No report changes were required."
+              : "Correction report updated successfully.")
+        );
+
+        router.refresh();
+      } catch (error) {
+        if (!mountedRef.current) {
+          return;
+        }
+
+        setSubmitState("error");
+
+        if (
+          error instanceof
+            DOMException &&
+          error.name ===
+            "AbortError"
+        ) {
+          setErrorMessage(
+            timedOut
+              ? "The update request timed out. Please try again."
+              : "The update request was cancelled."
+          );
+          return;
+        }
+
+        console.error(
+          "Correction report update failed:",
+          error
+        );
+
         setErrorMessage(
-          timedOut
-            ? "The update request timed out. Please try again."
-            : "The update request was cancelled."
+          "Could not update the correction report."
         );
-        return;
-      }
-
-      console.error(
-        "Correction report update failed:",
-        error
-      );
-
-      setErrorMessage(
-        "Could not update the correction report."
-      );
-    } finally {
-      window.clearTimeout(timeoutId);
-
-      if (
-        abortControllerRef.current === controller
-      ) {
-        abortControllerRef.current = null;
-      }
-
-      if (mountedRef.current) {
-        setSubmitState((currentState) =>
-          currentState === "saving"
-            ? "idle"
-            : currentState
+      } finally {
+        window.clearTimeout(
+          timeoutId
         );
+
+        if (
+          abortControllerRef.current ===
+          controller
+        ) {
+          abortControllerRef.current =
+            null;
+        }
+
+        if (mountedRef.current) {
+          setSubmitState(
+            (currentState) =>
+              currentState ===
+              "saving"
+                ? "idle"
+                : currentState
+          );
+        }
       }
-    }
-  }, [
-    hasUnsavedChanges,
-    isSaving,
-    mosqueId,
-    notes,
-    reportId,
-    router,
-    status,
-    validationError,
-  ]);
+    }, [
+      hasUnsavedChanges,
+      isSaving,
+      mosqueId,
+      normalisedNotes,
+      reportId,
+      router,
+      status,
+      validationError,
+    ]);
 
   return (
     <section
@@ -427,6 +571,12 @@ export default function MosqueCorrectionReportActions({
       >
         Review correction report
       </h3>
+
+      <p className="mt-1 text-sm leading-6 text-white/55">
+        Record the review outcome
+        without automatically changing
+        public mosque data.
+      </p>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[0.75fr_1.25fr]">
         <div>
@@ -451,21 +601,34 @@ export default function MosqueCorrectionReportActions({
             disabled={isSaving}
             className="mt-2 w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/30 disabled:opacity-60"
           >
-            {STATUSES.map((item) => (
-              <option
-                key={item.value}
-                value={item.value}
-              >
-                {item.label}
-              </option>
-            ))}
+            {STATUSES.map(
+              (item) => (
+                <option
+                  key={item.value}
+                  value={item.value}
+                >
+                  {item.label}
+                </option>
+              )
+            )}
           </select>
 
           <div className="mt-3 flex flex-wrap gap-2">
             <QuickActionButton
+              label="Mark new"
+              onClick={() =>
+                quickSet("new")
+              }
+              disabled={isSaving}
+              className="border-yellow-500/30 text-yellow-300 hover:bg-yellow-500/10"
+            />
+
+            <QuickActionButton
               label="Mark reviewing"
               onClick={() =>
-                quickSet("reviewing")
+                quickSet(
+                  "reviewing"
+                )
               }
               disabled={isSaving}
               className="border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10"
@@ -474,7 +637,9 @@ export default function MosqueCorrectionReportActions({
             <QuickActionButton
               label="Mark resolved"
               onClick={() =>
-                quickSet("resolved")
+                quickSet(
+                  "resolved"
+                )
               }
               disabled={isSaving}
               className="border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10"
@@ -483,7 +648,9 @@ export default function MosqueCorrectionReportActions({
             <QuickActionButton
               label="Reject"
               onClick={() =>
-                quickSet("rejected")
+                quickSet(
+                  "rejected"
+                )
               }
               disabled={isSaving}
               className="border-red-500/30 text-red-300 hover:bg-red-500/10"
@@ -503,23 +670,34 @@ export default function MosqueCorrectionReportActions({
             id={notesInputId}
             value={notes}
             onChange={(event) => {
-              setNotes(event.target.value);
+              setNotes(
+                event.target.value
+              );
               clearFeedback();
             }}
             rows={4}
-            maxLength={MAX_NOTES_LENGTH}
+            maxLength={
+              MAX_NOTES_LENGTH
+            }
             disabled={isSaving}
             placeholder="Add what was checked, what changed, or why the report was rejected."
             aria-invalid={Boolean(
               validationError
             )}
-            aria-describedby={feedbackId}
+            aria-describedby={
+              feedbackId
+            }
             className="mt-2 w-full resize-y rounded-xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/30 disabled:opacity-60"
           />
 
           <div className="mt-2 text-right text-xs text-white/40">
-            {notes.length.toLocaleString()} /{" "}
-            {MAX_NOTES_LENGTH.toLocaleString()}
+            {notes.length.toLocaleString(
+              "en-GB"
+            )}{" "}
+            /{" "}
+            {MAX_NOTES_LENGTH.toLocaleString(
+              "en-GB"
+            )}
           </div>
         </div>
       </div>
@@ -545,7 +723,8 @@ export default function MosqueCorrectionReportActions({
           </div>
         ) : null}
 
-        {submitState === "success" ? (
+        {submitState ===
+        "success" ? (
           <div
             role="status"
             className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-100"
@@ -564,7 +743,9 @@ export default function MosqueCorrectionReportActions({
           disabled={
             isSaving ||
             !hasUnsavedChanges ||
-            Boolean(validationError)
+            Boolean(
+              validationError
+            )
           }
           aria-busy={isSaving}
           className="inline-flex min-h-11 items-center justify-center rounded-xl bg-cyan-500 px-5 py-3 text-sm font-black text-black transition hover:bg-cyan-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
@@ -586,9 +767,10 @@ export default function MosqueCorrectionReportActions({
           type="button"
           onClick={resetChanges}
           disabled={
-            isSaving || !hasUnsavedChanges
+            isSaving ||
+            !hasUnsavedChanges
           }
-          className="min-h-11 rounded-xl border border-white/15 bg-white/5 px-5 py-3 text-sm font-bold text-white/70 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          className="min-h-11 rounded-xl border border-white/15 bg-white/5 px-5 py-3 text-sm font-bold text-white/70 transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Reset changes
         </button>
@@ -597,13 +779,12 @@ export default function MosqueCorrectionReportActions({
           <span className="text-xs font-semibold text-amber-300">
             Unsaved changes
           </span>
-        ) : null}
+        ) : (
+          <span className="text-xs text-white/35">
+            Changes saved
+          </span>
+        )}
       </div>
-
-      <p className="mt-3 text-xs leading-6 text-white/45">
-        Updating this report does not automatically change
-        public prayer or mosque data.
-      </p>
     </section>
   );
 }
