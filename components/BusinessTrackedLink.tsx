@@ -1,12 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import type {
   AnchorHTMLAttributes,
   MouseEvent,
   ReactNode,
 } from "react";
-
-import Link from "next/link";
+import { useMemo } from "react";
 
 import {
   trackBusinessEvent,
@@ -21,7 +21,7 @@ type Props = {
   className?: string;
   source?: string;
   metadata?: Record<string, unknown>;
-  citySlug?: string;
+  citySlug?: string | null;
   pageType?: string;
   prefetch?: boolean;
 } & Omit<
@@ -29,8 +29,66 @@ type Props = {
   "href" | "onClick" | "children" | "className"
 >;
 
-function isInternalHref(href: string) {
-  return href.startsWith("/");
+const INTERNAL_PROTOCOLS = [
+  "/",
+  "#",
+  "?",
+] as const;
+
+function cleanText(
+  value: string | null | undefined,
+  maxLength = 500
+): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const cleaned = value
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, maxLength);
+
+  return cleaned || undefined;
+}
+
+function isInternalHref(href: string): boolean {
+  return INTERNAL_PROTOCOLS.some((prefix) =>
+    href.startsWith(prefix)
+  );
+}
+
+function getChildLabel(
+  children: ReactNode
+): string | undefined {
+  if (
+    typeof children === "string" ||
+    typeof children === "number"
+  ) {
+    return cleanText(String(children), 200);
+  }
+
+  return undefined;
+}
+
+function getSafeRel(
+  target: string | undefined,
+  rel: string | undefined
+): string | undefined {
+  if (target !== "_blank") {
+    return rel;
+  }
+
+  const values = new Set(
+    (rel ?? "")
+      .split(/\s+/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
+
+  values.add("noopener");
+  values.add("noreferrer");
+
+  return Array.from(values).join(" ");
 }
 
 export default function BusinessTrackedLink({
@@ -46,29 +104,50 @@ export default function BusinessTrackedLink({
   prefetch = false,
   target,
   rel,
-  ...props
+  "aria-label": ariaLabel,
+  ...anchorProps
 }: Props) {
-  function handleClick(_event: MouseEvent<HTMLAnchorElement>) {
-    trackBusinessEvent({
+  const cleanHref = useMemo(
+    () => cleanText(href, 2_000) ?? "#",
+    [href]
+  );
+
+  const internal = isInternalHref(cleanHref);
+
+  function handleClick(
+    event: MouseEvent<HTMLAnchorElement>
+  ) {
+    void trackBusinessEvent({
       businessId,
       eventType,
       source,
       pageType,
       citySlug,
       metadata: {
-        href,
-        timestamp: new Date().toISOString(),
-        ...(metadata ?? {}),
+        href: cleanHref,
+        label:
+          cleanText(ariaLabel, 200) ??
+          getChildLabel(children) ??
+          null,
+        target: target ?? null,
+        modified_click:
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey,
+        mouse_button: event.button,
+        ...metadata,
       },
     });
   }
 
-  if (isInternalHref(href)) {
+  if (internal) {
     return (
       <Link
-        href={href}
+        href={cleanHref}
         prefetch={prefetch}
         className={className}
+        aria-label={ariaLabel}
         onClick={handleClick}
       >
         {children}
@@ -78,18 +157,15 @@ export default function BusinessTrackedLink({
 
   return (
     <a
-      href={href}
+      {...anchorProps}
+      href={cleanHref}
       target={target}
-      rel={
-        rel ??
-        (target === "_blank" ? "noopener noreferrer" : undefined)
-      }
+      rel={getSafeRel(target, rel)}
+      aria-label={ariaLabel}
       className={className}
       onClick={handleClick}
-      {...props}
     >
       {children}
     </a>
   );
 }
-

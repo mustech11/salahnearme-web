@@ -1,103 +1,170 @@
 "use client";
 
 import Link from "next/link";
-import type { MouseEvent, ReactNode } from "react";
-import { useEffect, useRef } from "react";
+import type {
+  AnchorHTMLAttributes,
+  MouseEvent,
+  ReactNode,
+} from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+} from "react";
 
-type BusinessEventType =
-  | "profile_view"
-  | "profile_click"
-  | "phone_click"
-  | "website_click"
-  | "maps_click"
-  | "sponsor_impression"
-  | "sponsor_click";
+import {
+  trackBusinessEvent,
+  type BusinessEventType,
+} from "@/lib/trackBusinessEvent";
 
-type TrackOptions = {
+type SharedTrackingProps = {
   businessId: string;
   eventType: BusinessEventType;
   source?: string;
+  pageType?: string;
+  citySlug?: string | null;
   metadata?: Record<string, unknown>;
 };
 
-const TRACK_EVENT_URL = "/api/business/track-event";
+type ProfileViewProps = {
+  businessId: string;
+  slug?: string | null;
+  source?: string;
+  pageType?: string;
+  citySlug?: string | null;
+  metadata?: Record<string, unknown>;
+};
 
-async function trackBusinessEvent({
-  businessId,
-  eventType,
-  source = "business_page",
-  metadata = {},
-}: TrackOptions) {
-  if (!businessId || !eventType) {
-    return;
+type AnchorProps = SharedTrackingProps & {
+  href: string;
+  children: ReactNode;
+  className?: string;
+  ariaLabel?: string;
+} & Omit<
+  AnchorHTMLAttributes<HTMLAnchorElement>,
+  | "href"
+  | "children"
+  | "className"
+  | "onClick"
+  | "aria-label"
+>;
+
+type LinkProps = SharedTrackingProps & {
+  href: string;
+  children: ReactNode;
+  className?: string;
+  ariaLabel?: string;
+  prefetch?: boolean;
+};
+
+function cleanText(
+  value: string | null | undefined,
+  maxLength = 500
+): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
   }
 
-  const payload = {
-    business_id: businessId,
-    event_type: eventType,
-    source,
-    metadata,
-  };
+  const cleaned = value
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, maxLength);
 
-  try {
-    /**
-     * navigator.sendBeacon is better for tracking clicks that navigate away
-     * because it can still send the request while the page is unloading.
-     */
-    if (typeof navigator !== "undefined" && "sendBeacon" in navigator) {
-      const blob = new Blob([JSON.stringify(payload)], {
-        type: "application/json",
-      });
+  return cleaned || undefined;
+}
 
-      const sent = navigator.sendBeacon(TRACK_EVENT_URL, blob);
-
-      if (sent) {
-        return;
-      }
-    }
-
-    await fetch(TRACK_EVENT_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-      keepalive: true,
-    });
-  } catch (error) {
-    console.error("Failed to track business event:", error);
+function getChildrenLabel(
+  children: ReactNode
+): string | undefined {
+  if (
+    typeof children === "string" ||
+    typeof children === "number"
+  ) {
+    return cleanText(String(children), 200);
   }
+
+  return undefined;
+}
+
+function getSafeRel(
+  target: string | undefined,
+  rel: string | undefined
+): string | undefined {
+  if (target !== "_blank") {
+    return rel;
+  }
+
+  const values = new Set(
+    (rel ?? "")
+      .split(/\s+/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
+
+  values.add("noopener");
+  values.add("noreferrer");
+
+  return Array.from(values).join(" ");
 }
 
 export function BusinessProfileViewTracker({
   businessId,
   slug,
-}: {
-  businessId: string;
-  slug?: string | null;
-}) {
-  const hasTrackedRef = useRef(false);
+  source = "business_profile",
+  pageType = "business_profile",
+  citySlug,
+  metadata,
+}: ProfileViewProps) {
+  const trackedKeyRef = useRef<string | null>(null);
+
+  const trackingKey = useMemo(
+    () =>
+      [
+        businessId.trim(),
+        cleanText(slug, 250) ?? "",
+        source,
+        pageType,
+        cleanText(citySlug, 250) ?? "",
+      ].join("|"),
+    [
+      businessId,
+      slug,
+      source,
+      pageType,
+      citySlug,
+    ]
+  );
 
   useEffect(() => {
-    if (!businessId || hasTrackedRef.current) {
+    if (
+      !businessId.trim() ||
+      trackedKeyRef.current === trackingKey
+    ) {
       return;
     }
 
-    hasTrackedRef.current = true;
+    trackedKeyRef.current = trackingKey;
 
-    trackBusinessEvent({
+    void trackBusinessEvent({
       businessId,
       eventType: "profile_view",
-      source: "business_profile",
+      source,
+      pageType,
+      citySlug,
       metadata: {
-        slug: slug ?? null,
-        path:
-          typeof window !== "undefined"
-            ? window.location.pathname
-            : null,
+        slug: cleanText(slug, 250) ?? null,
+        ...metadata,
       },
     });
-  }, [businessId, slug]);
+  }, [
+    businessId,
+    citySlug,
+    metadata,
+    pageType,
+    slug,
+    source,
+    trackingKey,
+  ]);
 
   return null;
 }
@@ -109,52 +176,47 @@ export function TrackedBusinessAnchor({
   children,
   className,
   source = "business_page",
+  pageType = "business_page",
+  citySlug,
   metadata,
   target,
   rel,
   ariaLabel,
-}: {
-  businessId: string;
-  eventType: BusinessEventType;
-  href: string;
-  children: ReactNode;
-  className?: string;
-  source?: string;
-  metadata?: Record<string, unknown>;
-  target?: string;
-  rel?: string;
-  ariaLabel?: string;
-}) {
-  function handleClick(event: MouseEvent<HTMLAnchorElement>) {
-    trackBusinessEvent({
+  ...anchorProps
+}: AnchorProps) {
+  function handleClick(
+    event: MouseEvent<HTMLAnchorElement>
+  ) {
+    void trackBusinessEvent({
       businessId,
       eventType,
       source,
+      pageType,
+      citySlug,
       metadata: {
         href,
         label:
-          typeof children === "string"
-            ? children
-            : undefined,
+          cleanText(ariaLabel, 200) ??
+          getChildrenLabel(children) ??
+          null,
+        target: target ?? null,
+        modified_click:
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey,
+        mouse_button: event.button,
         ...metadata,
       },
     });
-
-    /**
-     * Do not prevent default.
-     * The user should still go to phone, website, maps, etc.
-     */
   }
 
   return (
     <a
+      {...anchorProps}
       href={href}
       target={target}
-      rel={
-        target === "_blank"
-          ? rel ?? "noopener noreferrer"
-          : rel
-      }
+      rel={getSafeRel(target, rel)}
       aria-label={ariaLabel}
       className={className}
       onClick={handleClick}
@@ -171,29 +233,33 @@ export function TrackedBusinessLink({
   children,
   className,
   source = "business_page",
+  pageType = "business_page",
+  citySlug,
   metadata,
   ariaLabel,
-}: {
-  businessId: string;
-  eventType: BusinessEventType;
-  href: string;
-  children: ReactNode;
-  className?: string;
-  source?: string;
-  metadata?: Record<string, unknown>;
-  ariaLabel?: string;
-}) {
-  function handleClick() {
-    trackBusinessEvent({
+  prefetch = false,
+}: LinkProps) {
+  function handleClick(
+    event: MouseEvent<HTMLAnchorElement>
+  ) {
+    void trackBusinessEvent({
       businessId,
       eventType,
       source,
+      pageType,
+      citySlug,
       metadata: {
         href,
         label:
-          typeof children === "string"
-            ? children
-            : undefined,
+          cleanText(ariaLabel, 200) ??
+          getChildrenLabel(children) ??
+          null,
+        modified_click:
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey,
+        mouse_button: event.button,
         ...metadata,
       },
     });
@@ -202,6 +268,7 @@ export function TrackedBusinessLink({
   return (
     <Link
       href={href}
+      prefetch={prefetch}
       aria-label={ariaLabel}
       className={className}
       onClick={handleClick}
@@ -210,4 +277,3 @@ export function TrackedBusinessLink({
     </Link>
   );
 }
-
