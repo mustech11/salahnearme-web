@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   uploadBusinessCover,
@@ -55,6 +56,15 @@ type ApiResponse = {
   ok?: boolean;
   error?: string;
 };
+
+type Operation =
+  | "logo"
+  | "cover"
+  | "gallery"
+  | "video"
+  | "remove"
+  | "update"
+  | null;
 
 const MAX_IMAGE_FILE_SIZE_MB = 5;
 const MAX_VIDEO_FILE_SIZE_MB = 50;
@@ -134,7 +144,8 @@ const VIDEO_CATEGORIES: Array<{
 ];
 
 function createMediaId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return globalThis.crypto?.randomUUID?.() ??
+    `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 function isValidImage(file: File) {
@@ -314,7 +325,9 @@ async function updateBusinessMedia(payload: MediaUpdatePayload) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      Accept: "application/json",
     },
+    credentials: "same-origin",
     cache: "no-store",
     body: JSON.stringify(payload),
   });
@@ -377,6 +390,7 @@ export default function BusinessImageUploader({
   currentVideos = [],
   currentMediaItems = [],
 }: Props) {
+  const router = useRouter();
   const initialGallery = currentGallery ?? [];
   const initialVideos = currentVideos ?? [];
   const initialMediaItems = currentMediaItems ?? [];
@@ -393,7 +407,8 @@ export default function BusinessImageUploader({
     })
   );
 
-  const [loading, setLoading] = useState(false);
+  const [operation, setOperation] = useState<Operation>(null);
+  const loading = operation !== null;
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -439,7 +454,7 @@ export default function BusinessImageUploader({
     try {
       resetMessages();
       validateImage(file);
-      setLoading(true);
+      setOperation("logo");
 
       const url = await uploadBusinessLogo(file, businessId);
 
@@ -450,6 +465,7 @@ export default function BusinessImageUploader({
 
       setLogoUrl(url);
       setMessage("Logo updated successfully.");
+      router.refresh();
     } catch (error) {
       console.error("Logo upload error:", error);
 
@@ -457,7 +473,7 @@ export default function BusinessImageUploader({
         error instanceof Error ? error.message : "Could not upload logo."
       );
     } finally {
-      setLoading(false);
+      setOperation(null);
 
       if (logoInputRef.current) {
         logoInputRef.current.value = "";
@@ -469,7 +485,7 @@ export default function BusinessImageUploader({
     try {
       resetMessages();
       validateImage(file);
-      setLoading(true);
+      setOperation("cover");
 
       const url = await uploadBusinessCover(file, businessId);
 
@@ -480,6 +496,7 @@ export default function BusinessImageUploader({
 
       setCoverUrl(url);
       setMessage("Cover image updated successfully.");
+      router.refresh();
     } catch (error) {
       console.error("Cover upload error:", error);
 
@@ -489,7 +506,7 @@ export default function BusinessImageUploader({
           : "Could not upload cover image."
       );
     } finally {
-      setLoading(false);
+      setOperation(null);
 
       if (coverInputRef.current) {
         coverInputRef.current.value = "";
@@ -515,7 +532,7 @@ export default function BusinessImageUploader({
 
       selectedFiles.forEach(validateImage);
 
-      setLoading(true);
+      setOperation("gallery");
 
       const uploadedItems: BusinessMediaItem[] = [];
 
@@ -552,7 +569,7 @@ export default function BusinessImageUploader({
           : "Could not upload gallery images."
       );
     } finally {
-      setLoading(false);
+      setOperation(null);
 
       if (galleryInputRef.current) {
         galleryInputRef.current.value = "";
@@ -576,7 +593,7 @@ export default function BusinessImageUploader({
 
       selectedFiles.forEach(validateVideo);
 
-      setLoading(true);
+      setOperation("video");
 
       const uploadedItems: BusinessMediaItem[] = [];
 
@@ -613,7 +630,7 @@ export default function BusinessImageUploader({
           : "Could not upload video media."
       );
     } finally {
-      setLoading(false);
+      setOperation(null);
 
       if (videoInputRef.current) {
         videoInputRef.current.value = "";
@@ -624,13 +641,18 @@ export default function BusinessImageUploader({
   async function removeMediaItem(mediaId: string) {
     try {
       resetMessages();
-      setLoading(true);
+      if (!window.confirm("Remove this media item from the public listing?")) {
+        return;
+      }
+
+      setOperation("remove");
 
       const nextMediaItems = mediaItems.filter((item) => item.id !== mediaId);
 
       await persistMedia(nextMediaItems);
 
       setMessage("Media removed from listing.");
+      router.refresh();
     } catch (error) {
       console.error("Remove media error:", error);
 
@@ -638,7 +660,7 @@ export default function BusinessImageUploader({
         error instanceof Error ? error.message : "Could not remove media."
       );
     } finally {
-      setLoading(false);
+      setOperation(null);
     }
   }
 
@@ -648,7 +670,7 @@ export default function BusinessImageUploader({
   ) {
     try {
       resetMessages();
-      setLoading(true);
+      setOperation("update");
 
       const nextMediaItems = mediaItems.map((item) => {
         if (item.id !== mediaId) {
@@ -671,6 +693,7 @@ export default function BusinessImageUploader({
       await persistMedia(nextMediaItems);
 
       setMessage("Media details updated.");
+      router.refresh();
     } catch (error) {
       console.error("Update media details error:", error);
 
@@ -680,14 +703,18 @@ export default function BusinessImageUploader({
           : "Could not update media details."
       );
     } finally {
-      setLoading(false);
+      setOperation(null);
     }
   }
 
   async function removeLogo() {
     try {
       resetMessages();
-      setLoading(true);
+      if (!window.confirm("Remove the business logo?")) {
+        return;
+      }
+
+      setOperation("remove");
 
       await updateBusinessMedia({
         business_id: businessId,
@@ -696,6 +723,7 @@ export default function BusinessImageUploader({
 
       setLogoUrl(null);
       setMessage("Logo removed.");
+      router.refresh();
     } catch (error) {
       console.error("Remove logo error:", error);
 
@@ -703,14 +731,18 @@ export default function BusinessImageUploader({
         error instanceof Error ? error.message : "Could not remove logo."
       );
     } finally {
-      setLoading(false);
+      setOperation(null);
     }
   }
 
   async function removeCover() {
     try {
       resetMessages();
-      setLoading(true);
+      if (!window.confirm("Remove the business cover image?")) {
+        return;
+      }
+
+      setOperation("remove");
 
       await updateBusinessMedia({
         business_id: businessId,
@@ -719,6 +751,7 @@ export default function BusinessImageUploader({
 
       setCoverUrl(null);
       setMessage("Cover image removed.");
+      router.refresh();
     } catch (error) {
       console.error("Remove cover error:", error);
 
@@ -728,20 +761,20 @@ export default function BusinessImageUploader({
           : "Could not remove cover image."
       );
     } finally {
-      setLoading(false);
+      setOperation(null);
     }
   }
 
   return (
-    <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6">
+    <section aria-labelledby="business-media-heading" className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6">
       <div className="mb-6">
         <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
           Business Media
         </div>
 
-        <div className="mt-2 text-3xl font-black text-white">
+        <h2 id="business-media-heading" className="mt-2 text-3xl font-black text-white">
           Images, videos & smart listing media
-        </div>
+        </h2>
 
         <p className="mt-2 max-w-3xl text-sm leading-6 text-white/55">
           Upload your logo, cover image, menu, building photos, facilities,
@@ -764,7 +797,17 @@ export default function BusinessImageUploader({
 
       {loading ? (
         <div className="mb-5 rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-4 text-sm text-yellow-300">
-          Uploading or saving media...
+          {operation === "logo"
+            ? "Uploading logo..."
+            : operation === "cover"
+              ? "Uploading cover image..."
+              : operation === "gallery"
+                ? "Uploading gallery images..."
+                : operation === "video"
+                  ? "Uploading videos..."
+                  : operation === "remove"
+                    ? "Removing media..."
+                    : "Saving media details..."}
         </div>
       ) : null}
 
