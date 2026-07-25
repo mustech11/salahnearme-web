@@ -154,31 +154,24 @@ export default async function HomeDailyPanel({
       .eq("year", year)
       .maybeSingle();
 
-        if (error) {
+    if (error) {
       console.error("HomeDailyPanel prayer-times query failed:", {
         cityId,
         code: error.code,
         message: error.message,
       });
     } else if (data) {
-      const prayerTimesRow =
-        data as unknown as CityPrayerTimesRow;
+  const prayerTimesRow = data as unknown as CityPrayerTimesRow;
 
-      prayerTimes = {
-        fajr_start:
-          prayerTimesRow.fajr_start ?? null,
-        sunrise:
-          prayerTimesRow.sunrise ?? null,
-        dhuhr_start:
-          prayerTimesRow.dhuhr_start ?? null,
-        asr_start:
-          prayerTimesRow.asr_start ?? null,
-        maghrib_start:
-          prayerTimesRow.maghrib_start ?? null,
-        isha_start:
-          prayerTimesRow.isha_start ?? null,
-      };
-    }
+  prayerTimes = {
+    fajr_start: prayerTimesRow.fajr_start ?? null,
+    sunrise: prayerTimesRow.sunrise ?? null,
+    dhuhr_start: prayerTimesRow.dhuhr_start ?? null,
+    asr_start: prayerTimesRow.asr_start ?? null,
+    maghrib_start: prayerTimesRow.maghrib_start ?? null,
+    isha_start: prayerTimesRow.isha_start ?? null,
+  };
+}
   }
 
   const { data: hadithRows, error: hadithError } = await supabase

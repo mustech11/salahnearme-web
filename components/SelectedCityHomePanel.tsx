@@ -527,9 +527,7 @@ export default function SelectedCityHomePanel({
         <div className="premium-inset rounded-3xl p-5 sm:p-6">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <div className="section-kicker">
-                    Your personalised SalahNearMe
-              </div>
+              <div className="section-kicker">Your local SalahNearMe</div>
 
               <h2
                 id="selected-city-heading"
@@ -546,7 +544,7 @@ export default function SelectedCityHomePanel({
 
           <p className="mt-3 max-w-xl text-sm leading-7 text-white/60">
             {city
-              ? `Prayer times, nearby mosques and halal places for ${cityName}, presented in one intelligent daily view.`
+              ? `Prayer times, mosques and halal places for ${cityName}, presented in one compact daily view.`
               : "Use your location once or choose a city from the navigation to personalise SalahNearMe."}
           </p>
 
