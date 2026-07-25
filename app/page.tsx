@@ -3,13 +3,14 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { cookies } from "next/headers";
-import SmartDailyModePanel from "@/components/SmartDailyModePanel";
 
 import CitySearch from "@/components/CitySearch";
 import HomeDailyPanel from "@/components/HomeDailyPanel";
 import HomeHajjHijriBanner from "@/components/HomeHajjHijriBanner";
 import NextSalahCountdown from "@/components/NextSalahCountdown";
 import SelectedCityHomePanel from "@/components/SelectedCityHomePanel";
+import SmartDailyModePanel from "@/components/SmartDailyModePanel";
+
 import {
   calculatePrayerTimesForCity,
   type PrayerTimesResult,
@@ -18,25 +19,27 @@ import { supabaseServer } from "@/lib/supabaseServer";
 
 export const revalidate = 300;
 
-const siteUrl =
+const rawSiteUrl =
   process.env.NEXT_PUBLIC_SITE_URL ||
   process.env.NEXT_PUBLIC_APP_URL ||
   "https://www.salahnearme.com";
 
-const cleanSiteUrl = siteUrl.replace(/\/+$/, "");
+const siteUrl = rawSiteUrl.replace(/\/+$/, "");
 
 export const metadata: Metadata = {
-  title: "SalahNearMe | Find Mosques, Prayer Times & Halal Places Near You",
+  title:
+    "SalahNearMe | Mosques, Prayer Times & Halal Places Near You",
   description:
-    "Find mosques near you, prayer times, iqamah times, halal businesses, Hajj guides, Umrah guides, Muslim travel essentials, and pray-near-me recommendations with SalahNearMe.",
+    "Find nearby mosques, prayer times, iqamah information, halal businesses, Muslim travel essentials, Hajj guidance and Umrah guidance with SalahNearMe.",
   alternates: {
     canonical: "/",
   },
   openGraph: {
-    title: "SalahNearMe | Find Mosques, Prayer Times & Halal Places Near You",
+    title:
+      "SalahNearMe | Mosques, Prayer Times & Halal Places",
     description:
-      "Find mosques, prayer times, halal businesses, Muslim travel, Hajj and Umrah guidance, and live community signals in one intelligent Muslim platform.",
-    url: cleanSiteUrl,
+      "Your intelligent Muslim companion for prayer, mosques, halal discovery, travel, Hajj and Umrah.",
+    url: siteUrl,
     siteName: "SalahNearMe",
     type: "website",
     locale: "en_GB",
@@ -51,9 +54,10 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "SalahNearMe | Mosques, Prayer Times & Halal Businesses",
+    title:
+      "SalahNearMe | Mosques, Prayer Times & Halal Places",
     description:
-      "Find mosques, prayer times, halal businesses, Hajj, Umrah and Muslim travel essentials.",
+      "Find mosques, pray on time and discover halal places wherever you are.",
     images: ["/social-icon.png"],
   },
 };
@@ -68,574 +72,726 @@ type CityRow = {
   longitude?: number | null;
 };
 
-type PrayerTimesOverrideRow = Partial<PrayerTimesResult> & {
-  created_at?: string | null;
+type PrayerTimesOverrideRow =
+  Partial<PrayerTimesResult> & {
+    created_at?: string | null;
+  };
+
+type PrayerTimesSource =
+  | "manual_override"
+  | "calculated"
+  | "unavailable";
+
+type PrayerTimesLoadResult = {
+  prayerTimes: PrayerTimesResult | null;
+  prayerTimesSource: PrayerTimesSource;
+  prayerTimesUpdatedAt: string | null;
 };
 
-type HadithRecord = Record<string, unknown>;
-
-type StatCardProps = {
-  label: string;
+type StatProps = {
   value: string;
-  helper: string;
+  label: string;
 };
 
-function cleanString(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function getFirstTextValue(record: HadithRecord | null, keys: string[]) {
-  if (!record) {
-    return null;
-  }
-
-  for (const key of keys) {
-    const value = cleanString(record[key]);
-
-    if (value) {
-      return value;
-    }
-  }
-
-  return null;
-}
-
-function getHadithText(hadith: HadithRecord | null) {
-  return getFirstTextValue(hadith, [
-    "english_text",
-    "translation_text",
-    "translation",
-    "english",
-    "hadith",
-    "body",
-    "content",
-    "narration",
-    "arabic_text",
-    "arabic",
-  ]);
-}
-
-function getHadithSource(hadith: HadithRecord | null) {
-  if (!hadith) {
-    return "Hadith";
-  }
-
-  const source = cleanString(hadith.source);
-  const reference = cleanString(hadith.reference);
-  const book = cleanString(hadith.book);
-  const collection = cleanString(hadith.collection).replace(/_/g, " ");
-  const provider = cleanString(hadith.provider);
-  const externalId = cleanString(hadith.external_id);
-
-  if (source) {
-    return source;
-  }
-
-  if (reference) {
-    return reference;
-  }
-
-  if (book && externalId) {
-    return `${book} · ${externalId}`;
-  }
-
-  if (collection && externalId) {
-    return `${collection} · ${externalId}`;
-  }
-
-  if (book) {
-    return book;
-  }
-
-  if (collection) {
-    return collection;
-  }
-
-  if (provider) {
-    return provider;
-  }
-
-  return "Hadith";
+function cleanString(value: unknown): string {
+  return typeof value === "string"
+    ? value.trim()
+    : "";
 }
 
 function isValidCityRow(value: unknown): value is CityRow {
-  if (!value || typeof value !== "object") {
+  if (
+    !value ||
+    typeof value !== "object"
+  ) {
     return false;
   }
 
-  const row = value as Partial<CityRow>;
+  const city = value as Partial<CityRow>;
 
   return (
-    typeof row.id === "number" &&
-    typeof row.slug === "string" &&
-    row.slug.trim().length > 0 &&
-    typeof row.name === "string" &&
-    row.name.trim().length > 0
+    typeof city.id === "number" &&
+    typeof city.slug === "string" &&
+    city.slug.trim().length > 0 &&
+    typeof city.name === "string" &&
+    city.name.trim().length > 0
   );
 }
 
-function StatCard({ label, value, helper }: StatCardProps) {
-  return (
-    <div className="rounded-3xl border border-yellow-500/20 bg-[#050B1A]/80 p-6 shadow-xl shadow-black/20">
-      <div className="text-xs font-bold uppercase tracking-[0.35em] text-yellow-400">
-        {label}
-      </div>
+function getSelectedCity(
+  cities: CityRow[],
+  selectedSlug: string | null
+): CityRow | null {
+  const cleanedSlug = cleanString(selectedSlug).toLowerCase();
 
-      <div className="mt-4 text-4xl font-black text-white">{value}</div>
-
-      <p className="mt-2 text-sm leading-6 text-white/60">{helper}</p>
-    </div>
-  );
-}
-
-function FeatureCard({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="rounded-3xl border border-yellow-500/20 bg-[#050B1A]/80 p-6 shadow-xl shadow-black/20">
-      <h3 className="text-xl font-black text-yellow-400">{title}</h3>
-
-      <p className="mt-3 text-sm leading-7 text-white/70">{description}</p>
-    </div>
-  );
-}
-
-function getSelectedCity(cities: CityRow[], selectedCitySlug: string | null) {
-  if (!selectedCitySlug) {
+  if (!cleanedSlug) {
     return null;
   }
 
-  return cities.find((city) => city.slug === selectedCitySlug) ?? null;
+  return (
+    cities.find(
+      (city) =>
+        city.slug.toLowerCase() === cleanedSlug
+    ) ?? null
+  );
 }
 
-async function getPrayerTimesForSelectedCity(selectedCity: CityRow | null) {
-  if (!selectedCity) {
+async function getPrayerTimesForCity(
+  city: CityRow | null
+): Promise<PrayerTimesLoadResult> {
+  if (!city) {
     return {
       prayerTimes: null,
-      prayerTimesSource: "unavailable" as const,
+      prayerTimesSource: "unavailable",
       prayerTimesUpdatedAt: null,
     };
   }
 
   const supabase = await supabaseServer();
   const now = new Date();
-  const month = now.getMonth() + 1;
-  const year = now.getFullYear();
 
-  const { data: prayerTimesRow, error } = await supabase
+  const { data, error } = await supabase
     .from("city_prayer_times")
     .select(
-      "fajr_start,sunrise,dhuhr_start,asr_start,maghrib_start,isha_start,created_at"
+      [
+        "fajr_start",
+        "sunrise",
+        "dhuhr_start",
+        "asr_start",
+        "maghrib_start",
+        "isha_start",
+        "created_at",
+      ].join(",")
     )
-    .eq("city_id", selectedCity.id)
-    .eq("month", month)
-    .eq("year", year)
+    .eq("city_id", city.id)
+    .eq("month", now.getMonth() + 1)
+    .eq("year", now.getFullYear())
     .maybeSingle();
 
   if (error) {
-    console.error("homepage prayer times error:", error.message);
+    console.error(
+      "Homepage city prayer-time query failed:",
+      {
+        cityId: city.id,
+        citySlug: city.slug,
+        code: error.code,
+        message: error.message,
+      }
+    );
   }
 
-  if (prayerTimesRow) {
-    const override = prayerTimesRow as PrayerTimesOverrideRow;
+  if (data) {
+    const row =
+      data as PrayerTimesOverrideRow;
 
     return {
       prayerTimes: {
-        fajr_start: override.fajr_start ?? null,
-        sunrise: override.sunrise ?? null,
-        dhuhr_start: override.dhuhr_start ?? null,
-        asr_start: override.asr_start ?? null,
-        maghrib_start: override.maghrib_start ?? null,
-        isha_start: override.isha_start ?? null,
+        fajr_start:
+          row.fajr_start ?? null,
+        sunrise:
+          row.sunrise ?? null,
+        dhuhr_start:
+          row.dhuhr_start ?? null,
+        asr_start:
+          row.asr_start ?? null,
+        maghrib_start:
+          row.maghrib_start ?? null,
+        isha_start:
+          row.isha_start ?? null,
       },
-      prayerTimesSource: "manual_override" as const,
-      prayerTimesUpdatedAt: override.created_at ?? null,
+      prayerTimesSource: "manual_override",
+      prayerTimesUpdatedAt:
+        row.created_at ?? null,
     };
   }
 
-  const calculated = calculatePrayerTimesForCity({
-    timezone: selectedCity.timezone,
-    latitude: selectedCity.latitude,
-    longitude: selectedCity.longitude,
-  });
+  const calculated =
+    calculatePrayerTimesForCity({
+      timezone: city.timezone,
+      latitude: city.latitude,
+      longitude: city.longitude,
+    });
 
   return {
     prayerTimes: calculated,
-    prayerTimesSource: calculated ? ("calculated" as const) : ("unavailable" as const),
+    prayerTimesSource: calculated
+      ? "calculated"
+      : "unavailable",
     prayerTimesUpdatedAt: null,
   };
 }
 
-async function getDailyHadith() {
-  const supabase = await supabaseServer();
+function HomepageStat({
+  value,
+  label,
+}: StatProps) {
+  return (
+    <div className="hero-stat rounded-2xl px-4 py-3">
+      <div className="text-xl font-black text-white sm:text-2xl">
+        {value}
+      </div>
 
-  const { data: hadithRows, error } = await supabase
-    .from("hadiths")
-    .select("*")
-    .limit(200);
+      <div className="mt-1 text-xs font-semibold text-white/48">
+        {label}
+      </div>
+    </div>
+  );
+}
 
-  if (error) {
-    console.error("homepage hadith error:", error.message);
-    return null;
-  }
+function JourneyCard({
+  number,
+  title,
+  description,
+  href,
+  linkLabel,
+}: {
+  number: string;
+  title: string;
+  description: string;
+  href: string;
+  linkLabel: string;
+}) {
+  return (
+    <article className="group premium-inset rounded-3xl p-5 transition duration-300 hover:-translate-y-1 hover:border-yellow-400/30">
+      <div className="flex items-start justify-between gap-4">
+        <span className="flex h-11 w-11 items-center justify-center rounded-2xl border border-yellow-500/25 bg-yellow-500/10 text-sm font-black text-yellow-300">
+          {number}
+        </span>
 
-  const rows = (hadithRows ?? []) as HadithRecord[];
+        <span
+          aria-hidden="true"
+          className="text-xl text-yellow-400/45 transition group-hover:translate-x-1 group-hover:text-yellow-200"
+        >
+          →
+        </span>
+      </div>
 
-  if (rows.length === 0) {
-    return null;
-  }
+      <h3 className="mt-5 text-xl font-black text-white">
+        {title}
+      </h3>
 
-  const usableRows = rows.filter((row) => Boolean(getHadithText(row)));
+      <p className="mt-3 text-sm leading-7 text-white/55">
+        {description}
+      </p>
 
-  if (usableRows.length === 0) {
-    return null;
-  }
+      <Link
+        href={href}
+        className="mt-5 inline-flex text-sm font-bold text-yellow-300 hover:text-yellow-100"
+      >
+        {linkLabel}
+      </Link>
+    </article>
+  );
+}
 
-  const todayIndex = Math.floor(Date.now() / 86400000);
+function CompactFeature({
+  icon,
+  title,
+  description,
+}: {
+  icon: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="flex gap-4 rounded-2xl border border-white/10 bg-black/25 p-4">
+      <span
+        aria-hidden="true"
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-yellow-500/25 bg-yellow-500/10 text-yellow-300"
+      >
+        {icon}
+      </span>
 
-  return usableRows[todayIndex % usableRows.length] ?? null;
+      <div>
+        <div className="font-black text-white">
+          {title}
+        </div>
+
+        <p className="mt-1 text-sm leading-6 text-white/48">
+          {description}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 export default async function Home() {
   const supabase = await supabaseServer();
   const cookieStore = await cookies();
-  const selectedCitySlug = cookieStore.get("snm_city")?.value ?? null;
 
-  const { data: cities, error: citiesError } = await supabase
+  const selectedCitySlug =
+    cookieStore.get("snm_city")?.value ?? null;
+
+  const { data, error } = await supabase
     .from("cities")
-    .select("id,slug,name,timezone,country,latitude,longitude")
+    .select(
+      [
+        "id",
+        "slug",
+        "name",
+        "timezone",
+        "country",
+        "latitude",
+        "longitude",
+      ].join(",")
+    )
     .eq("is_active", true)
-    .order("country", { ascending: true })
-    .order("name", { ascending: true });
+    .order("country", {
+      ascending: true,
+    })
+    .order("name", {
+      ascending: true,
+    });
 
-  if (citiesError) {
-    console.error("homepage cities error:", citiesError.message);
+  if (error) {
+    console.error("Homepage city query failed:", {
+      code: error.code,
+      message: error.message,
+    });
 
     return (
-      <div className="rounded-3xl border border-red-500/30 bg-red-500/10 p-8 text-red-100">
-        Could not load cities. Please refresh the page.
+      <div
+        role="alert"
+        className="rounded-3xl border border-red-500/30 bg-red-500/10 p-8 text-red-100"
+      >
+        <h1 className="text-2xl font-black">
+          SalahNearMe is temporarily unavailable
+        </h1>
+
+        <p className="mt-3 text-sm leading-7 text-red-100/75">
+          The city directory could not be loaded. Please
+          refresh this page shortly.
+        </p>
       </div>
     );
   }
 
-  const cityList = ((cities ?? []) as unknown[]).filter(isValidCityRow);
+  const cities = ((data ?? []) as unknown[])
+    .filter(isValidCityRow);
 
-  const selectedCity = getSelectedCity(cityList, selectedCitySlug);
+  const selectedCity = getSelectedCity(
+    cities,
+    selectedCitySlug
+  );
 
-  const { prayerTimes, prayerTimesSource, prayerTimesUpdatedAt } =
-    await getPrayerTimesForSelectedCity(selectedCity);
+  const {
+    prayerTimes,
+    prayerTimesSource,
+    prayerTimesUpdatedAt,
+  } = await getPrayerTimesForCity(selectedCity);
 
-  const dailyHadith = await getDailyHadith();
-  const hadithText = getHadithText(dailyHadith);
-  const hadithSource = getHadithSource(dailyHadith);
+  const citySearchOptions = cities.map(
+    ({ slug, name, country }) => ({
+      slug,
+      name,
+      country: country ?? null,
+    })
+  );
 
-  const jsonLd = {
+  const websiteJsonLd = {
     "@context": "https://schema.org",
     "@type": "WebSite",
     name: "SalahNearMe",
-    url: cleanSiteUrl,
+    url: siteUrl,
     description:
-      "Find mosques, prayer times, halal businesses, Hajj, Umrah and Muslim travel essentials.",
+      "Find mosques, prayer times, halal businesses and Muslim travel essentials.",
     potentialAction: {
       "@type": "SearchAction",
-      target: `${cleanSiteUrl}/businesses?q={search_term_string}`,
-      "query-input": "required name=search_term_string",
+      target:
+        `${siteUrl}/businesses?q={search_term_string}`,
+      "query-input":
+        "required name=search_term_string",
     },
   };
 
+  const organisationJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: "SalahNearMe",
+    url: siteUrl,
+    logo: `${siteUrl}/logo-horizontal.png`,
+    description:
+      "A Muslim discovery platform for prayer, mosques, halal businesses and travel.",
+  };
+
   return (
-    <div className="space-y-12">
+    <div className="compact-page-stack">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
-          __html: JSON.stringify(jsonLd),
+          __html: JSON.stringify([
+            websiteJsonLd,
+            organisationJsonLd,
+          ]),
         }}
       />
 
-      <section className="relative overflow-hidden rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8 shadow-2xl shadow-black/30 md:p-12">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(212,175,55,0.20),transparent_40%)]" />
-
-        <div className="relative flex flex-col items-center space-y-8 text-center">
-          <Image
-            src="/logo-horizontal.png"
-            alt="SalahNearMe"
-            width={520}
-            height={220}
-            priority
-            className="h-auto w-[240px] object-contain sm:w-[340px]"
-          />
-
-          <div className="rounded-full border border-yellow-500/20 bg-yellow-500/10 px-4 py-2 text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
-            Muslim life, prayer, halal business & travel intelligence
-          </div>
-
-          <h1 className="mx-auto max-w-6xl text-4xl font-black tracking-tight text-white md:text-7xl">
-            Find Mosques, Pray On Time & Discover Halal Places Near You
-          </h1>
-
-          <p className="mx-auto max-w-3xl text-base leading-8 text-white/70 md:text-xl">
-            SalahNearMe connects mosques, prayer timetables, halal businesses,
-            Muslim travel, Hajj and Umrah guidance, and live community signals
-            into one intelligent Muslim ecosystem.
-          </p>
-
-          <CitySearch
-            cities={cityList.map(({ slug, name, country }) => ({
-              slug,
-              name,
-              country: country ?? null,
-            }))}
-          />
-
-          <div className="flex flex-wrap justify-center gap-4">
-            <Link
-              href="/near-me/pray"
-              className="rounded-2xl bg-yellow-500 px-6 py-3 font-bold text-black transition hover:bg-yellow-400"
-            >
-              Pray near me
-            </Link>
-
-            <Link
-              href="/businesses"
-              className="rounded-2xl border border-yellow-500/30 px-6 py-3 font-semibold text-yellow-400 transition hover:bg-yellow-500/10"
-            >
-              Find halal businesses
-            </Link>
-
-            <Link
-              href="/travel"
-              className="rounded-2xl border border-yellow-500/30 px-6 py-3 font-semibold text-yellow-400 transition hover:bg-yellow-500/10"
-            >
-              Travel mode
-            </Link>
-
-            <Link
-              href="/hajj"
-              className="rounded-2xl border border-yellow-500/30 px-6 py-3 font-semibold text-yellow-400 transition hover:bg-yellow-500/10"
-            >
-              Hajj guide
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      <SmartDailyModePanel className="mt-8" />
-
-      <section className="grid gap-4 md:grid-cols-3">
-        <StatCard
-          label="Mosques"
-          value="Prayer-aware"
-          helper="City pages, mosque profiles, timetables and live iqamah signals."
+      <section className="home-hero rounded-[2rem] px-5 py-8 sm:px-8 sm:py-10 lg:px-12 lg:py-14 xl:px-16">
+        <div
+          aria-hidden="true"
+          className="hero-orbit"
         />
 
-        <StatCard
-          label="Businesses"
-          value="Halal places"
-          helper="Restaurants, butchers, groceries, services and sponsored listings."
-        />
-
-        <StatCard
-          label="Travel"
-          value="Muslim-ready"
-          helper="Find mosques and halal essentials while travelling."
-        />
-      </section>
-
-      <section className="rounded-3xl border border-emerald-500/20 bg-emerald-500/10 p-8">
-        <div className="text-sm font-bold uppercase tracking-[0.3em] text-emerald-300">
-          Pray Now Intelligence
-        </div>
-
-        <div className="mt-4 grid gap-6 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+        <div className="relative z-10 grid min-h-[520px] items-center gap-10 lg:grid-cols-[1.15fr_0.85fr]">
           <div>
-            <h2 className="text-3xl font-black text-white md:text-5xl">
-              Find the best mosque to pray at right now
+            <div className="hero-kicker">
+              Find. Pray. Connect.
+            </div>
+
+            <h1 className="hero-title mt-5 white-soft-glow">
+              Your Muslim life,
+              <span className="gold-gradient-text">
+                {" "}
+                intelligently connected.
+              </span>
+            </h1>
+
+            <p className="hero-description mt-6">
+              Find nearby mosques, accurate prayer times,
+              halal places and Muslim travel essentials in
+              one beautifully simple platform.
+            </p>
+
+            <div className="mt-7 max-w-3xl">
+              <CitySearch cities={citySearchOptions} />
+            </div>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Link
+                href="/near-me/pray"
+                className="premium-button px-5 py-3 text-sm sm:px-6"
+              >
+                Find a mosque to pray now
+              </Link>
+
+              <Link
+                href="/businesses"
+                className="premium-button-outline px-5 py-3 text-sm"
+              >
+                Discover halal places
+              </Link>
+            </div>
+
+            <div className="mt-7 grid max-w-2xl grid-cols-3 gap-2 sm:gap-3">
+              <HomepageStat
+                value="Prayer"
+                label="Times and mosques"
+              />
+
+              <HomepageStat
+                value="Halal"
+                label="Food and services"
+              />
+
+              <HomepageStat
+                value="Travel"
+                label="Muslim essentials"
+              />
+            </div>
+          </div>
+
+          <div className="relative hidden min-h-[500px] lg:block">
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="premium-float relative flex h-[390px] w-[390px] items-center justify-center rounded-full border border-yellow-400/14 bg-yellow-400/[0.025] shadow-[0_0_120px_rgba(212,175,55,0.08)]">
+                <div className="absolute inset-[13%] rounded-full border border-yellow-400/12" />
+                <div className="absolute inset-[27%] rounded-full border border-yellow-400/18" />
+
+                <Image
+                  src="/logo-horizontal.png"
+                  alt="SalahNearMe"
+                  width={520}
+                  height={220}
+                  priority
+                  className="relative z-10 h-auto w-[300px] object-contain drop-shadow-[0_18px_50px_rgba(0,0,0,0.65)]"
+                />
+              </div>
+            </div>
+
+            <div className="absolute left-0 top-[12%] w-[210px] rounded-3xl border border-yellow-500/20 bg-[#040b1d]/88 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl">
+              <div className="text-[0.65rem] font-black uppercase tracking-[0.22em] text-yellow-400">
+                Prayer aware
+              </div>
+
+              <div className="mt-2 text-lg font-black text-white">
+                Best mosque now
+              </div>
+
+              <p className="mt-1 text-xs leading-5 text-white/48">
+                Distance, timetable and live community
+                signals combined.
+              </p>
+            </div>
+
+            <div className="absolute bottom-[11%] right-0 w-[220px] rounded-3xl border border-emerald-500/20 bg-[#03131a]/88 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl">
+              <div className="text-[0.65rem] font-black uppercase tracking-[0.22em] text-emerald-300">
+                Halal discovery
+              </div>
+
+              <div className="mt-2 text-lg font-black text-white">
+                Trusted places nearby
+              </div>
+
+              <p className="mt-1 text-xs leading-5 text-white/48">
+                Restaurants, shops and Muslim-friendly
+                services.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <SmartDailyModePanel className="mt-0" />
+
+      {selectedCity ? (
+        <>
+          <NextSalahCountdown
+            prayerTimes={prayerTimes}
+            cityName={selectedCity.name}
+          />
+
+          <SelectedCityHomePanel
+            city={{
+              name: selectedCity.name,
+              slug: selectedCity.slug,
+              timezone:
+                selectedCity.timezone ??
+                "Europe/London",
+            }}
+            prayerTimes={prayerTimes}
+            prayerTimesSource={prayerTimesSource}
+            prayerTimesUpdatedAt={
+              prayerTimesUpdatedAt
+            }
+          />
+
+          <HomeDailyPanel
+            cityId={selectedCity.id}
+            cityName={selectedCity.name}
+            citySlug={selectedCity.slug}
+            prayerTimes={prayerTimes}
+          />
+        </>
+      ) : (
+        <>
+          <SelectedCityHomePanel
+            city={null}
+            prayerTimes={null}
+            prayerTimesSource="unavailable"
+            prayerTimesUpdatedAt={null}
+          />
+
+          <HomeDailyPanel />
+        </>
+      )}
+
+      <section
+        aria-labelledby="pray-near-me-heading"
+        className="premium-panel rounded-[2rem] p-5 sm:p-7 lg:p-8"
+      >
+        <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
+          <div>
+            <div className="section-kicker">
+              Pray Near Me intelligence
+            </div>
+
+            <h2
+              id="pray-near-me-heading"
+              className="mt-4 max-w-3xl text-3xl font-black tracking-tight text-white sm:text-4xl lg:text-5xl"
+            >
+              Find the best mosque for your next prayer.
             </h2>
 
-            <p className="mt-4 max-w-3xl leading-8 text-white/70">
-              The Pray Near Me engine checks your location, nearby mosques,
-              today’s prayer context, timetable data, live community reports,
-              distance, travel time, and facilities to recommend the best prayer
-              option near you.
+            <p className="mt-4 max-w-2xl text-sm leading-7 text-white/60 sm:text-base">
+              SalahNearMe compares distance, travel time,
+              timetable quality, facilities and live
+              community signals before recommending where
+              to pray.
             </p>
 
             <div className="mt-6 flex flex-wrap gap-3">
               <Link
                 href="/near-me/pray"
-                className="rounded-2xl bg-yellow-500 px-6 py-3 font-bold text-black transition hover:bg-yellow-400"
+                className="premium-button px-5 py-3 text-sm"
               >
                 Open Pray Near Me
               </Link>
 
               <Link
                 href="/how-it-works"
-                className="rounded-2xl border border-yellow-500/30 px-6 py-3 font-semibold text-yellow-400 transition hover:bg-yellow-500/10"
+                className="premium-button-outline px-5 py-3 text-sm"
               >
-                How it works
+                See how it works
               </Link>
             </div>
           </div>
 
-          <div className="rounded-3xl border border-white/10 bg-black/30 p-6">
-            <div className="text-sm font-bold text-emerald-300">
-              Example recommendation
-            </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <CompactFeature
+              icon="⌖"
+              title="Nearby"
+              description="Distance and estimated travel time."
+            />
 
-            <div className="mt-4 text-2xl font-black text-white">
-              Best mosque now
-            </div>
+            <CompactFeature
+              icon="◷"
+              title="Prayer context"
+              description="Current and upcoming salah checked."
+            />
 
-            <div className="mt-4 space-y-3 text-sm text-white/70">
-              <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-4">
-                Current salah context checked
-              </div>
+            <CompactFeature
+              icon="✓"
+              title="Trusted data"
+              description="Timetable quality and confidence."
+            />
 
-              <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-4">
-                Distance and travel time compared
-              </div>
-
-              <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-4">
-                Facilities and live reports included
-              </div>
-
-              <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-4">
-                Salah Score calculated from trust signals
-              </div>
-            </div>
+            <CompactFeature
+              icon="●"
+              title="Live signals"
+              description="Community activity and capacity reports."
+            />
           </div>
         </div>
       </section>
 
       <HomeHajjHijriBanner />
 
-      {selectedCity ? (
-  <>
-    <NextSalahCountdown
-      prayerTimes={prayerTimes}
-      cityName={selectedCity.name}
-    />
+      <section
+        aria-labelledby="journeys-heading"
+        className="premium-panel rounded-[2rem] p-5 sm:p-7"
+      >
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="section-kicker">
+              Explore SalahNearMe
+            </div>
 
-    <SelectedCityHomePanel
-      city={{
-        name: selectedCity.name,
-        slug: selectedCity.slug,
-        timezone: selectedCity.timezone ?? "Europe/London",
-      }}
-      prayerTimes={prayerTimes}
-      prayerTimesSource={prayerTimesSource}
-      prayerTimesUpdatedAt={prayerTimesUpdatedAt}
-    />
-
-    <HomeDailyPanel
-      cityId={selectedCity.id}
-      cityName={selectedCity.name}
-      citySlug={selectedCity.slug}
-      prayerTimes={prayerTimes}
-    />
-  </>
-) : (
-  <>
-    <SelectedCityHomePanel
-      city={null}
-      prayerTimes={null}
-      prayerTimesSource="unavailable"
-      prayerTimesUpdatedAt={null}
-    />
-
-    <HomeDailyPanel />
-  </>
-)}
-
-      <section className="rounded-3xl border border-yellow-500/20 bg-black/30 p-8 text-center">
-        <div className="text-sm font-bold uppercase tracking-[0.25em] text-yellow-400">
-          Daily Hadith
-        </div>
-
-        <p className="mx-auto mt-4 max-w-4xl text-lg leading-9 text-white md:text-3xl">
-          {hadithText
-            ? `“${hadithText}”`
-            : "Daily hadith will appear here soon."}
-        </p>
-
-        <div className="mt-4 text-sm text-white/60">{hadithSource}</div>
-      </section>
-
-      <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="rounded-3xl border border-yellow-500/30 bg-black/40 p-10">
-          <div className="text-3xl font-black text-yellow-400">
-            Hajj & Umrah Hub
+            <h2
+              id="journeys-heading"
+              className="mt-3 text-3xl font-black tracking-tight text-white sm:text-4xl"
+            >
+              One platform. Every Muslim journey.
+            </h2>
           </div>
 
-          <p className="mt-4 max-w-2xl leading-8 text-white/70">
-            Prepare with step-by-step Hajj and Umrah guides, reminders,
-            checklists, duas, rituals, and travel support.
+          <Link
+            href="/how-it-works"
+            className="text-sm font-bold text-yellow-300 hover:text-yellow-100"
+          >
+            Discover the platform →
+          </Link>
+        </div>
+
+        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <JourneyCard
+            number="01"
+            title="Mosques & prayer"
+            description="Mosque profiles, timetables, iqamah signals and prayer-aware discovery."
+            href="/near-me/pray"
+            linkLabel="Find a mosque →"
+          />
+
+          <JourneyCard
+            number="02"
+            title="Halal businesses"
+            description="Find halal restaurants, groceries, shops, services and featured listings."
+            href="/businesses"
+            linkLabel="Browse businesses →"
+          />
+
+          <JourneyCard
+            number="03"
+            title="Muslim travel"
+            description="Discover mosques and halal essentials in supported cities worldwide."
+            href="/travel"
+            linkLabel="Open travel mode →"
+          />
+
+          <JourneyCard
+            number="04"
+            title="Hajj & Umrah"
+            description="Follow practical step-by-step guidance, reminders, duas and checklists."
+            href="/hajj"
+            linkLabel="Open the guides →"
+          />
+        </div>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <article className="premium-panel rounded-[2rem] p-6 sm:p-8">
+          <div className="section-kicker">
+            Hajj & Umrah
+          </div>
+
+          <h2 className="mt-4 text-3xl font-black tracking-tight text-white">
+            Prepare with confidence.
+          </h2>
+
+          <p className="mt-3 max-w-xl text-sm leading-7 text-white/58">
+            Step-by-step rituals, practical checklists,
+            duas, reminders and guided modes for your
+            journey.
           </p>
 
-          <div className="mt-6 flex flex-wrap gap-4">
+          <div className="mt-6 flex flex-wrap gap-3">
             <Link
               href="/hajj"
-              className="rounded-2xl bg-yellow-500 px-6 py-3 font-semibold text-black transition hover:bg-yellow-400"
+              className="premium-button px-5 py-3 text-sm"
             >
-              Open Hajj guide
+              Hajj guide
             </Link>
 
             <Link
               href="/umrah"
-              className="rounded-2xl border border-yellow-500/30 px-6 py-3 text-yellow-400 transition hover:bg-yellow-500/10"
+              className="premium-button-outline px-5 py-3 text-sm"
             >
-              Open Umrah guide
+              Umrah guide
             </Link>
           </div>
-        </div>
+        </article>
 
-        <div className="rounded-3xl border border-yellow-500/30 bg-black/40 p-10">
-          <div className="text-3xl font-black text-yellow-400">
-            Travel & Muslim Essentials
+        <article className="premium-panel rounded-[2rem] p-6 sm:p-8">
+          <div className="section-kicker">
+            Travel mode
           </div>
 
-          <p className="mt-4 max-w-2xl leading-8 text-white/70">
-            Travelling abroad or exploring another city? Use SalahNearMe to find
-            mosques, halal essentials, and Muslim-friendly places with
-            prayer-aware guidance.
+          <h2 className="mt-4 text-3xl font-black tracking-tight text-white">
+            Take SalahNearMe with you.
+          </h2>
+
+          <p className="mt-3 max-w-xl text-sm leading-7 text-white/58">
+            Find mosques, halal food and Muslim-friendly
+            essentials when travelling or exploring a new
+            city.
           </p>
 
-          <div className="mt-6 flex flex-wrap gap-4">
+          <div className="mt-6 flex flex-wrap gap-3">
             <Link
               href="/travel"
-              className="rounded-2xl bg-yellow-500 px-6 py-3 font-semibold text-black transition hover:bg-yellow-400"
+              className="premium-button px-5 py-3 text-sm"
             >
-              Explore travel mode
+              Explore travel
             </Link>
 
             <Link
               href="/travel/map"
-              className="rounded-2xl border border-yellow-500/30 px-6 py-3 text-yellow-400 transition hover:bg-yellow-500/10"
+              className="premium-button-outline px-5 py-3 text-sm"
             >
-              Open map view
+              Open map
             </Link>
           </div>
-        </div>
+        </article>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-3">
-        <FeatureCard
-          title="Community First"
-          description="Built respectfully for mosques, halal businesses, travellers, families, and the wider Muslim community."
-        />
+      <section className="rounded-[2rem] border border-yellow-500/20 bg-black/25 px-5 py-6 text-center sm:px-8">
+        <div className="text-xs font-black uppercase tracking-[0.26em] text-yellow-400">
+          Built for the Ummah
+        </div>
 
-        <FeatureCard
-          title="Prayer-Aware"
-          description="Mosque timetables, city prayer times, live reports, and intelligent pray-near-me recommendations."
-        />
-
-        <FeatureCard
-          title="Trust & Live Signals"
-          description="Official mosque management, community-powered live activity, halal business visibility, and sponsor analytics."
-        />
+        <p className="mx-auto mt-3 max-w-3xl text-sm leading-7 text-white/55">
+          Prayer-aware discovery, trustworthy mosque data,
+          halal business visibility and Muslim travel tools
+          in one community-focused platform.
+        </p>
       </section>
     </div>
   );

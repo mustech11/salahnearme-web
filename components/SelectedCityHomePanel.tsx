@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type City = {
   name: string;
@@ -46,85 +46,138 @@ type NearestCityApiResponse = {
   error?: unknown;
 };
 
+type PrayerItem = {
+  name: string;
+  shortName: string;
+  value: string | null;
+};
+
+type LocationState =
+  | {
+      type: "idle";
+      message: null;
+    }
+  | {
+      type: "loading" | "success" | "error";
+      message: string;
+    };
+
 const DEFAULT_TIMEZONE = "Europe/London";
 const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+const REQUEST_TIMEOUT_MS = 15_000;
 
-function cleanString(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function formatDisplayTime(value: string | null | undefined) {
-  if (!value) {
-    return "—";
+function cleanString(value: unknown, maxLength = 180): string {
+  if (typeof value !== "string") {
+    return "";
   }
 
-  return value.slice(0, 5);
+  return value.trim().replace(/\s+/g, " ").slice(0, maxLength);
 }
 
-function getPrayerItems(prayerTimes: PrayerTimes) {
+function cleanSlug(value: unknown): string {
+  return cleanString(value, 160)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function formatDisplayTime(value: string | null | undefined): string {
+  const cleaned = cleanString(value, 20);
+
+  return cleaned ? cleaned.slice(0, 5) : "—";
+}
+
+function getPrayerItems(prayerTimes: PrayerTimes): PrayerItem[] {
   return [
-    { name: "Fajr", value: prayerTimes?.fajr_start ?? null },
-    { name: "Sunrise", value: prayerTimes?.sunrise ?? null },
-    { name: "Dhuhr", value: prayerTimes?.dhuhr_start ?? null },
-    { name: "Asr", value: prayerTimes?.asr_start ?? null },
-    { name: "Maghrib", value: prayerTimes?.maghrib_start ?? null },
-    { name: "Isha", value: prayerTimes?.isha_start ?? null },
+    {
+      name: "Fajr",
+      shortName: "Fajr",
+      value: prayerTimes?.fajr_start ?? null,
+    },
+    {
+      name: "Sunrise",
+      shortName: "Rise",
+      value: prayerTimes?.sunrise ?? null,
+    },
+    {
+      name: "Dhuhr",
+      shortName: "Dhuhr",
+      value: prayerTimes?.dhuhr_start ?? null,
+    },
+    {
+      name: "Asr",
+      shortName: "Asr",
+      value: prayerTimes?.asr_start ?? null,
+    },
+    {
+      name: "Maghrib",
+      shortName: "Maghrib",
+      value: prayerTimes?.maghrib_start ?? null,
+    },
+    {
+      name: "Isha",
+      shortName: "Isha",
+      value: prayerTimes?.isha_start ?? null,
+    },
   ];
 }
 
-function getSourceLabel(source: PrayerTimesSource) {
+function getSourceDetails(source: PrayerTimesSource) {
   if (source === "manual_override") {
     return {
-      text: "Verified local timetable",
-      className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+      label: "Verified local timetable",
+      description: "Local timetable data is available for this city.",
+      className:
+        "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
     };
   }
 
   if (source === "calculated") {
     return {
-      text: "Calculated automatically",
-      className: "border-yellow-500/30 bg-yellow-500/10 text-yellow-400",
+      label: "Calculated automatically",
+      description: "Calculated from the city coordinates and timezone.",
+      className:
+        "border-yellow-500/30 bg-yellow-500/10 text-yellow-300",
     };
   }
 
   return {
-    text: "Times unavailable",
-    className: "border-white/10 bg-black/30 text-white/60",
+    label: "Times unavailable",
+    description: "Choose a supported city to display prayer times.",
+    className: "border-white/10 bg-white/5 text-white/55",
   };
 }
 
-function getSourceDescription(source: PrayerTimesSource, cityName: string) {
-  if (source === "manual_override") {
-    return `These times use a local monthly timetable stored for ${cityName}.`;
-  }
+function formatUpdatedAt(
+  value: string | null | undefined,
+  timezone: string
+): string | null {
+  const cleaned = cleanString(value, 80);
 
-  if (source === "calculated") {
-    return `These times are calculated from the nearest city coordinates when no local monthly timetable is available.`;
-  }
-
-  return `Prayer times are not currently available for ${cityName}.`;
-}
-
-function formatUpdatedAt(value: string | null | undefined, timezone: string) {
-  if (!value) {
+  if (!cleaned) {
     return null;
   }
 
-  const date = new Date(value);
+  const date = new Date(cleaned);
 
   if (Number.isNaN(date.getTime())) {
     return null;
   }
 
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: timezone,
-  }).format(date);
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: timezone,
+    }).format(date);
+  } catch {
+    return null;
+  }
 }
 
 function setSelectedCityCookie(slug: string) {
@@ -133,29 +186,38 @@ function setSelectedCityCookie(slug: string) {
     "path=/",
     `max-age=${COOKIE_MAX_AGE_SECONDS}`,
     "samesite=lax",
-  ].join("; ");
+    window.location.protocol === "https:" ? "secure" : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
 }
 
-function getNearestCityFromResponse(data: NearestCityApiResponse) {
-  const city = data.city ?? data.nearest_city ?? null;
+function getNearestCityFromResponse(
+  data: NearestCityApiResponse
+): City | null {
+  const nestedCity = data.city ?? data.nearest_city ?? null;
 
   const slug =
-    cleanString(city?.slug) ||
-    cleanString(data.slug);
-
-  const name =
-    cleanString(city?.name) ||
-    cleanString(data.name) ||
-    slug;
-
-  const timezone =
-    cleanString(city?.timezone) ||
-    cleanString(data.timezone) ||
-    DEFAULT_TIMEZONE;
+    cleanSlug(nestedCity?.slug) ||
+    cleanSlug(data.slug);
 
   if (!slug) {
     return null;
   }
+
+  const name =
+    cleanString(nestedCity?.name, 180) ||
+    cleanString(data.name, 180) ||
+    slug
+      .split("-")
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+
+  const timezone =
+    cleanString(nestedCity?.timezone, 120) ||
+    cleanString(data.timezone, 120) ||
+    DEFAULT_TIMEZONE;
 
   return {
     slug,
@@ -164,20 +226,69 @@ function getNearestCityFromResponse(data: NearestCityApiResponse) {
   };
 }
 
-function getGeolocationErrorMessage(error: GeolocationPositionError) {
+function getGeolocationErrorMessage(
+  error: GeolocationPositionError
+): string {
   if (error.code === error.PERMISSION_DENIED) {
-    return "Location permission was blocked. You can still choose your city manually.";
+    return "Location permission was blocked. Choose your city from the menu instead.";
   }
 
   if (error.code === error.POSITION_UNAVAILABLE) {
-    return "Your location could not be detected. Please choose your city manually.";
+    return "Your location could not be detected. Choose your city manually.";
   }
 
   if (error.code === error.TIMEOUT) {
-    return "Location detection timed out. Please try again or choose your city manually.";
+    return "Location detection timed out. Please try again.";
   }
 
-  return "Could not detect your location. Please choose your city manually.";
+  return "Your location could not be detected.";
+}
+
+function getNextPrayer(
+  items: PrayerItem[],
+  timezone: string
+): PrayerItem | null {
+  const validItems = items.filter((item) => {
+    return /^\d{1,2}:\d{2}/.test(cleanString(item.value, 20));
+  });
+
+  if (validItems.length === 0) {
+    return null;
+  }
+
+  let currentMinutes = 0;
+
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: timezone,
+    }).formatToParts(new Date());
+
+    const hour = Number(
+      parts.find((part) => part.type === "hour")?.value ?? 0
+    );
+
+    const minute = Number(
+      parts.find((part) => part.type === "minute")?.value ?? 0
+    );
+
+    currentMinutes = hour * 60 + minute;
+  } catch {
+    const now = new Date();
+    currentMinutes = now.getHours() * 60 + now.getMinutes();
+  }
+
+  const next = validItems.find((item) => {
+    const [hourText, minuteText] = cleanString(item.value, 20).split(":");
+    const hour = Number(hourText);
+    const minute = Number(minuteText);
+
+    return hour * 60 + minute > currentMinutes;
+  });
+
+  return next ?? validItems[0] ?? null;
 }
 
 export default function SelectedCityHomePanel({
@@ -187,291 +298,424 @@ export default function SelectedCityHomePanel({
   prayerTimesUpdatedAt = null,
 }: Props) {
   const router = useRouter();
+  const mountedRef = useRef(true);
 
-  const cityName = city?.name ?? "your nearest city";
-  const citySlug = city?.slug ?? "";
-  const timezone = city?.timezone || DEFAULT_TIMEZONE;
+  const cityName = cleanString(city?.name, 180) || "Your nearest city";
+  const citySlug = cleanSlug(city?.slug);
+  const timezone =
+    cleanString(city?.timezone, 120) || DEFAULT_TIMEZONE;
 
   const [timeString, setTimeString] = useState("");
   const [dateString, setDateString] = useState("");
-  const [locationStatus, setLocationStatus] = useState<string | null>(null);
-  const [locationLoading, setLocationLoading] = useState(false);
-  const [detectedCity, setDetectedCity] = useState<City | null>(null);
+  const [locationState, setLocationState] = useState<LocationState>({
+    type: "idle",
+    message: null,
+  });
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     function updateClock() {
-      const now = new Date();
+      try {
+        const now = new Date();
 
-      setTimeString(
-        new Intl.DateTimeFormat("en-GB", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-          hour12: false,
-          timeZone: timezone,
-        }).format(now)
-      );
+        setTimeString(
+          new Intl.DateTimeFormat("en-GB", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+            timeZone: timezone,
+          }).format(now)
+        );
 
-      setDateString(
-        new Intl.DateTimeFormat("en-GB", {
-          weekday: "long",
-          day: "numeric",
-          month: "long",
-          year: "numeric",
-          timeZone: timezone,
-        }).format(now)
-      );
+        setDateString(
+          new Intl.DateTimeFormat("en-GB", {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            year: "numeric",
+            timeZone: timezone,
+          }).format(now)
+        );
+      } catch {
+        const now = new Date();
+
+        setTimeString(
+          now.toLocaleTimeString("en-GB", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          })
+        );
+
+        setDateString(
+          now.toLocaleDateString("en-GB", {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            year: "numeric",
+          })
+        );
+      }
     }
 
     updateClock();
 
-    const timer = window.setInterval(updateClock, 1000);
+    const timer = window.setInterval(updateClock, 1_000);
 
     return () => window.clearInterval(timer);
   }, [timezone]);
 
-  async function useMyLocation() {
-    setLocationStatus(null);
-
-    if (!("geolocation" in navigator)) {
-      setLocationStatus(
-        "Your browser does not support location detection. Please choose your city manually."
-      );
+  const useMyLocation = useCallback(() => {
+    if (locationState.type === "loading") {
       return;
     }
 
-    setLocationLoading(true);
-    setLocationStatus("Checking your nearest SalahNearMe city...");
+    if (!("geolocation" in navigator)) {
+      setLocationState({
+        type: "error",
+        message:
+          "Your browser does not support location detection. Choose your city manually.",
+      });
+
+      return;
+    }
+
+    setLocationState({
+      type: "loading",
+      message: "Finding your nearest SalahNearMe city...",
+    });
 
     navigator.geolocation.getCurrentPosition(
       async (position) => {
-        try {
-          const lat = position.coords.latitude;
-          const lng = position.coords.longitude;
+        const controller = new AbortController();
+        const timeout = window.setTimeout(
+          () => controller.abort(),
+          REQUEST_TIMEOUT_MS
+        );
 
-          const res = await fetch(
-            `/api/travel/nearest-city?lat=${encodeURIComponent(
-              String(lat)
-            )}&lng=${encodeURIComponent(String(lng))}`,
+        try {
+          const params = new URLSearchParams({
+            lat: position.coords.latitude.toString(),
+            lng: position.coords.longitude.toString(),
+          });
+
+          const response = await fetch(
+            `/api/travel/nearest-city?${params.toString()}`,
             {
               method: "GET",
               headers: {
                 Accept: "application/json",
               },
               cache: "no-store",
+              credentials: "same-origin",
+              signal: controller.signal,
             }
           );
 
-          const data = (await res.json().catch(() => null)) as
+          const data = (await response.json().catch(() => null)) as
             | NearestCityApiResponse
             | null;
 
-          if (!res.ok || !data) {
-            setLocationStatus(
-              cleanString(data?.error) ||
-                "Could not find your nearest city. Please choose your city manually."
-            );
-            setLocationLoading(false);
+          if (!mountedRef.current) {
+            return;
+          }
+
+          if (!response.ok || !data) {
+            setLocationState({
+              type: "error",
+              message:
+                cleanString(data?.error, 300) ||
+                "Your nearest city could not be found.",
+            });
+
             return;
           }
 
           const nearestCity = getNearestCityFromResponse(data);
 
           if (!nearestCity) {
-            setLocationStatus(
-              "No matching city was found. Please choose your city manually."
-            );
-            setLocationLoading(false);
+            setLocationState({
+              type: "error",
+              message:
+                "No supported city was found near your location.",
+            });
+
             return;
           }
 
-          setDetectedCity(nearestCity);
           setSelectedCityCookie(nearestCity.slug);
-          setLocationStatus(`Nearest city found: ${nearestCity.name}`);
+
+          setLocationState({
+            type: "success",
+            message: `Nearest city selected: ${nearestCity.name}`,
+          });
 
           router.refresh();
         } catch (error) {
-          console.error("homepage nearest city error:", error);
-          setLocationStatus(
-            "Could not detect your nearest city. Please choose your city manually."
-          );
+          if (!mountedRef.current) {
+            return;
+          }
+
+          setLocationState({
+            type: "error",
+            message:
+              error instanceof DOMException &&
+              error.name === "AbortError"
+                ? "Location lookup timed out. Please try again."
+                : "Your nearest city could not be loaded.",
+          });
         } finally {
-          setLocationLoading(false);
+          window.clearTimeout(timeout);
         }
       },
       (error) => {
-        setLocationStatus(getGeolocationErrorMessage(error));
-        setLocationLoading(false);
+        if (!mountedRef.current) {
+          return;
+        }
+
+        setLocationState({
+          type: "error",
+          message: getGeolocationErrorMessage(error),
+        });
       },
       {
         enableHighAccuracy: false,
-        timeout: 12000,
-        maximumAge: 1000 * 60 * 10,
+        timeout: 12_000,
+        maximumAge: 10 * 60 * 1_000,
       }
     );
-  }
+  }, [locationState.type, router]);
 
-  const prayerItems = useMemo(() => getPrayerItems(prayerTimes), [prayerTimes]);
+  const prayerItems = useMemo(
+    () => getPrayerItems(prayerTimes),
+    [prayerTimes]
+  );
+
   const hasAnyPrayerTime = prayerItems.some((item) => Boolean(item.value));
-  const sourceBadge = getSourceLabel(prayerTimesSource);
-  const sourceDescription = getSourceDescription(prayerTimesSource, cityName);
-  const formattedUpdatedAt = formatUpdatedAt(prayerTimesUpdatedAt, timezone);
+
+  const sourceDetails = useMemo(
+    () => getSourceDetails(prayerTimesSource),
+    [prayerTimesSource]
+  );
+
+  const formattedUpdatedAt = useMemo(
+    () => formatUpdatedAt(prayerTimesUpdatedAt, timezone),
+    [prayerTimesUpdatedAt, timezone]
+  );
+
+  const nextPrayer = useMemo(
+    () => getNextPrayer(prayerItems, timezone),
+    [prayerItems, timezone, timeString]
+  );
+
+  const isLocationLoading = locationState.type === "loading";
 
   return (
-    <section className="overflow-hidden rounded-3xl border border-emerald-500/20 bg-[rgb(var(--card))] p-8 shadow-2xl shadow-black/20">
-      <div className="grid gap-8 lg:grid-cols-[1fr_1fr]">
-        <div>
-          <div className="inline-flex rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-bold uppercase tracking-[0.22em] text-emerald-300">
-            Smart daily city
+    <section
+      aria-labelledby="selected-city-heading"
+      className="premium-panel rounded-[2rem] p-5 sm:p-7"
+    >
+      <div className="grid gap-5 lg:grid-cols-[0.82fr_1.18fr]">
+        <div className="premium-inset rounded-3xl p-5 sm:p-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="section-kicker">Your local SalahNearMe</div>
+
+              <h2
+                id="selected-city-heading"
+                className="mt-3 text-3xl font-black tracking-tight text-white sm:text-4xl"
+              >
+                {city ? cityName : "Personalise your homepage"}
+              </h2>
+            </div>
+
+            <span className="premium-badge">
+              {city ? timezone : "Location ready"}
+            </span>
           </div>
 
-          <h2 className="mt-4 text-3xl font-black text-white md:text-5xl">
-            {city ? city.name : "Use SalahNearMe near you"}
-          </h2>
-
-          <p className="mt-4 max-w-2xl leading-8 text-white/70">
+          <p className="mt-3 max-w-xl text-sm leading-7 text-white/60">
             {city
-              ? `Quick daily access for salah times, mosques, halal businesses, and trusted Muslim community information in ${city.name}.`
-              : "Allow location access once and SalahNearMe will match you to the nearest city available on the platform."}
+              ? `Prayer times, mosques and halal places for ${cityName}, presented in one compact daily view.`
+              : "Use your location once or choose a city from the navigation to personalise SalahNearMe."}
           </p>
 
-          <div className="mt-6 rounded-3xl border border-white/10 bg-black/30 p-5">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <div className="text-sm font-semibold text-yellow-400">
-                  Local time
-                </div>
-
-                <div className="mt-2 text-3xl font-black text-white md:text-4xl">
-                  {timeString || "—"}
-                </div>
-
-                <div className="mt-2 text-sm text-white/60">
-                  {dateString || "—"}
-                </div>
+          <div className="mt-5 grid grid-cols-[1fr_auto] gap-3 rounded-2xl border border-white/10 bg-black/30 p-4">
+            <div>
+              <div className="text-xs font-black uppercase tracking-[0.18em] text-yellow-400">
+                Local time
               </div>
 
-              <div className="rounded-full border border-white/10 bg-[rgb(var(--card))] px-3 py-1 text-xs text-white/60">
-                {timezone}
+              <div className="mt-1 text-3xl font-black text-white">
+                {timeString || "—"}
+              </div>
+
+              <div className="mt-1 text-xs text-white/45">
+                {dateString || "—"}
               </div>
             </div>
+
+            {nextPrayer ? (
+              <div className="min-w-[110px] rounded-2xl border border-yellow-400/25 bg-yellow-400/10 px-4 py-3 text-right">
+                <div className="text-[0.65rem] font-black uppercase tracking-[0.17em] text-yellow-300">
+                  Next
+                </div>
+
+                <div className="mt-1 text-sm font-black text-white">
+                  {nextPrayer.name}
+                </div>
+
+                <div className="mt-0.5 text-xl font-black text-yellow-300">
+                  {formatDisplayTime(nextPrayer.value)}
+                </div>
+              </div>
+            ) : null}
           </div>
 
-          <div className="mt-6 flex flex-wrap gap-3">
+          <div className="mt-5 flex flex-wrap gap-2">
             <button
               type="button"
               onClick={useMyLocation}
-              disabled={locationLoading}
-              className="rounded-xl bg-yellow-500 px-4 py-3 text-sm font-bold text-black transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isLocationLoading}
+              className="premium-button px-4 py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {locationLoading ? "Finding nearest city..." : "Use my location"}
+              {isLocationLoading ? "Finding city..." : "Use my location"}
             </button>
 
-            {citySlug && (
+            {citySlug ? (
               <>
                 <Link
                   href={`/${citySlug}`}
-                  className="rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm font-semibold text-yellow-400 transition hover:bg-yellow-500/10"
+                  className="premium-button-outline px-4 py-2.5 text-sm"
                 >
-                  Open city page
+                  City page
                 </Link>
 
                 <Link
                   href={`/${citySlug}/mosques`}
-                  className="rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm font-semibold text-yellow-400 transition hover:bg-yellow-500/10"
+                  className="premium-button-outline px-4 py-2.5 text-sm"
                 >
-                  Browse mosques
+                  Mosques
                 </Link>
 
                 <Link
                   href={`/${citySlug}/businesses`}
-                  className="rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm font-semibold text-yellow-400 transition hover:bg-yellow-500/10"
+                  className="premium-button-outline px-4 py-2.5 text-sm"
                 >
-                  Browse halal businesses
+                  Halal places
                 </Link>
               </>
-            )}
-
-            {!citySlug && (
+            ) : (
               <Link
                 href="/near-me/pray"
-                className="rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm font-semibold text-yellow-400 transition hover:bg-yellow-500/10"
+                className="premium-button-outline px-4 py-2.5 text-sm"
               >
-                Open Pray Near Me
+                Pray Near Me
               </Link>
             )}
           </div>
 
-          {(locationStatus || detectedCity) && (
-            <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4 text-sm text-white/70">
-              {locationStatus}
+          {locationState.message ? (
+            <div
+              role={locationState.type === "error" ? "alert" : "status"}
+              className={[
+                "mt-4 rounded-2xl border p-3 text-sm leading-6",
+                locationState.type === "success"
+                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
+                  : locationState.type === "error"
+                    ? "border-red-500/25 bg-red-500/10 text-red-200"
+                    : "border-yellow-500/20 bg-yellow-500/10 text-yellow-100",
+              ].join(" ")}
+            >
+              {locationState.message}
             </div>
-          )}
+          ) : null}
         </div>
 
-        <div>
-          <div className="flex items-start justify-between gap-4">
+        <div className="premium-inset rounded-3xl p-5 sm:p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <div className="text-2xl font-black text-yellow-400">
-                Today’s beginning times
+              <div className="text-xs font-black uppercase tracking-[0.24em] text-yellow-400">
+                Today&apos;s beginning times
               </div>
 
-              <p className="mt-2 text-sm text-white/60">
-                {city
-                  ? `Daily salah beginning times for ${city.name}.`
-                  : "Select or detect your city to show today’s salah times."}
-              </p>
+              <h3 className="mt-2 text-xl font-black text-white">
+                {city ? `${cityName} prayer times` : "Select your city"}
+              </h3>
             </div>
 
-            <div className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-xs font-bold text-yellow-400">
-              Home view
-            </div>
-          </div>
-
-          <div className="mt-4 flex flex-wrap items-center gap-3">
             <div
-              className={`rounded-full border px-3 py-1 text-xs font-bold ${sourceBadge.className}`}
+              className={`w-fit rounded-full border px-3 py-1.5 text-xs font-bold ${sourceDetails.className}`}
             >
-              {sourceBadge.text}
+              {sourceDetails.label}
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-6">
+            {prayerItems.map((item) => {
+              const isNext =
+                nextPrayer?.name === item.name &&
+                hasAnyPrayerTime;
+
+              return (
+                <div
+                  key={item.name}
+                  className={[
+                    "rounded-2xl border px-2 py-3 text-center transition",
+                    isNext
+                      ? "border-yellow-400/45 bg-yellow-400/12 shadow-[0_0_24px_rgba(212,175,55,0.08)]"
+                      : "border-white/10 bg-black/25",
+                  ].join(" ")}
+                >
+                  <div className="text-[0.64rem] font-black uppercase tracking-[0.13em] text-yellow-400">
+                    {item.shortName}
+                  </div>
+
+                  <div className="mt-1.5 text-lg font-black text-white">
+                    {formatDisplayTime(item.value)}
+                  </div>
+
+                  {isNext ? (
+                    <div className="mt-1 text-[0.6rem] font-bold text-yellow-300">
+                      Next
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
+            <div className="text-xs leading-5 text-white/45">
+              {sourceDetails.description}
+              {formattedUpdatedAt
+                ? ` Last updated ${formattedUpdatedAt}.`
+                : ""}
             </div>
 
-            {prayerTimesSource === "manual_override" && formattedUpdatedAt && (
-              <div className="text-xs text-white/60">
-                Last updated: {formattedUpdatedAt}
-              </div>
-            )}
-          </div>
-
-          <div className="mt-2 text-xs leading-6 text-white/50">
-            {sourceDescription}
-          </div>
-
-          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {prayerItems.map((item) => (
-              <div
-                key={item.name}
-                className="rounded-2xl border border-white/10 bg-black/30 p-4 text-center"
+            {citySlug ? (
+              <Link
+                href={`/${citySlug}/prayer-times`}
+                className="text-xs font-bold text-yellow-300 hover:text-yellow-100"
               >
-                <div className="text-sm font-bold text-yellow-400">
-                  {item.name}
-                </div>
-
-                <div className="mt-2 text-xl font-black text-white">
-                  {formatDisplayTime(item.value)}
-                </div>
-
-                <div className="mt-1 text-xs text-white/50">Begins</div>
-              </div>
-            ))}
+                View full timetable →
+              </Link>
+            ) : null}
           </div>
 
-          {!hasAnyPrayerTime && (
-            <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4 text-sm leading-6 text-white/60">
-              {city
-                ? "Prayer times for this city are not available yet. You can still browse the city page, mosques, and halal businesses while this is being populated."
-                : "Choose a city or use location detection to show a personalised salah-time panel on your homepage."}
+          {!hasAnyPrayerTime ? (
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-4 text-sm leading-6 text-white/55">
+              Prayer times will appear here once a city is selected or detected.
             </div>
-          )}
+          ) : null}
         </div>
       </div>
     </section>

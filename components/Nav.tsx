@@ -1,8 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import {
+  usePathname,
+  useRouter,
+} from "next/navigation";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import Logo from "@/components/Logo";
 
@@ -13,6 +21,12 @@ type City = {
 
 type Props = {
   cities?: City[] | null;
+};
+
+type NavigationItem = {
+  href: string;
+  label: string;
+  active: boolean;
 };
 
 const RESERVED_SEGMENTS = new Set([
@@ -44,48 +58,43 @@ const RESERVED_SEGMENTS = new Set([
   "sitemap.xml",
 ]);
 
-function cleanText(value: string | null | undefined) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function formatCity(city: string | null | undefined) {
-  const value = cleanText(city);
-
-  if (!value) {
-    return "Cities";
+function cleanText(
+  value: string | null | undefined,
+  maxLength = 180
+): string {
+  if (typeof value !== "string") {
+    return "";
   }
 
-  return value
+  return value.trim().replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+function cleanSlug(value: string | null | undefined): string {
+  return cleanText(value, 160)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function formatCity(value: string | null | undefined): string {
+  const slug = cleanSlug(value);
+
+  if (!slug) {
+    return "City";
+  }
+
+  return slug
     .split("-")
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 }
 
-function isCitySegment(segment: string | null | undefined) {
-  const value = cleanText(segment).toLowerCase();
+function isCitySegment(segment: string | null | undefined): boolean {
+  const value = cleanSlug(segment);
 
-  if (!value) {
-    return false;
-  }
-
-  return !RESERVED_SEGMENTS.has(value);
-}
-
-function navClass(active: boolean) {
-  return [
-    "whitespace-nowrap text-sm font-medium transition",
-    active ? "text-yellow-400" : "text-white/70 hover:text-yellow-400",
-  ].join(" ");
-}
-
-function buttonNavClass(active: boolean) {
-  return [
-    "rounded-xl border px-3 py-2 text-sm font-semibold transition",
-    active
-      ? "border-yellow-400/70 bg-yellow-400/10 text-yellow-300"
-      : "border-yellow-500/25 bg-black/40 text-white/75 hover:border-yellow-400/60 hover:text-yellow-300",
-  ].join(" ");
+  return Boolean(value && !RESERVED_SEGMENTS.has(value));
 }
 
 function getSafeCities(cities?: City[] | null) {
@@ -93,7 +102,7 @@ function getSafeCities(cities?: City[] | null) {
 
   return (cities ?? [])
     .map((city) => {
-      const slug = cleanText(city.slug).toLowerCase();
+      const slug = cleanSlug(city.slug);
       const name = cleanText(city.name) || formatCity(slug);
 
       return {
@@ -107,243 +116,438 @@ function getSafeCities(cities?: City[] | null) {
       }
 
       seen.add(city.slug);
+
       return true;
     })
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((first, second) =>
+      first.name.localeCompare(second.name, "en-GB")
+    );
+}
+
+function desktopLinkClass(active: boolean): string {
+  return [
+    "relative whitespace-nowrap py-3 text-sm font-semibold transition",
+    "after:absolute after:inset-x-0 after:-bottom-0.5 after:h-px after:origin-center after:scale-x-0 after:bg-yellow-400 after:transition-transform",
+    active
+      ? "text-yellow-300 after:scale-x-100"
+      : "text-white/66 hover:text-yellow-200 hover:after:scale-x-100",
+  ].join(" ");
+}
+
+function mobileLinkClass(active: boolean): string {
+  return [
+    "flex min-h-12 items-center justify-between rounded-2xl border px-4 py-3 text-sm font-bold transition",
+    active
+      ? "border-yellow-400/45 bg-yellow-400/10 text-yellow-200"
+      : "border-white/10 bg-white/[0.025] text-white/72 hover:border-yellow-400/30 hover:bg-yellow-400/[0.05] hover:text-yellow-200",
+  ].join(" ");
 }
 
 export default function Nav({ cities = [] }: Props) {
   const pathname = usePathname() || "/";
   const router = useRouter();
+  const mobileMenuRef = useRef<HTMLDivElement | null>(null);
 
   const [selectedCity, setSelectedCity] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const sortedCities = useMemo(() => getSafeCities(cities), [cities]);
+  const sortedCities = useMemo(
+    () => getSafeCities(cities),
+    [cities]
+  );
 
-  const parts = useMemo(() => pathname.split("/").filter(Boolean), [pathname]);
-  const firstSegment = parts.length > 0 ? parts[0] : null;
-  const city = isCitySegment(firstSegment) ? firstSegment : null;
+  const pathParts = useMemo(
+    () => pathname.split("/").filter(Boolean),
+    [pathname]
+  );
 
-  const isHome = pathname === "/";
-  const isPrayNearMe = pathname.startsWith("/near-me/pray");
-  const isHajj = pathname.startsWith("/hajj");
-  const isUmrah = pathname.startsWith("/umrah");
-  const isHowItWorks = pathname.startsWith("/how-it-works");
-  const isTravel = pathname.startsWith("/travel");
-  const isTravelNearMe = pathname.startsWith("/travel/near-me");
-  const isGlobalBusinesses = pathname === "/businesses";
-  const isAdvertise = pathname.startsWith("/advertise");
-  const isDashboard =
-    pathname.startsWith("/dashboard") || pathname.startsWith("/business-dashboard");
+  const firstSegment = pathParts[0] ?? null;
+  const city = isCitySegment(firstSegment)
+    ? cleanSlug(firstSegment)
+    : null;
 
-  const isCityHome = city ? pathname === `/${city}` : false;
-  const isCityMosques = city ? pathname.startsWith(`/${city}/mosques`) : false;
-  const isCityBusinesses = city
-    ? pathname.startsWith(`/${city}/businesses`)
-    : false;
+  const navigationItems = useMemo<NavigationItem[]>(() => {
+    return [
+      {
+        href: "/",
+        label: "Home",
+        active: pathname === "/",
+      },
+      {
+        href: "/near-me/pray",
+        label: "Pray near me",
+        active: pathname.startsWith("/near-me/pray"),
+      },
+      {
+        href: "/businesses",
+        label: "Halal businesses",
+        active:
+          pathname === "/businesses" ||
+          Boolean(city && pathname.startsWith(`/${city}/businesses`)),
+      },
+      {
+        href: "/travel",
+        label: "Travel",
+        active: pathname.startsWith("/travel"),
+      },
+      {
+        href: "/hajj",
+        label: "Hajj",
+        active: pathname.startsWith("/hajj"),
+      },
+      {
+        href: "/umrah",
+        label: "Umrah",
+        active: pathname.startsWith("/umrah"),
+      },
+    ];
+  }, [city, pathname]);
 
   useEffect(() => {
     setSelectedCity(city ?? "");
     setMobileOpen(false);
   }, [city, pathname]);
 
-  function handleCityChange(nextSlug: string) {
-    const cleanSlug = cleanText(nextSlug).toLowerCase();
-
-    setSelectedCity(cleanSlug);
-
-    if (!cleanSlug) {
+  useEffect(() => {
+    if (!mobileOpen) {
       return;
     }
 
-    router.push(`/${cleanSlug}`);
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMobileOpen(false);
+      }
+    }
+
+    function handleOutsideClick(event: MouseEvent) {
+      const target = event.target;
+
+      if (
+        target instanceof Node &&
+        mobileMenuRef.current &&
+        !mobileMenuRef.current.contains(target)
+      ) {
+        setMobileOpen(false);
+      }
+    }
+
+    document.addEventListener("keydown", handleEscape);
+    document.addEventListener("mousedown", handleOutsideClick);
+
+    return () => {
+      document.removeEventListener("keydown", handleEscape);
+      document.removeEventListener("mousedown", handleOutsideClick);
+    };
+  }, [mobileOpen]);
+
+  function handleCityChange(nextValue: string) {
+    const nextSlug = cleanSlug(nextValue);
+
+    setSelectedCity(nextSlug);
+
+    if (!nextSlug) {
+      return;
+    }
+
+    document.cookie = [
+      `snm_city=${encodeURIComponent(nextSlug)}`,
+      "path=/",
+      "max-age=31536000",
+      "samesite=lax",
+      window.location.protocol === "https:" ? "secure" : "",
+    ]
+      .filter(Boolean)
+      .join("; ");
+
+    router.push(`/${nextSlug}`);
   }
 
+  const dashboardActive =
+    pathname.startsWith("/dashboard") ||
+    pathname.startsWith("/business-dashboard");
+
+  const cityHomeActive = Boolean(
+    city && pathname === `/${city}`
+  );
+
+  const cityMosquesActive = Boolean(
+    city && pathname.startsWith(`/${city}/mosques`)
+  );
+
+  const cityBusinessesActive = Boolean(
+    city && pathname.startsWith(`/${city}/businesses`)
+  );
+
   return (
-    <header className="sticky top-0 z-50 border-b border-yellow-500/20 bg-black/95 backdrop-blur-xl print:hidden">
-      <div className="mx-auto flex min-h-[96px] w-full max-w-7xl items-center justify-between gap-4 px-4 py-3">
+    <header className="sticky top-0 z-50 border-b border-yellow-500/15 bg-[#01040d]/92 backdrop-blur-2xl print:hidden">
+      <div className="mx-auto flex min-h-[82px] w-full max-w-[1440px] items-center gap-4 px-4 sm:px-6">
         <Link
           href="/"
-          className="flex min-w-0 shrink-0 items-center gap-3"
-          aria-label="Go to SalahNearMe homepage"
+          aria-label="Open the SalahNearMe homepage"
+          className="group flex min-w-0 shrink-0 items-center gap-3"
         >
-          <Logo className="h-auto max-h-24 w-auto max-w-[210px] shrink-0 sm:max-w-[260px]" />
+          <Logo className="h-auto max-h-[68px] w-auto max-w-[185px] object-contain transition duration-300 group-hover:brightness-110 sm:max-w-[220px]" />
 
-          <span className="hidden whitespace-nowrap text-lg font-bold text-yellow-400 lg:block">
+          <span className="hidden whitespace-nowrap text-lg font-black text-yellow-400 2xl:block">
             SalahNearMe
           </span>
         </Link>
 
         <nav
-          aria-label="Main navigation"
-          className="hidden min-w-0 flex-1 items-center justify-end gap-5 xl:flex"
+          aria-label="Primary navigation"
+          className="hidden min-w-0 flex-1 items-center justify-center gap-5 xl:flex 2xl:gap-7"
         >
-          <Link href="/" className={navClass(isHome)}>
-            Home
-          </Link>
+          {navigationItems.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={desktopLinkClass(item.active)}
+            >
+              {item.label}
+            </Link>
+          ))}
 
-          <Link href="/near-me/pray" className={navClass(isPrayNearMe)}>
-            Pray near me
-          </Link>
-
-          <Link href="/hajj" className={navClass(isHajj)}>
-            Hajj
-          </Link>
-
-          <Link href="/umrah" className={navClass(isUmrah)}>
-            Umrah
-          </Link>
-
-          <Link href="/businesses" className={navClass(isGlobalBusinesses)}>
-            Halal Businesses
-          </Link>
-
-          <Link href="/travel" className={navClass(isTravel && !isTravelNearMe)}>
-            Travel
-          </Link>
-
-          <Link href="/travel/near-me" className={navClass(isTravelNearMe)}>
-            Near me
-          </Link>
-
-          <Link href="/how-it-works" className={navClass(isHowItWorks)}>
+          <Link
+            href="/how-it-works"
+            className={desktopLinkClass(
+              pathname.startsWith("/how-it-works")
+            )}
+          >
             How it works
           </Link>
+        </nav>
 
-          <div className="w-[180px] shrink-0">
-            <label htmlFor="nav-city-select" className="sr-only">
+        <div className="ml-auto hidden shrink-0 items-center gap-2 xl:flex">
+          <div className="relative w-[185px] 2xl:w-[210px]">
+            <label htmlFor="desktop-city-select" className="sr-only">
               Choose city
             </label>
 
             <select
-              id="nav-city-select"
+              id="desktop-city-select"
               value={selectedCity}
-              onChange={(event) => handleCityChange(event.target.value)}
-              className="w-full cursor-pointer rounded-xl border border-yellow-500/35 bg-black px-3 py-2.5 text-sm text-white outline-none transition hover:border-yellow-400/60 focus:border-yellow-400"
+              onChange={(event) =>
+                handleCityChange(event.target.value)
+              }
+              className="premium-select appearance-none pr-10 text-sm font-semibold"
             >
               <option value="">Choose city</option>
 
               {sortedCities.map((cityOption) => (
-                <option key={cityOption.slug} value={cityOption.slug}>
+                <option
+                  key={cityOption.slug}
+                  value={cityOption.slug}
+                >
                   {cityOption.name}
                 </option>
               ))}
             </select>
-          </div>
-        </nav>
 
-        <div className="flex min-w-0 items-center gap-2 xl:hidden">
-          <Link href="/near-me/pray" className={buttonNavClass(isPrayNearMe)}>
-            Pray
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-xs text-yellow-300"
+            >
+              ▾
+            </span>
+          </div>
+        </div>
+
+        <div
+          ref={mobileMenuRef}
+          className="relative ml-auto flex items-center gap-2 xl:hidden"
+        >
+          <Link
+            href="/near-me/pray"
+            className="hidden rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm font-bold text-yellow-300 transition hover:border-yellow-400/60 sm:inline-flex"
+          >
+            Pray now
           </Link>
 
           <button
             type="button"
             onClick={() => setMobileOpen((current) => !current)}
-            className="rounded-xl border border-yellow-500/35 bg-black px-3 py-2 text-sm font-semibold text-white transition hover:border-yellow-400 hover:text-yellow-300"
             aria-expanded={mobileOpen}
             aria-controls="mobile-navigation"
+            aria-label={
+              mobileOpen
+                ? "Close navigation menu"
+                : "Open navigation menu"
+            }
+            className="premium-icon-button"
           >
-            Menu
+            <span className="sr-only">
+              {mobileOpen ? "Close menu" : "Open menu"}
+            </span>
+
+            <span
+              aria-hidden="true"
+              className="flex h-5 w-5 flex-col justify-center gap-1.5"
+            >
+              <span
+                className={[
+                  "h-0.5 w-full rounded-full bg-current transition",
+                  mobileOpen
+                    ? "translate-y-2 rotate-45"
+                    : "",
+                ].join(" ")}
+              />
+
+              <span
+                className={[
+                  "h-0.5 w-full rounded-full bg-current transition",
+                  mobileOpen ? "opacity-0" : "",
+                ].join(" ")}
+              />
+
+              <span
+                className={[
+                  "h-0.5 w-full rounded-full bg-current transition",
+                  mobileOpen
+                    ? "-translate-y-2 -rotate-45"
+                    : "",
+                ].join(" ")}
+              />
+            </span>
           </button>
+
+          {mobileOpen ? (
+            <div
+              id="mobile-navigation"
+              className="absolute right-0 top-[calc(100%+0.8rem)] w-[min(92vw,430px)] rounded-3xl border border-yellow-500/20 bg-[#030918]/98 p-4 shadow-2xl shadow-black/60 backdrop-blur-2xl"
+            >
+              <div className="mb-4 flex items-center justify-between border-b border-white/10 pb-4">
+                <div>
+                  <div className="text-xs font-black uppercase tracking-[0.22em] text-yellow-400">
+                    SalahNearMe
+                  </div>
+
+                  <div className="mt-1 text-sm text-white/50">
+                    Find. Pray. Connect.
+                  </div>
+                </div>
+
+                <span className="premium-badge">
+                  Menu
+                </span>
+              </div>
+
+              <nav
+                aria-label="Mobile navigation"
+                className="grid gap-2 sm:grid-cols-2"
+              >
+                {navigationItems.map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={mobileLinkClass(item.active)}
+                  >
+                    <span>{item.label}</span>
+                    <span aria-hidden="true">→</span>
+                  </Link>
+                ))}
+
+                <Link
+                  href="/how-it-works"
+                  className={mobileLinkClass(
+                    pathname.startsWith("/how-it-works")
+                  )}
+                >
+                  <span>How it works</span>
+                  <span aria-hidden="true">→</span>
+                </Link>
+
+                <Link
+                  href="/advertise"
+                  className={mobileLinkClass(
+                    pathname.startsWith("/advertise")
+                  )}
+                >
+                  <span>Advertise</span>
+                  <span aria-hidden="true">→</span>
+                </Link>
+
+                <Link
+                  href="/business-dashboard"
+                  className={mobileLinkClass(dashboardActive)}
+                >
+                  <span>Dashboard</span>
+                  <span aria-hidden="true">→</span>
+                </Link>
+
+                {city ? (
+                  <>
+                    <Link
+                      href={`/${city}`}
+                      className={mobileLinkClass(cityHomeActive)}
+                    >
+                      <span>{formatCity(city)}</span>
+                      <span aria-hidden="true">→</span>
+                    </Link>
+
+                    <Link
+                      href={`/${city}/mosques`}
+                      className={mobileLinkClass(
+                        cityMosquesActive
+                      )}
+                    >
+                      <span>City mosques</span>
+                      <span aria-hidden="true">→</span>
+                    </Link>
+
+                    <Link
+                      href={`/${city}/businesses`}
+                      className={mobileLinkClass(
+                        cityBusinessesActive
+                      )}
+                    >
+                      <span>City businesses</span>
+                      <span aria-hidden="true">→</span>
+                    </Link>
+                  </>
+                ) : null}
+              </nav>
+
+              <div className="mt-4 border-t border-white/10 pt-4">
+                <label
+                  htmlFor="mobile-city-select"
+                  className="mb-2 block text-xs font-black uppercase tracking-[0.2em] text-yellow-400"
+                >
+                  Choose your city
+                </label>
+
+                <div className="relative">
+                  <select
+                    id="mobile-city-select"
+                    value={selectedCity}
+                    onChange={(event) =>
+                      handleCityChange(event.target.value)
+                    }
+                    className="premium-select appearance-none pr-10 text-sm"
+                  >
+                    <option value="">Choose city</option>
+
+                    {sortedCities.map((cityOption) => (
+                      <option
+                        key={cityOption.slug}
+                        value={cityOption.slug}
+                      >
+                        {cityOption.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-xs text-yellow-300"
+                  >
+                    ▾
+                  </span>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
-
-      {mobileOpen && (
-        <div
-          id="mobile-navigation"
-          className="border-t border-yellow-500/15 bg-black/95 px-4 py-4 xl:hidden"
-        >
-          <nav
-            aria-label="Mobile navigation"
-            className="mx-auto grid max-w-7xl gap-3 sm:grid-cols-2 lg:grid-cols-4"
-          >
-            <Link href="/" className={buttonNavClass(isHome)}>
-              Home
-            </Link>
-
-            <Link href="/near-me/pray" className={buttonNavClass(isPrayNearMe)}>
-              Pray near me
-            </Link>
-
-            <Link href="/businesses" className={buttonNavClass(isGlobalBusinesses)}>
-              Halal Businesses
-            </Link>
-
-            <Link href="/hajj" className={buttonNavClass(isHajj)}>
-              Hajj
-            </Link>
-
-            <Link href="/umrah" className={buttonNavClass(isUmrah)}>
-              Umrah
-            </Link>
-
-            <Link href="/travel" className={buttonNavClass(isTravel && !isTravelNearMe)}>
-              Travel
-            </Link>
-
-            <Link href="/travel/near-me" className={buttonNavClass(isTravelNearMe)}>
-              Near me
-            </Link>
-
-            <Link href="/how-it-works" className={buttonNavClass(isHowItWorks)}>
-              How it works
-            </Link>
-
-            <Link href="/advertise" className={buttonNavClass(isAdvertise)}>
-              Advertise
-            </Link>
-
-            <Link href="/dashboard/business" className={buttonNavClass(isDashboard)}>
-              Dashboard
-            </Link>
-
-            {city ? (
-              <>
-                <Link href={`/${city}`} className={buttonNavClass(isCityHome)}>
-                  {formatCity(city)}
-                </Link>
-
-                <Link
-                  href={`/${city}/mosques`}
-                  className={buttonNavClass(isCityMosques)}
-                >
-                  Mosques
-                </Link>
-
-                <Link
-                  href={`/${city}/businesses`}
-                  className={buttonNavClass(isCityBusinesses)}
-                >
-                  {formatCity(city)} Businesses
-                </Link>
-              </>
-            ) : null}
-
-            <div className="sm:col-span-2 lg:col-span-4">
-              <label htmlFor="mobile-city-select" className="sr-only">
-                Choose city
-              </label>
-
-              <select
-                id="mobile-city-select"
-                value={selectedCity}
-                onChange={(event) => handleCityChange(event.target.value)}
-                className="w-full cursor-pointer rounded-xl border border-yellow-500/35 bg-black px-3 py-3 text-sm text-white outline-none transition hover:border-yellow-400/60 focus:border-yellow-400"
-              >
-                <option value="">Choose city</option>
-
-                {sortedCities.map((cityOption) => (
-                  <option key={cityOption.slug} value={cityOption.slug}>
-                    {cityOption.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </nav>
-        </div>
-      )}
     </header>
   );
 }
