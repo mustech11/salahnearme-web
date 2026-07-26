@@ -148,7 +148,8 @@ export const metadata: Metadata = {
     locale: "en_GB",
     url: CLEAN_SITE_URL,
     siteName: SITE_NAME,
-    title: "SalahNearMe | Find Mosques, Prayer Times & Halal Places",
+    title:
+      "SalahNearMe | Find Mosques, Prayer Times & Halal Places",
     description: SITE_DESCRIPTION,
 
     images: [
@@ -156,14 +157,16 @@ export const metadata: Metadata = {
         url: "/social-icon.png",
         width: 1200,
         height: 630,
-        alt: "SalahNearMe - Find mosques, prayer times and halal places near you",
+        alt:
+          "SalahNearMe - Find mosques, prayer times and halal places near you",
       },
     ],
   },
 
   twitter: {
     card: "summary_large_image",
-    title: "SalahNearMe | Mosques, Prayer Times & Halal Businesses",
+    title:
+      "SalahNearMe | Mosques, Prayer Times & Halal Businesses",
     description: SITE_DESCRIPTION,
     images: ["/social-icon.png"],
   },
@@ -179,7 +182,9 @@ export const viewport: Viewport = {
   maximumScale: 5,
 };
 
-function cleanText(value: string | null | undefined): string | null {
+function cleanText(
+  value: string | null | undefined
+): string | null {
   const cleaned = value?.trim();
 
   return cleaned ? cleaned : null;
@@ -202,7 +207,9 @@ async function loadNavCities(): Promise<CityNavRow[]> {
       ascending: true,
     })
     .limit(NAV_CITIES_LIMIT)
-    .abortSignal(AbortSignal.timeout(NAV_CITIES_TIMEOUT_MS));
+    .abortSignal(
+      AbortSignal.timeout(NAV_CITIES_TIMEOUT_MS)
+    );
 
   if (error) {
     throw new Error(
@@ -213,7 +220,10 @@ async function loadNavCities(): Promise<CityNavRow[]> {
   const seenSlugs = new Set<string>();
   const cities: CityNavRow[] = [];
 
-  for (const row of (data ?? []) as CityNavDatabaseRow[]) {
+  for (
+    const row of
+    (data ?? []) as CityNavDatabaseRow[]
+  ) {
     const slug = cleanText(row.slug);
     const name = cleanText(row.name);
 
@@ -239,30 +249,73 @@ async function loadNavCities(): Promise<CityNavRow[]> {
 
 const getCachedNavCities = unstable_cache(
   loadNavCities,
-  ["root-layout-navigation-cities-v1"],
+  ["root-layout-navigation-cities-v2"],
   {
     revalidate: NAV_CITIES_REVALIDATE_SECONDS,
     tags: ["navigation-cities"],
   }
 );
 
-let navCitiesPromise: Promise<CityNavRow[]> | null = null;
+let navCitiesPromise: Promise<CityNavRow[]> | null =
+  null;
 
 async function getNavCities(): Promise<CityNavRow[]> {
   if (!navCitiesPromise) {
-    navCitiesPromise = getCachedNavCities().catch((error: unknown) => {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Unknown navigation cities error";
+    navCitiesPromise = getCachedNavCities().catch(
+      (error: unknown) => {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Unknown navigation cities error";
 
-      console.error("RootLayout cities unavailable:", message);
+        console.error(
+          "RootLayout cities unavailable:",
+          message
+        );
 
-      return [];
-    });
+        return [];
+      }
+    );
   }
 
   return navCitiesPromise;
+}
+
+function GlobalBackgroundEffects() {
+  return (
+    <div
+      aria-hidden="true"
+      className="site-background-effects"
+    >
+      <div className="site-background-base" />
+      <div className="site-background-grid" />
+      <div className="site-background-vignette" />
+
+      <div className="site-orbit site-orbit-one">
+        <span className="site-orbit-ring site-orbit-ring-one" />
+        <span className="site-orbit-ring site-orbit-ring-two" />
+        <span className="site-orbit-ring site-orbit-ring-three" />
+        <span className="site-orbit-point site-orbit-point-one" />
+      </div>
+
+      <div className="site-orbit site-orbit-two">
+        <span className="site-orbit-ring site-orbit-ring-one" />
+        <span className="site-orbit-ring site-orbit-ring-two" />
+        <span className="site-orbit-ring site-orbit-ring-three" />
+        <span className="site-orbit-point site-orbit-point-two" />
+      </div>
+
+      <div className="site-orbit site-orbit-three">
+        <span className="site-orbit-ring site-orbit-ring-one" />
+        <span className="site-orbit-ring site-orbit-ring-two" />
+        <span className="site-orbit-ring site-orbit-ring-three" />
+      </div>
+
+      <div className="site-background-dots" />
+      <div className="site-background-gold-glow" />
+      <div className="site-background-blue-glow" />
+    </div>
+  );
 }
 
 export default async function RootLayout({
@@ -289,8 +342,10 @@ export default async function RootLayout({
     description: SITE_DESCRIPTION,
     potentialAction: {
       "@type": "SearchAction",
-      target: `${CLEAN_SITE_URL}/businesses?q={search_term_string}`,
-      "query-input": "required name=search_term_string",
+      target:
+        `${CLEAN_SITE_URL}/businesses?q={search_term_string}`,
+      "query-input":
+        "required name=search_term_string",
     },
   };
 
@@ -303,7 +358,9 @@ export default async function RootLayout({
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
-            __html: JSON.stringify(organizationJsonLd),
+            __html: JSON.stringify(
+              organizationJsonLd
+            ),
           }}
         />
 
@@ -314,40 +371,22 @@ export default async function RootLayout({
           }}
         />
 
-        <div className="fixed inset-0 -z-10 overflow-hidden">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(212,175,55,0.12),transparent_32%),linear-gradient(135deg,#020826_0%,#06153A_45%,#01030D_100%)]" />
+        <GlobalBackgroundEffects />
 
-          <div className="absolute left-0 top-0 h-[360px] w-[360px] opacity-35">
-            <div className="absolute left-[-140px] top-[20px] h-[2px] w-[560px] rotate-45 bg-gradient-to-r from-transparent via-yellow-400 to-transparent" />
-            <div className="absolute left-[-105px] top-[55px] h-[2px] w-[560px] rotate-45 bg-gradient-to-r from-transparent via-yellow-400 to-transparent" />
-            <div className="absolute left-[-70px] top-[90px] h-[2px] w-[560px] rotate-45 bg-gradient-to-r from-transparent via-yellow-400 to-transparent" />
-            <div className="absolute left-[-35px] top-[125px] h-[2px] w-[560px] rotate-45 bg-gradient-to-r from-transparent via-yellow-400 to-transparent" />
-            <div className="absolute left-[0px] top-[160px] h-[2px] w-[560px] rotate-45 bg-gradient-to-r from-transparent via-yellow-400 to-transparent" />
-          </div>
-
-          <div className="absolute right-[-160px] top-[-160px] h-[560px] w-[560px] rounded-full border border-yellow-400/10" />
-          <div className="absolute right-[-100px] top-[-100px] h-[440px] w-[440px] rounded-full border border-yellow-400/10" />
-          <div className="absolute right-[-40px] top-[-40px] h-[320px] w-[320px] rounded-full border border-yellow-400/10" />
-
-          <div className="absolute bottom-0 left-0 h-[280px] w-[280px] bg-[radial-gradient(circle,rgba(212,175,55,0.35)_1px,transparent_1px)] bg-[size:12px_12px] opacity-20" />
-
-          <div className="absolute left-1/2 top-0 h-[460px] w-[460px] -translate-x-1/2 rounded-full bg-yellow-500/10 blur-3xl" />
-          <div className="absolute bottom-[-160px] right-[-80px] h-[420px] w-[420px] rounded-full bg-yellow-500/5 blur-3xl" />
-        </div>
-
-        <div className="relative flex min-h-screen flex-col">
+        <div className="site-shell">
           <Nav cities={cities} />
 
-          <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8">
+          <main className="relative z-10 mx-auto w-full max-w-7xl flex-1 px-4 py-8">
             {children}
           </main>
 
-          <footer className="border-t border-yellow-500/20 bg-[#020826]/90 backdrop-blur-xl">
+          <footer className="relative z-10 border-t border-yellow-500/20 bg-[#020826]/90 backdrop-blur-xl">
             <div className="mx-auto max-w-7xl px-4 py-6">
               <div className="flex flex-col gap-4 text-xs text-white/60 md:flex-row md:items-center md:justify-between">
                 <div>
-                  © {new Date().getFullYear()} SalahNearMe — Connecting the
-                  Ummah locally.
+                  © {new Date().getFullYear()}{" "}
+                  SalahNearMe — Connecting the Ummah
+                  locally.
                 </div>
 
                 <div className="flex flex-wrap gap-4">
