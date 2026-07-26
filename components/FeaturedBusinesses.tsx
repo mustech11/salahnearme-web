@@ -1,8 +1,18 @@
 import Link from "next/link";
 
 import BusinessTrackedLink from "@/components/BusinessTrackedLink";
-import { sortBusinessesByRank } from "@/lib/businessRanking";
+import {
+  isBusinessPaidActive,
+  sortBusinessesByRank,
+} from "@/lib/businessRanking";
 import { supabasePublic } from "@/lib/supabaseServer";
+
+type Props = {
+  city?: string | null;
+  citySlug?: string | null;
+  limit?: number;
+  className?: string;
+};
 
 type FeaturedBusinessRow = {
   id: string;
@@ -22,6 +32,8 @@ type FeaturedBusinessRow = {
   featured: boolean | null;
   featured_rank: number | null;
   pricing_tier: string | null;
+  subscription_type?: string | null;
+  subscription_status?: string | null;
   paid_until: string | null;
   is_verified: boolean | null;
   sponsorship_active?: boolean | null;
@@ -31,68 +43,117 @@ type FeaturedBusinessRow = {
   sponsor_city_id?: number | null;
   can_advertise?: boolean | null;
   is_live?: boolean | null;
+  trust_score?: number | null;
+  quality_score?: number | null;
+  ranking_score?: number | null;
 };
 
-function formatLabel(value: string | null | undefined) {
-  if (!value) {
+const DEFAULT_LIMIT = 6;
+const MAX_QUERY_ROWS = 30;
+
+function cleanText(
+  value: string | null | undefined
+): string {
+  return String(value ?? "").trim();
+}
+
+function formatLabel(
+  value: string | null | undefined
+): string {
+  const cleaned = cleanText(value);
+
+  if (!cleaned) {
     return "Halal business";
   }
 
-  return value
+  return cleaned
     .replace(/_/g, " ")
     .replace(/-/g, " ")
-    .replace(/\b\w/g, (m) => m.toUpperCase());
+    .replace(/\b\w/g, (letter) =>
+      letter.toUpperCase()
+    );
 }
 
-function slugify(value: string) {
-  return value.toLowerCase().trim().replace(/\s+/g, "-");
-}
-
-function normaliseExternalUrl(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  const trimmed = value.trim();
+function normaliseExternalUrl(
+  value: string | null | undefined
+): string | null {
+  const trimmed = cleanText(value);
 
   if (!trimmed) {
     return null;
   }
 
-  if (
-    trimmed.startsWith("http://") ||
-    trimmed.startsWith("https://")
-  ) {
+  if (/^https?:\/\//i.test(trimmed)) {
     return trimmed;
   }
 
   return `https://${trimmed}`;
 }
 
-function isPaidActive(value: string | null | undefined) {
-  if (!value) {
-    return false;
-  }
-
-  const time = new Date(value).getTime();
-
-  return Number.isFinite(time) && time > Date.now();
-}
-
-function getCardImage(business: FeaturedBusinessRow) {
+function getCardImage(
+  business: FeaturedBusinessRow
+): string | null {
   return (
-    business.cover_image_url ||
-    business.logo_url ||
-    business.gallery_urls?.[0] ||
+    cleanText(
+      business.cover_image_url
+    ) ||
+    cleanText(business.logo_url) ||
+    cleanText(
+      business.gallery_urls?.[0]
+    ) ||
     null
   );
 }
 
+function getInitials(
+  value: string | null | undefined
+): string {
+  const name =
+    cleanText(value) ||
+    "Halal Business";
+
+  return name
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((word) => word[0])
+    .join("")
+    .toUpperCase();
+}
+
+function isPromoted(
+  business: FeaturedBusinessRow
+): boolean {
+  const active =
+    isBusinessPaidActive(
+      business.paid_until
+    ) ||
+    business.sponsorship_active ===
+      true ||
+    business.subscription_status ===
+      "active" ||
+    business.subscription_status ===
+      "paypal_paid";
+
+  return Boolean(
+    active &&
+      (business.featured ||
+        business.city_sponsor ||
+        business.mosque_sponsor ||
+        business.sponsorship_active)
+  );
+}
+
 export default async function FeaturedBusinesses({
-  city,
-}: {
-  city?: string | null;
-}) {
+  city = null,
+  citySlug = null,
+  limit = DEFAULT_LIMIT,
+  className = "",
+}: Props) {
+  const safeLimit = Math.max(
+    1,
+    Math.min(limit, 12)
+  );
+
   const supabase = supabasePublic();
 
   let query = supabase
@@ -116,6 +177,8 @@ export default async function FeaturedBusinesses({
       featured,
       featured_rank,
       pricing_tier,
+      subscription_type,
+      subscription_status,
       paid_until,
       is_verified,
       sponsorship_active,
@@ -124,14 +187,18 @@ export default async function FeaturedBusinesses({
       sponsor_mosque_id,
       sponsor_city_id,
       can_advertise,
-      is_live
+      is_live,
+      trust_score,
+      quality_score,
+      ranking_score
     `
     )
-    .eq("featured", true)
-    .eq("is_live", true)
     .eq("can_advertise", true)
+    .eq("is_live", true)
+    .not("slug", "is", null)
     .order("featured_rank", {
       ascending: true,
+      nullsFirst: false,
     })
     .order("is_verified", {
       ascending: false,
@@ -139,227 +206,362 @@ export default async function FeaturedBusinesses({
     .order("name", {
       ascending: true,
     })
-    .limit(12);
+    .limit(MAX_QUERY_ROWS);
 
   if (city) {
     query = query.eq("city", city);
   }
 
-  const { data, error } = await query;
+  const { data, error } =
+    await query;
 
   if (error) {
-    return (
-      <div className="mt-10 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
-        Could not load featured businesses.
-      </div>
+    console.warn(
+      "Featured businesses unavailable:",
+      error.message
     );
-  }
 
-  const businesses = sortBusinessesByRank(
-    (data ?? []) as FeaturedBusinessRow[],
-    {
-      cityName: city ?? null,
-      cityId: null,
-      mosqueId: null,
-    }
-  )
-    .filter((business) => {
-      if (!business.featured) {
-        return false;
-      }
-
-      if (!business.paid_until) {
-        return true;
-      }
-
-      return isPaidActive(business.paid_until);
-    })
-    .slice(0, 12);
-
-  if (!businesses.length) {
     return null;
   }
 
-  const cityHref = city ? `/${slugify(city)}/businesses` : "/businesses";
+  const rows =
+    (data ??
+      []) as unknown as FeaturedBusinessRow[];
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  const ranked =
+    sortBusinessesByRank(rows, {
+      cityName: city,
+      rotateSponsors: true,
+    });
+
+  const promoted = ranked.filter(
+    isPromoted
+  );
+
+  const verifiedFallback =
+    ranked.filter(
+      (business) =>
+        business.is_verified &&
+        !promoted.some(
+          (promotedBusiness) =>
+            promotedBusiness.id ===
+            business.id
+        )
+    );
+
+  const standardFallback =
+    ranked.filter(
+      (business) =>
+        !promoted.some(
+          (promotedBusiness) =>
+            promotedBusiness.id ===
+            business.id
+        ) &&
+        !verifiedFallback.some(
+          (verifiedBusiness) =>
+            verifiedBusiness.id ===
+            business.id
+        )
+    );
+
+  const businesses = [
+    ...promoted,
+    ...verifiedFallback,
+    ...standardFallback,
+  ].slice(0, safeLimit);
+
+  if (businesses.length === 0) {
+    return null;
+  }
+
+  const viewAllHref =
+    citySlug
+      ? `/${citySlug}/businesses`
+      : "/businesses";
 
   return (
-    <section className="mt-10 rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8">
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <section
+      aria-labelledby="featured-businesses-heading"
+      className={[
+        "premium-panel relative overflow-hidden rounded-[2rem] p-5 sm:p-7",
+        className,
+      ].join(" ")}
+    >
+      <div
+        aria-hidden="true"
+        className="absolute -left-28 -top-28 h-80 w-80 rounded-full border border-emerald-400/[0.08] bg-emerald-400/[0.02]"
+      />
+
+      <div className="relative flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
-            Featured Businesses
+          <div className="section-kicker">
+            Featured businesses
           </div>
 
-          <h2 className="mt-2 text-2xl font-black text-white">
-            Trusted halal businesses
+          <h2
+            id="featured-businesses-heading"
+            className="mt-3 text-3xl font-black tracking-tight text-white sm:text-4xl"
+          >
+            {city
+              ? `Halal businesses in ${city}`
+              : "Trusted halal businesses"}
           </h2>
 
-          <p className="mt-2 text-sm text-white/60">
-            Local halal places and Muslim-friendly businesses supporting the
-            platform.
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-white/55">
+            Discover promoted, verified and
+            high-quality Muslim-friendly
+            businesses ranked by active
+            placement and trust.
           </p>
         </div>
 
         <Link
-          href={cityHref}
-          className="text-sm font-semibold text-yellow-400 hover:text-yellow-300"
+          href={viewAllHref}
+          className="inline-flex shrink-0 items-center gap-2 text-sm font-bold text-yellow-300 transition hover:text-yellow-100"
         >
-          View all →
+          View all businesses
+          <span aria-hidden="true">
+            →
+          </span>
         </Link>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {businesses.map((business, index) => {
-          const cardImage = getCardImage(business);
-          const websiteUrl = normaliseExternalUrl(business.website);
-          const mapsUrl = normaliseExternalUrl(business.maps_url);
-          const paidActive = isPaidActive(business.paid_until);
-          const premium =
-            paidActive &&
-            Boolean(
-              business.featured ||
-                business.city_sponsor ||
-                business.mosque_sponsor ||
-                business.sponsorship_active
-            );
+      <div className="relative mt-7 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {businesses.map(
+          (business, index) => {
+            const cardImage =
+              getCardImage(business);
 
-          return (
-            <article
-              key={business.id}
-              className={`overflow-hidden rounded-3xl border transition ${
-                premium
-                  ? "border-yellow-500/40 bg-yellow-500/[0.04] shadow-[0_0_35px_rgba(212,175,55,0.08)]"
-                  : "border-yellow-500/20 bg-black/30 hover:border-yellow-400/40"
-              }`}
-            >
-              {cardImage ? (
-                <div className="relative h-36 overflow-hidden">
-                  <img
-                    src={cardImage}
-                    alt={`${business.name ?? "Business"} image`}
-                    className="h-full w-full object-cover"
-                  />
+            const websiteUrl =
+              normaliseExternalUrl(
+                business.website
+              );
 
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+            const mapsUrl =
+              normaliseExternalUrl(
+                business.maps_url
+              );
 
-                  {business.logo_url && business.cover_image_url ? (
+            const promotedBusiness =
+              isPromoted(business);
+
+            const businessName =
+              cleanText(
+                business.name
+              ) ||
+              "Unnamed business";
+
+            const location = [
+              cleanText(
+                business.area
+              ),
+              cleanText(
+                business.city
+              ),
+              cleanText(
+                business.postcode
+              ),
+            ]
+              .filter(Boolean)
+              .join(" • ");
+
+            return (
+              <article
+                key={business.id}
+                className={[
+                  "group overflow-hidden rounded-[1.75rem] border bg-[#030a1d] transition duration-300 hover:-translate-y-1",
+                  promotedBusiness
+                    ? "border-yellow-400/35 shadow-[0_22px_65px_rgba(212,175,55,0.08)]"
+                    : "border-white/10 hover:border-yellow-400/30",
+                ].join(" ")}
+              >
+                <div className="relative h-44 overflow-hidden bg-[radial-gradient(circle_at_top_right,rgba(212,175,55,0.14),transparent_45%),linear-gradient(145deg,#071532,#020718)]">
+                  {cardImage ? (
+                    <>
+                      <img
+                        src={cardImage}
+                        alt={`${businessName} image`}
+                        loading="lazy"
+                        className="h-full w-full object-cover transition duration-700 group-hover:scale-[1.05]"
+                      />
+
+                      <div className="absolute inset-0 bg-gradient-to-t from-[#030a1d] via-black/20 to-transparent" />
+                    </>
+                  ) : (
+                    <div className="flex h-full items-center justify-center">
+                      <div className="flex h-24 w-24 items-center justify-center rounded-full border border-yellow-400/20 bg-yellow-400/[0.08] text-3xl font-black text-yellow-300">
+                        {getInitials(
+                          business.name
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="absolute left-4 top-4 flex flex-wrap gap-2">
+                    {promotedBusiness ? (
+                      <Badge>
+                        Promoted
+                      </Badge>
+                    ) : null}
+
+                    {business.is_verified ? (
+                      <Badge variant="verified">
+                        Verified
+                      </Badge>
+                    ) : null}
+
+                    {index < 3 &&
+                    promotedBusiness ? (
+                      <Badge>
+                        Top placement
+                      </Badge>
+                    ) : null}
+                  </div>
+
+                  {business.logo_url &&
+                  business.cover_image_url ? (
                     <img
-                      src={business.logo_url}
-                      alt={`${business.name ?? "Business"} logo`}
-                      className="absolute bottom-3 left-3 h-14 w-14 rounded-2xl border border-yellow-500/30 bg-black object-cover p-1"
+                      src={
+                        business.logo_url
+                      }
+                      alt={`${businessName} logo`}
+                      loading="lazy"
+                      className="absolute bottom-4 left-4 h-14 w-14 rounded-2xl border border-yellow-400/25 bg-black/80 object-cover p-1 shadow-xl"
                     />
                   ) : null}
                 </div>
-              ) : null}
 
-              <div className="p-5">
-                <div className="mb-3 flex flex-wrap gap-2">
-                  {index < 3 ? <Badge>Top placement</Badge> : null}
-                  <Badge>Featured</Badge>
+                <div className="p-5">
+                  <div className="flex flex-wrap gap-2">
+                    <Badge>
+                      {formatLabel(
+                        business.category
+                      )}
+                    </Badge>
 
-                  {business.is_verified ? (
-                    <Badge variant="green">Verified</Badge>
-                  ) : null}
+                    {business.city_sponsor &&
+                    promotedBusiness ? (
+                      <Badge>
+                        City sponsor
+                      </Badge>
+                    ) : null}
 
-                  {business.city_sponsor && paidActive ? (
-                    <Badge>City Sponsor</Badge>
-                  ) : null}
-
-                  {business.mosque_sponsor && paidActive ? (
-                    <Badge>Mosque Sponsor</Badge>
-                  ) : null}
-                </div>
-
-                {business.slug ? (
-                  <BusinessTrackedLink
-                    businessId={business.id}
-                    href={`/business/${business.slug}`}
-                    eventType="profile_click"
-                    source="featured_businesses"
-                    pageType="featured_businesses"
-                    className="text-lg font-bold text-white hover:text-yellow-400"
-                  >
-                    {business.name ?? "Unnamed business"}
-                  </BusinessTrackedLink>
-                ) : (
-                  <div className="text-lg font-bold text-white">
-                    {business.name ?? "Unnamed business"}
+                    {business.mosque_sponsor &&
+                    promotedBusiness ? (
+                      <Badge>
+                        Mosque sponsor
+                      </Badge>
+                    ) : null}
                   </div>
-                )}
 
-                <div className="mt-2 text-sm text-white/60">
-                  {[formatLabel(business.category), business.area, business.city]
-                    .filter(Boolean)
-                    .join(" • ")}
-                </div>
-
-                <div className="mt-2 text-xs text-white/50">
-                  {[business.address, business.postcode]
-                    .filter(Boolean)
-                    .join(" • ") || "Location details coming soon"}
-                </div>
-
-                <div className="mt-5 flex flex-wrap gap-2">
                   {business.slug ? (
                     <BusinessTrackedLink
-                      businessId={business.id}
+                      businessId={
+                        business.id
+                      }
                       href={`/business/${business.slug}`}
                       eventType="profile_click"
                       source="featured_businesses"
-                      pageType="featured_businesses"
-                      className="rounded-xl bg-yellow-500 px-4 py-2 text-xs font-bold text-black hover:bg-yellow-400"
+                      pageType="homepage"
+                      className="mt-4 block text-xl font-black text-white transition group-hover:text-yellow-300"
                     >
-                      View
+                      {businessName}
                     </BusinessTrackedLink>
-                  ) : null}
+                  ) : (
+                    <h3 className="mt-4 text-xl font-black text-white">
+                      {businessName}
+                    </h3>
+                  )}
 
-                  {mapsUrl ? (
-                    <BusinessTrackedLink
-                      businessId={business.id}
-                      href={mapsUrl}
-                      eventType="maps_click"
-                      source="featured_businesses"
-                      pageType="featured_businesses"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="rounded-xl border border-yellow-500/30 bg-black px-4 py-2 text-xs font-bold text-yellow-400 hover:bg-yellow-500/10"
-                    >
-                      Maps
-                    </BusinessTrackedLink>
-                  ) : null}
+                  <p className="mt-2 min-h-6 text-sm text-white/55">
+                    {location ||
+                      "Location details coming soon"}
+                  </p>
 
-                  {websiteUrl ? (
-                    <BusinessTrackedLink
-                      businessId={business.id}
-                      href={websiteUrl}
-                      eventType="website_click"
-                      source="featured_businesses"
-                      pageType="featured_businesses"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white hover:border-yellow-500/30"
-                    >
-                      Website
-                    </BusinessTrackedLink>
-                  ) : null}
+                  {business.address ? (
+                    <p className="mt-2 line-clamp-2 min-h-12 text-xs leading-6 text-white/40">
+                      {business.address}
+                    </p>
+                  ) : (
+                    <div className="min-h-14" />
+                  )}
 
-                  {business.phone ? (
-                    <BusinessTrackedLink
-                      businessId={business.id}
-                      href={`tel:${business.phone}`}
-                      eventType="phone_click"
-                      source="featured_businesses"
-                      pageType="featured_businesses"
-                      className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white hover:border-yellow-500/30"
-                    >
-                      Call
-                    </BusinessTrackedLink>
-                  ) : null}
+                  <div className="mt-5 flex flex-wrap gap-2 border-t border-white/10 pt-4">
+                    {business.slug ? (
+                      <BusinessTrackedLink
+                        businessId={
+                          business.id
+                        }
+                        href={`/business/${business.slug}`}
+                        eventType="profile_click"
+                        source="featured_businesses"
+                        pageType="homepage"
+                        className="premium-button px-4 py-2.5 text-xs"
+                      >
+                        View profile
+                      </BusinessTrackedLink>
+                    ) : null}
+
+                    {mapsUrl ? (
+                      <BusinessTrackedLink
+                        businessId={
+                          business.id
+                        }
+                        href={mapsUrl}
+                        eventType="maps_click"
+                        source="featured_businesses"
+                        pageType="homepage"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="premium-button-outline px-4 py-2.5 text-xs"
+                      >
+                        Maps
+                      </BusinessTrackedLink>
+                    ) : null}
+
+                    {websiteUrl ? (
+                      <BusinessTrackedLink
+                        businessId={
+                          business.id
+                        }
+                        href={
+                          websiteUrl
+                        }
+                        eventType="website_click"
+                        source="featured_businesses"
+                        pageType="homepage"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-xs font-bold text-white transition hover:border-yellow-400/30"
+                      >
+                        Website
+                      </BusinessTrackedLink>
+                    ) : null}
+
+                    {business.phone ? (
+                      <BusinessTrackedLink
+                        businessId={
+                          business.id
+                        }
+                        href={`tel:${business.phone}`}
+                        eventType="phone_click"
+                        source="featured_businesses"
+                        pageType="homepage"
+                        className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-xs font-bold text-white transition hover:border-yellow-400/30"
+                      >
+                        Call
+                      </BusinessTrackedLink>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            </article>
-          );
-        })}
+              </article>
+            );
+          }
+        )}
       </div>
     </section>
   );
@@ -370,19 +572,21 @@ function Badge({
   variant = "default",
 }: {
   children: React.ReactNode;
-  variant?: "default" | "green";
+  variant?: "default" | "verified";
 }) {
   const className =
-    variant === "green"
-      ? "border-green-500/30 bg-green-500/10 text-green-300"
-      : "border-yellow-500/30 bg-yellow-500/10 text-yellow-400";
+    variant === "verified"
+      ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200"
+      : "border-yellow-400/20 bg-yellow-400/[0.07] text-yellow-200";
 
   return (
     <span
-      className={`rounded-full border px-3 py-1 text-[10px] font-semibold ${className}`}
+      className={[
+        "inline-flex rounded-full border px-3 py-1 text-[0.64rem] font-bold",
+        className,
+      ].join(" ")}
     >
       {children}
     </span>
   );
 }
-

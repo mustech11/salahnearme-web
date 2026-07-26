@@ -969,68 +969,53 @@ export default async function Home() {
         />
       </section>
 
-      <SmartDailyModePanel className="mt-0" />
+{selectedCity ? (
+  <NextSalahCountdown
+    prayerTimes={prayerTimes}
+    cityName={selectedCity.name}
+  />
+) : null}
 
-      {selectedCity ? (
-        <>
-          <NextSalahCountdown
-            prayerTimes={
-              prayerTimes
-            }
-            cityName={
-              selectedCity.name
-            }
-          />
+<SmartDailyModePanel className="mt-0" />
 
-          <SelectedCityHomePanel
-            city={{
-              name:
-                selectedCity.name,
-              slug:
-                selectedCity.slug,
-              timezone:
-                selectedCity.timezone ??
-                "Europe/London",
-            }}
-            prayerTimes={
-              prayerTimes
-            }
-            prayerTimesSource={
-              prayerTimesSource
-            }
-            prayerTimesUpdatedAt={
-              prayerTimesUpdatedAt
-            }
-          />
+{selectedCity ? (
+  <>
+    <SelectedCityHomePanel
+      city={{
+        name: selectedCity.name,
+        slug: selectedCity.slug,
+        timezone:
+          selectedCity.timezone ??
+          "Europe/London",
+      }}
+      prayerTimes={prayerTimes}
+      prayerTimesSource={
+        prayerTimesSource
+      }
+      prayerTimesUpdatedAt={
+        prayerTimesUpdatedAt
+      }
+    />
 
-          <HomeDailyPanel
-            cityId={
-              selectedCity.id
-            }
-            cityName={
-              selectedCity.name
-            }
-            citySlug={
-              selectedCity.slug
-            }
-            prayerTimes={
-              prayerTimes
-            }
-          />
-        </>
-      ) : (
-        <>
-          <SelectedCityHomePanel
-            city={null}
-            prayerTimes={null}
-            prayerTimesSource="unavailable"
-            prayerTimesUpdatedAt={null}
-          />
+    <HomeDailyPanel
+      cityId={selectedCity.id}
+      cityName={selectedCity.name}
+      citySlug={selectedCity.slug}
+      prayerTimes={prayerTimes}
+    />
+  </>
+) : (
+  <>
+    <SelectedCityHomePanel
+      city={null}
+      prayerTimes={null}
+      prayerTimesSource="unavailable"
+      prayerTimesUpdatedAt={null}
+    />
 
-          <HomeDailyPanel />
-        </>
-      )}
-
+    <HomeDailyPanel />
+  </>
+)}
       <section
         aria-labelledby="pray-near-me-heading"
         className="premium-panel relative overflow-hidden rounded-[2rem] p-5 sm:p-7 lg:p-8"
