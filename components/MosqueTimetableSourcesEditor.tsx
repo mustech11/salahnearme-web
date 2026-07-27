@@ -47,7 +47,11 @@ type FormRow = {
   last_error: string | null;
 };
 
-type SaveState = "idle" | "saving" | "success" | "error";
+type SaveState =
+  | "idle"
+  | "saving"
+  | "success"
+  | "error";
 
 type SaveSourceResponse = {
   ok?: boolean;
@@ -59,6 +63,11 @@ type SaveSourceResponse = {
 type RowValidation = {
   url: string;
   sourceType: string;
+};
+
+type SaveProgress = {
+  completed: number;
+  total: number;
 };
 
 const UUID_REGEX =
@@ -90,21 +99,27 @@ const SOURCE_TYPES: ReadonlyArray<{
   },
 ];
 
-const ALLOWED_SOURCE_TYPES = new Set<SourceType>(
-  SOURCE_TYPES.map((option) => option.value)
-);
+const ALLOWED_SOURCE_TYPES =
+  new Set<SourceType>(
+    SOURCE_TYPES.map(
+      (option) => option.value
+    )
+  );
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_SOURCE_ROWS = 20;
 const MAX_URL_LENGTH = 2_048;
+const MAX_MANUAL_LABEL_LENGTH = 250;
 
 const DEFAULT_ERROR_MESSAGE =
   "The timetable sources could not be saved. Please try again.";
 
 function createClientKey(): string {
   if (
-    typeof globalThis.crypto !== "undefined" &&
-    typeof globalThis.crypto.randomUUID === "function"
+    typeof globalThis.crypto !==
+      "undefined" &&
+    typeof globalThis.crypto
+      .randomUUID === "function"
   ) {
     return globalThis.crypto.randomUUID();
   }
@@ -114,18 +129,38 @@ function createClientKey(): string {
     .slice(2)}`;
 }
 
-function cleanString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+function cleanString(
+  value: unknown
+): string {
+  return typeof value === "string"
+    ? value.trim()
+    : "";
 }
 
-function isUuid(value: string): boolean {
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value)
+  );
+}
+
+function isUuid(
+  value: string
+): boolean {
   return UUID_REGEX.test(value);
 }
 
-function isSourceType(value: unknown): value is SourceType {
+function isSourceType(
+  value: unknown
+): value is SourceType {
   return (
     typeof value === "string" &&
-    ALLOWED_SOURCE_TYPES.has(value as SourceType)
+    ALLOWED_SOURCE_TYPES.has(
+      value as SourceType
+    )
   );
 }
 
@@ -147,17 +182,26 @@ function buildInitialRows(
   const mappedRows = initialSources
     .slice(0, MAX_SOURCE_ROWS)
     .map((source) => ({
-      clientKey: source.id || createClientKey(),
+      clientKey:
+        source.id || createClientKey(),
       id: source.id,
-      source_url: cleanString(source.source_url),
-      source_type: isSourceType(source.source_type)
+      source_url: cleanString(
+        source.source_url
+      ),
+      source_type: isSourceType(
+        source.source_type
+      )
         ? source.source_type
         : "website",
       auto_import_enabled:
-        source.auto_import_enabled === true,
-      last_checked_at: source.last_checked_at ?? null,
-      last_success_at: source.last_success_at ?? null,
-      last_error: source.last_error ?? null,
+        source.auto_import_enabled ===
+        true,
+      last_checked_at:
+        source.last_checked_at ?? null,
+      last_success_at:
+        source.last_success_at ?? null,
+      last_error:
+        source.last_error ?? null,
     }));
 
   return mappedRows.length > 0
@@ -165,7 +209,7 @@ function buildInitialRows(
     : [buildEmptyRow()];
 }
 
-function normaliseSourceUrl(
+function normaliseSourceValue(
   value: string,
   sourceType: SourceType
 ): string {
@@ -186,35 +230,55 @@ function normaliseSourceUrl(
   return `https://${trimmed}`;
 }
 
-function validateSourceUrl(
+function validateSourceValue(
   value: string,
   sourceType: SourceType
 ): string {
   const trimmed = value.trim();
 
   if (!trimmed) {
-    return "Enter a timetable source URL.";
-  }
-
-  if (trimmed.length > MAX_URL_LENGTH) {
-    return `The source URL must not exceed ${MAX_URL_LENGTH.toLocaleString()} characters.`;
+    return sourceType === "manual"
+      ? "Enter a short label for this manual timetable source."
+      : "Enter a timetable source URL.";
   }
 
   if (sourceType === "manual") {
+    if (
+      trimmed.length >
+      MAX_MANUAL_LABEL_LENGTH
+    ) {
+      return `The manual source label must not exceed ${MAX_MANUAL_LABEL_LENGTH.toLocaleString(
+        "en-GB"
+      )} characters.`;
+    }
+
     return "";
   }
 
-  const normalisedUrl = normaliseSourceUrl(
-    trimmed,
-    sourceType
-  );
+  if (
+    trimmed.length >
+    MAX_URL_LENGTH
+  ) {
+    return `The source URL must not exceed ${MAX_URL_LENGTH.toLocaleString(
+      "en-GB"
+    )} characters.`;
+  }
+
+  const normalisedUrl =
+    normaliseSourceValue(
+      trimmed,
+      sourceType
+    );
 
   try {
-    const parsedUrl = new URL(normalisedUrl);
+    const parsedUrl =
+      new URL(normalisedUrl);
 
     if (
-      parsedUrl.protocol !== "http:" &&
-      parsedUrl.protocol !== "https:"
+      parsedUrl.protocol !==
+        "http:" &&
+      parsedUrl.protocol !==
+        "https:"
     ) {
       return "Use a valid HTTP or HTTPS source URL.";
     }
@@ -229,13 +293,17 @@ function validateSourceUrl(
   }
 }
 
-function validateRow(row: FormRow): RowValidation {
+function validateRow(
+  row: FormRow
+): RowValidation {
   return {
-    url: validateSourceUrl(
+    url: validateSourceValue(
       row.source_url,
       row.source_type
     ),
-    sourceType: isSourceType(row.source_type)
+    sourceType: isSourceType(
+      row.source_type
+    )
       ? ""
       : "Select a valid timetable source type.",
   };
@@ -250,17 +318,24 @@ function formatDateTime(
 
   const date = new Date(value);
 
-  if (Number.isNaN(date.getTime())) {
+  if (
+    Number.isNaN(date.getTime())
+  ) {
     return "Unknown";
   }
 
-  return date.toLocaleString("en-GB", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
+  return date.toLocaleString(
+    "en-GB",
+    {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }
+  );
 }
 
-function formatSourceType(value: string): string {
+function formatSourceType(
+  value: string
+): string {
   return value
     .replace(/_/g, " ")
     .replace(/-/g, " ")
@@ -269,12 +344,19 @@ function formatSourceType(value: string): string {
     );
 }
 
-function serialiseRows(rows: FormRow[]): string {
+function serialiseRows(
+  rows: FormRow[]
+): string {
   return JSON.stringify(
     rows.map((row) => ({
       id: row.id ?? null,
-      source_url: row.source_url.trim(),
-      source_type: row.source_type,
+      source_url:
+        normaliseSourceValue(
+          row.source_url,
+          row.source_type
+        ),
+      source_type:
+        row.source_type,
       auto_import_enabled:
         row.auto_import_enabled,
     }))
@@ -284,21 +366,100 @@ function serialiseRows(rows: FormRow[]): string {
 async function readSaveResponse(
   response: Response
 ): Promise<SaveSourceResponse> {
-  try {
-    const value: unknown = await response.json();
+  const contentType =
+    response.headers.get(
+      "content-type"
+    ) ?? "";
 
-    if (
-      !value ||
-      typeof value !== "object" ||
-      Array.isArray(value)
-    ) {
+  if (
+    contentType
+      .toLowerCase()
+      .includes(
+        "application/json"
+      )
+  ) {
+    try {
+      const value: unknown =
+        await response.json();
+
+      return isRecord(value)
+        ? (value as SaveSourceResponse)
+        : {};
+    } catch {
       return {};
     }
+  }
 
-    return value as SaveSourceResponse;
+  try {
+    const text = cleanString(
+      await response.text()
+    );
+
+    return text
+      ? {
+          message: text,
+        }
+      : {};
   } catch {
     return {};
   }
+}
+
+function getSaveError(
+  data: SaveSourceResponse,
+  status: number,
+  rowNumber: number
+): string {
+  const supplied =
+    cleanString(data.error) ||
+    cleanString(data.message);
+
+  if (supplied) {
+    return supplied;
+  }
+
+  if (status === 400) {
+    return `Source ${rowNumber} contains invalid details.`;
+  }
+
+  if (status === 401) {
+    return "Your session has expired. Please sign in again.";
+  }
+
+  if (status === 403) {
+    return "You do not have permission to manage timetable sources for this mosque.";
+  }
+
+  if (status === 404) {
+    return `Source ${rowNumber} or the mosque could not be found.`;
+  }
+
+  if (status === 409) {
+    return `Source ${rowNumber} conflicts with an existing timetable source.`;
+  }
+
+  if (status === 422) {
+    return `Source ${rowNumber} could not be validated.`;
+  }
+
+  if (status === 429) {
+    return "Too many source-save requests were submitted. Please wait and try again.";
+  }
+
+  if (status >= 500) {
+    return "The timetable source service is temporarily unavailable. Please try again shortly.";
+  }
+
+  return `Could not save Source ${rowNumber}.`;
+}
+
+function isAbortError(
+  error: unknown
+): boolean {
+  return (
+    error instanceof DOMException &&
+    error.name === "AbortError"
+  );
 }
 
 export default function MosqueTimetableSourcesEditor({
@@ -311,27 +472,61 @@ export default function MosqueTimetableSourcesEditor({
   const statusId = useId();
 
   const abortControllerRef =
-    useRef<AbortController | null>(null);
+    useRef<AbortController | null>(
+      null
+    );
 
-  const mountedRef = useRef(true);
+  const mountedRef =
+    useRef(true);
+
+  const timeoutTriggeredRef =
+    useRef(false);
 
   const initialRows = useMemo(
-    () => buildInitialRows(initialSources),
+    () =>
+      buildInitialRows(
+        initialSources
+      ),
     [initialSources]
   );
 
-  const [rows, setRows] =
-    useState<FormRow[]>(initialRows);
+  const [
+    rows,
+    setRows,
+  ] = useState<FormRow[]>(
+    initialRows
+  );
 
-  const [savedSnapshot, setSavedSnapshot] =
-    useState(() => serialiseRows(initialRows));
+  const [
+    savedSnapshot,
+    setSavedSnapshot,
+  ] = useState(() =>
+    serialiseRows(initialRows)
+  );
 
-  const [saveState, setSaveState] =
-    useState<SaveState>("idle");
+  const [
+    saveState,
+    setSaveState,
+  ] = useState<SaveState>(
+    "idle"
+  );
 
-  const [message, setMessage] = useState("");
-  const [errorMessage, setErrorMessage] =
-    useState("");
+  const [
+    message,
+    setMessage,
+  ] = useState("");
+
+  const [
+    errorMessage,
+    setErrorMessage,
+  ] = useState("");
+
+  const [
+    saveProgress,
+    setSaveProgress,
+  ] = useState<SaveProgress | null>(
+    null
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -344,385 +539,586 @@ export default function MosqueTimetableSourcesEditor({
   }, []);
 
   useEffect(() => {
-    const nextRows = buildInitialRows(initialSources);
-
-    setRows(nextRows);
-    setSavedSnapshot(serialiseRows(nextRows));
-    setSaveState("idle");
-    setMessage("");
-    setErrorMessage("");
-  }, [initialSources, mosqueId]);
-
-  const cleanMosqueId = useMemo(
-    () => cleanString(mosqueId),
-    [mosqueId]
-  );
-
-  const mosqueValidationError = useMemo(() => {
-    if (!isUuid(cleanMosqueId)) {
-      return "A valid mosque is required before timetable sources can be saved.";
-    }
-
-    return "";
-  }, [cleanMosqueId]);
-
-  const rowValidations = useMemo(
-    () => rows.map(validateRow),
-    [rows]
-  );
-
-  const duplicateUrlIndexes = useMemo(() => {
-    const indexes = new Set<number>();
-    const seen = new Map<string, number>();
-
-    rows.forEach((row, index) => {
-      const url = normaliseSourceUrl(
-        row.source_url,
-        row.source_type
-      ).toLowerCase();
-
-      if (!url) {
-        return;
-      }
-
-      const previousIndex = seen.get(url);
-
-      if (previousIndex !== undefined) {
-        indexes.add(previousIndex);
-        indexes.add(index);
-        return;
-      }
-
-      seen.set(url, index);
-    });
-
-    return indexes;
-  }, [rows]);
-
-  const hasValidationErrors = useMemo(
-    () =>
-      Boolean(mosqueValidationError) ||
-      rowValidations.some(
-        (validation) =>
-          Boolean(
-            validation.url ||
-              validation.sourceType
-          )
-      ) ||
-      duplicateUrlIndexes.size > 0,
-    [
-      duplicateUrlIndexes,
-      mosqueValidationError,
-      rowValidations,
-    ]
-  );
-
-  const hasUnsavedChanges =
-    serialiseRows(rows) !== savedSnapshot;
-
-  const isSaving = saveState === "saving";
-
-  const clearFeedback = useCallback(() => {
-    setSaveState("idle");
-    setMessage("");
-    setErrorMessage("");
-  }, []);
-
-  const updateRow = useCallback(
-    <K extends keyof Pick<
-      FormRow,
-      | "source_url"
-      | "source_type"
-      | "auto_import_enabled"
-    >>(
-      index: number,
-      field: K,
-      value: FormRow[K]
-    ) => {
-      setRows((current) =>
-        current.map((row, rowIndex) =>
-          rowIndex === index
-            ? {
-                ...row,
-                [field]: value,
-              }
-            : row
-        )
+    const nextRows =
+      buildInitialRows(
+        initialSources
       );
 
-      clearFeedback();
-    },
-    [clearFeedback]
-  );
+    setRows(nextRows);
+    setSavedSnapshot(
+      serialiseRows(nextRows)
+    );
+    setSaveState("idle");
+    setMessage("");
+    setErrorMessage("");
+    setSaveProgress(null);
+  }, [
+    initialSources,
+    mosqueId,
+  ]);
 
-  const addRow = useCallback(() => {
-    setRows((current) => {
-      if (current.length >= MAX_SOURCE_ROWS) {
-        return current;
+  const cleanMosqueId =
+    useMemo(
+      () =>
+        cleanString(mosqueId),
+      [mosqueId]
+    );
+
+  const mosqueValidationError =
+    useMemo(() => {
+      if (
+        !isUuid(cleanMosqueId)
+      ) {
+        return "A valid mosque is required before timetable sources can be saved.";
       }
 
-      return [...current, buildEmptyRow()];
-    });
+      return "";
+    }, [cleanMosqueId]);
 
-    clearFeedback();
-  }, [clearFeedback]);
+  const rowValidations =
+    useMemo(
+      () =>
+        rows.map(validateRow),
+      [rows]
+    );
 
-  const removeRow = useCallback(
-    (index: number) => {
-      const row = rows[index];
+  const duplicateIndexes =
+    useMemo(() => {
+      const indexes =
+        new Set<number>();
 
-      if (!row) {
-        return;
-      }
+      const seen =
+        new Map<string, number>();
 
-      if (row.id) {
-        setErrorMessage(
-          "Saved timetable sources cannot be removed from this editor yet. Disable automatic import or update the source instead."
+      rows.forEach(
+        (row, index) => {
+          const normalised =
+            normaliseSourceValue(
+              row.source_url,
+              row.source_type
+            ).toLowerCase();
+
+          if (!normalised) {
+            return;
+          }
+
+          const identity =
+            `${row.source_type}:${normalised}`;
+
+          const previousIndex =
+            seen.get(identity);
+
+          if (
+            previousIndex !==
+            undefined
+          ) {
+            indexes.add(
+              previousIndex
+            );
+            indexes.add(index);
+            return;
+          }
+
+          seen.set(
+            identity,
+            index
+          );
+        }
+      );
+
+      return indexes;
+    }, [rows]);
+
+  const hasValidationErrors =
+    useMemo(
+      () =>
+        Boolean(
+          mosqueValidationError
+        ) ||
+        rowValidations.some(
+          (validation) =>
+            Boolean(
+              validation.url ||
+                validation.sourceType
+            )
+        ) ||
+        duplicateIndexes.size >
+          0,
+      [
+        duplicateIndexes,
+        mosqueValidationError,
+        rowValidations,
+      ]
+    );
+
+  const currentSnapshot =
+    useMemo(
+      () => serialiseRows(rows),
+      [rows]
+    );
+
+  const hasUnsavedChanges =
+    currentSnapshot !==
+    savedSnapshot;
+
+  const isSaving =
+    saveState === "saving";
+
+  const clearFeedback =
+    useCallback(() => {
+      setSaveState("idle");
+      setMessage("");
+      setErrorMessage("");
+      setSaveProgress(null);
+    }, []);
+
+  const updateRow =
+    useCallback(
+      <
+        K extends keyof Pick<
+          FormRow,
+          | "source_url"
+          | "source_type"
+          | "auto_import_enabled"
+        >,
+      >(
+        index: number,
+        field: K,
+        value: FormRow[K]
+      ) => {
+        setRows((current) =>
+          current.map(
+            (
+              row,
+              rowIndex
+            ) =>
+              rowIndex === index
+                ? {
+                    ...row,
+                    [field]:
+                      value,
+                  }
+                : row
+          )
         );
-        setSaveState("error");
-        return;
-      }
 
+        clearFeedback();
+      },
+      [clearFeedback]
+    );
+
+  const addRow =
+    useCallback(() => {
       setRows((current) => {
-        if (current.length === 1) {
-          return [buildEmptyRow()];
+        if (
+          current.length >=
+          MAX_SOURCE_ROWS
+        ) {
+          return current;
         }
 
-        return current.filter(
-          (_, rowIndex) => rowIndex !== index
-        );
+        return [
+          ...current,
+          buildEmptyRow(),
+        ];
       });
 
       clearFeedback();
-    },
-    [clearFeedback, rows]
-  );
+    }, [clearFeedback]);
 
-  const resetChanges = useCallback(() => {
-    const nextRows = buildInitialRows(initialSources);
+  const removeRow =
+    useCallback(
+      (index: number) => {
+        const row =
+          rows[index];
 
-    setRows(nextRows);
-    setSavedSnapshot(serialiseRows(nextRows));
-    clearFeedback();
-  }, [clearFeedback, initialSources]);
+        if (!row) {
+          return;
+        }
 
-  const saveRows = useCallback(async () => {
-    if (isSaving) {
-      return;
-    }
+        if (row.id) {
+          setErrorMessage(
+            "Saved timetable sources cannot be removed from this editor yet. Disable automatic import or update the source instead."
+          );
+          setSaveState("error");
+          return;
+        }
 
-    setMessage("");
-    setErrorMessage("");
+        setRows(
+          (current) => {
+            if (
+              current.length === 1
+            ) {
+              return [
+                buildEmptyRow(),
+              ];
+            }
 
-    if (mosqueValidationError) {
-      setSaveState("error");
-      setErrorMessage(mosqueValidationError);
-      return;
-    }
-
-    if (duplicateUrlIndexes.size > 0) {
-      setSaveState("error");
-      setErrorMessage(
-        "Duplicate timetable source URLs were found. Each source URL must be unique."
-      );
-      return;
-    }
-
-    const firstInvalidRow = rowValidations.findIndex(
-      (validation) =>
-        Boolean(
-          validation.url ||
-            validation.sourceType
-        )
-    );
-
-    if (firstInvalidRow >= 0) {
-      setSaveState("error");
-      setErrorMessage(
-        `Correct the validation error in Source ${
-          firstInvalidRow + 1
-        } before saving.`
-      );
-      return;
-    }
-
-    if (rows.length === 0) {
-      setSaveState("error");
-      setErrorMessage(
-        "Add at least one timetable source."
-      );
-      return;
-    }
-
-    abortControllerRef.current?.abort();
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    let timedOut = false;
-
-    const timeoutId = window.setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, REQUEST_TIMEOUT_MS);
-
-    setSaveState("saving");
-
-    try {
-      const updatedRows = [...rows];
-
-      for (
-        let index = 0;
-        index < rows.length;
-        index += 1
-      ) {
-        const row = rows[index];
-
-        const response = await fetch(
-          "/api/mosque/timetable-sources",
-          {
-            method: "POST",
-            headers: {
-              Accept: "application/json",
-              "Content-Type": "application/json",
-            },
-            credentials: "same-origin",
-            cache: "no-store",
-            signal: controller.signal,
-            body: JSON.stringify({
-              id: row.id,
-              mosque_id: cleanMosqueId,
-              source_url: normaliseSourceUrl(
-                row.source_url,
-                row.source_type
-              ),
-              source_type: row.source_type,
-              auto_import_enabled:
-                row.auto_import_enabled,
-            }),
+            return current.filter(
+              (
+                _,
+                rowIndex
+              ) =>
+                rowIndex !==
+                index
+            );
           }
         );
 
-        const data =
-          await readSaveResponse(response);
+        clearFeedback();
+      },
+      [
+        clearFeedback,
+        rows,
+      ]
+    );
 
-        if (!response.ok || data.ok !== true) {
-          throw new Error(
-            cleanString(data.error) ||
-              cleanString(data.message) ||
-              `Could not save Source ${index + 1}.`
-          );
-        }
+  const resetChanges =
+    useCallback(() => {
+      const nextRows =
+        buildInitialRows(
+          initialSources
+        );
 
-        if (!data.source) {
-          throw new Error(
-            `Source ${
-              index + 1
-            } was saved, but the server did not return the updated source.`
-          );
-        }
-
-        const savedSource = data.source;
-
-        updatedRows[index] = {
-          clientKey:
-            savedSource.id ||
-            row.clientKey,
-          id: savedSource.id,
-          source_url: cleanString(
-            savedSource.source_url
-          ),
-          source_type: isSourceType(
-            savedSource.source_type
-          )
-            ? savedSource.source_type
-            : row.source_type,
-          auto_import_enabled:
-            savedSource.auto_import_enabled === true,
-          last_checked_at:
-            savedSource.last_checked_at ?? null,
-          last_success_at:
-            savedSource.last_success_at ?? null,
-          last_error:
-            savedSource.last_error ?? null,
-        };
-      }
-
-      if (!mountedRef.current) {
-        return;
-      }
-
-      setRows(updatedRows);
+      setRows(nextRows);
       setSavedSnapshot(
-        serialiseRows(updatedRows)
+        serialiseRows(nextRows)
       );
-      setSaveState("success");
+      clearFeedback();
+    }, [
+      clearFeedback,
+      initialSources,
+    ]);
+
+  const saveRows =
+    useCallback(async () => {
+      if (
+        isSaving ||
+        !mountedRef.current
+      ) {
+        return;
+      }
+
+      setMessage("");
       setErrorMessage("");
-      setMessage(
-        `${updatedRows.length.toLocaleString()} timetable source${
-          updatedRows.length === 1 ? " was" : "s were"
-        } saved successfully. Import controls are now available for saved sources.`
-      );
-
-      router.refresh();
-    } catch (error) {
-      if (!mountedRef.current) {
-        return;
-      }
-
-      setSaveState("error");
+      setSaveProgress(null);
 
       if (
-        error instanceof DOMException &&
-        error.name === "AbortError"
+        mosqueValidationError
       ) {
+        setSaveState("error");
         setErrorMessage(
-          timedOut
-            ? "The timetable source save request timed out. Please try again."
-            : "The timetable source save request was cancelled."
+          mosqueValidationError
         );
         return;
       }
 
-      const errorText =
-        error instanceof Error
-          ? error.message
-          : DEFAULT_ERROR_MESSAGE;
+      if (
+        duplicateIndexes.size >
+        0
+      ) {
+        setSaveState("error");
+        setErrorMessage(
+          "Duplicate timetable sources were found. Each source must be unique."
+        );
+        return;
+      }
 
-      console.error(
-        "Timetable source save failed:",
-        error
-      );
-
-      setErrorMessage(
-        errorText || DEFAULT_ERROR_MESSAGE
-      );
-    } finally {
-      window.clearTimeout(timeoutId);
+      const firstInvalidRow =
+        rowValidations.findIndex(
+          (validation) =>
+            Boolean(
+              validation.url ||
+                validation.sourceType
+            )
+        );
 
       if (
-        abortControllerRef.current === controller
+        firstInvalidRow >= 0
       ) {
-        abortControllerRef.current = null;
+        setSaveState("error");
+        setErrorMessage(
+          `Correct the validation error in Source ${
+            firstInvalidRow + 1
+          } before saving.`
+        );
+        return;
       }
 
-      if (mountedRef.current) {
-        setSaveState((currentState) =>
-          currentState === "saving"
-            ? "idle"
-            : currentState
+      if (rows.length === 0) {
+        setSaveState("error");
+        setErrorMessage(
+          "Add at least one timetable source."
         );
+        return;
       }
-    }
-  }, [
-    cleanMosqueId,
-    duplicateUrlIndexes,
-    isSaving,
-    mosqueValidationError,
-    router,
-    rowValidations,
-    rows,
-  ]);
+
+      abortControllerRef.current?.abort();
+
+      const controller =
+        new AbortController();
+
+      abortControllerRef.current =
+        controller;
+
+      timeoutTriggeredRef.current =
+        false;
+
+      const timeoutId =
+        window.setTimeout(
+          () => {
+            timeoutTriggeredRef.current =
+              true;
+
+            controller.abort();
+          },
+          REQUEST_TIMEOUT_MS
+        );
+
+      setSaveState("saving");
+      setSaveProgress({
+        completed: 0,
+        total: rows.length,
+      });
+
+      try {
+        const updatedRows =
+          [...rows];
+
+        for (
+          let index = 0;
+          index <
+          rows.length;
+          index += 1
+        ) {
+          if (
+            controller.signal
+              .aborted
+          ) {
+            throw new DOMException(
+              "Request aborted",
+              "AbortError"
+            );
+          }
+
+          const row =
+            rows[index];
+
+          const response =
+            await fetch(
+              "/api/mosque/timetable-sources",
+              {
+                method:
+                  "POST",
+                headers: {
+                  Accept:
+                    "application/json",
+                  "Content-Type":
+                    "application/json",
+                },
+                credentials:
+                  "same-origin",
+                cache:
+                  "no-store",
+                signal:
+                  controller.signal,
+                body:
+                  JSON.stringify(
+                    {
+                      id:
+                        row.id ??
+                        null,
+                      mosque_id:
+                        cleanMosqueId,
+                      source_url:
+                        normaliseSourceValue(
+                          row.source_url,
+                          row.source_type
+                        ),
+                      source_type:
+                        row.source_type,
+                      auto_import_enabled:
+                        row.auto_import_enabled,
+                    }
+                  ),
+              }
+            );
+
+          const data =
+            await readSaveResponse(
+              response
+            );
+
+          if (
+            !mountedRef.current ||
+            controller.signal
+              .aborted
+          ) {
+            return;
+          }
+
+          if (
+            !response.ok ||
+            data.ok !== true
+          ) {
+            throw new Error(
+              getSaveError(
+                data,
+                response.status,
+                index + 1
+              )
+            );
+          }
+
+          if (!data.source) {
+            throw new Error(
+              `Source ${
+                index + 1
+              } was saved, but the server did not return the updated source.`
+            );
+          }
+
+          const savedSource =
+            data.source;
+
+          updatedRows[index] = {
+            clientKey:
+              savedSource.id ||
+              row.clientKey,
+            id:
+              savedSource.id,
+            source_url:
+              cleanString(
+                savedSource.source_url
+              ),
+            source_type:
+              isSourceType(
+                savedSource.source_type
+              )
+                ? savedSource.source_type
+                : row.source_type,
+            auto_import_enabled:
+              savedSource.auto_import_enabled ===
+              true,
+            last_checked_at:
+              savedSource.last_checked_at ??
+              null,
+            last_success_at:
+              savedSource.last_success_at ??
+              null,
+            last_error:
+              savedSource.last_error ??
+              null,
+          };
+
+          setSaveProgress({
+            completed:
+              index + 1,
+            total:
+              rows.length,
+          });
+        }
+
+        if (
+          !mountedRef.current
+        ) {
+          return;
+        }
+
+        setRows(updatedRows);
+        setSavedSnapshot(
+          serialiseRows(
+            updatedRows
+          )
+        );
+        setSaveState("success");
+        setErrorMessage("");
+        setMessage(
+          `${updatedRows.length.toLocaleString(
+            "en-GB"
+          )} timetable source${
+            updatedRows.length ===
+            1
+              ? " was"
+              : "s were"
+          } saved successfully. Import controls are now available for saved online sources.`
+        );
+
+        router.refresh();
+      } catch (error) {
+        if (
+          !mountedRef.current
+        ) {
+          return;
+        }
+
+        setSaveState("error");
+
+        if (
+          isAbortError(error)
+        ) {
+          setErrorMessage(
+            timeoutTriggeredRef.current
+              ? "The timetable source save request timed out. Please try again."
+              : "The timetable source save request was cancelled."
+          );
+          return;
+        }
+
+        if (
+          error instanceof TypeError
+        ) {
+          setErrorMessage(
+            "The timetable source service could not be reached. Check your connection and try again."
+          );
+          return;
+        }
+
+        setErrorMessage(
+          error instanceof Error &&
+            cleanString(
+              error.message
+            )
+            ? error.message
+            : DEFAULT_ERROR_MESSAGE
+        );
+      } finally {
+        window.clearTimeout(
+          timeoutId
+        );
+
+        if (
+          abortControllerRef.current ===
+          controller
+        ) {
+          abortControllerRef.current =
+            null;
+        }
+
+        timeoutTriggeredRef.current =
+          false;
+
+        if (
+          mountedRef.current
+        ) {
+          setSaveState(
+            (currentState) =>
+              currentState ===
+              "saving"
+                ? "idle"
+                : currentState
+          );
+        }
+      }
+    }, [
+      cleanMosqueId,
+      duplicateIndexes,
+      isSaving,
+      mosqueValidationError,
+      router,
+      rowValidations,
+      rows,
+    ]);
 
   return (
     <section
@@ -738,22 +1134,24 @@ export default function MosqueTimetableSourcesEditor({
         className="mt-3 text-3xl font-black text-white"
       >
         Timetable sources for{" "}
-        {cleanString(mosqueName) || "this mosque"}
+        {cleanString(mosqueName) ||
+          "this mosque"}
       </h1>
 
       <p className="mt-3 max-w-3xl text-sm leading-6 text-white/60">
-        Add the mosque website, PDF timetable,
-        image timetable, CSV file or manual source.
-        Save each source before using its Import
-        timetable control.
+        Add a mosque website, PDF,
+        image, CSV or manual source.
+        Save each source before using
+        its import controls.
       </p>
 
       {hasUnsavedChanges ? (
         <div className="mt-5 inline-flex rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-300">
           Unsaved source changes
         </div>
-      ) : saveState === "success" ? (
-        <div className="mt-5 inline-flex rounded-xl border border-green-500/30 bg-green-500/10 px-3 py-2 text-xs font-semibold text-green-300">
+      ) : saveState ===
+        "success" ? (
+        <div className="mt-5 inline-flex rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300">
           All changes saved
         </div>
       ) : null}
@@ -763,10 +1161,27 @@ export default function MosqueTimetableSourcesEditor({
         aria-live="polite"
         aria-atomic="true"
       >
+        {isSaving &&
+        saveProgress ? (
+          <div
+            role="status"
+            className="mt-5 rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm leading-6 text-yellow-200"
+          >
+            Saving source{" "}
+            {Math.min(
+              saveProgress.completed +
+                1,
+              saveProgress.total
+            )}{" "}
+            of{" "}
+            {saveProgress.total}…
+          </div>
+        ) : null}
+
         {message ? (
           <div
             role="status"
-            className="mt-5 rounded-2xl border border-green-500/30 bg-green-500/10 p-4 text-sm leading-6 text-green-300"
+            className="mt-5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm leading-6 text-emerald-300"
           >
             {message}
           </div>
@@ -789,45 +1204,66 @@ export default function MosqueTimetableSourcesEditor({
       ) : null}
 
       <div className="mt-8 grid gap-5">
-        {rows.map((row, index) => {
-          const validation =
-            rowValidations[index] ?? {
-              url: "",
-              sourceType: "",
-            };
+        {rows.map(
+          (row, index) => {
+            const validation =
+              rowValidations[
+                index
+              ] ?? {
+                url: "",
+                sourceType: "",
+              };
 
-          const cleanUrl =
-            normaliseSourceUrl(
-              row.source_url,
-              row.source_type
+            const cleanValue =
+              normaliseSourceValue(
+                row.source_url,
+                row.source_type
+              );
+
+            const isSaved =
+              Boolean(
+                row.id &&
+                  isUuid(row.id)
+              );
+
+            return (
+              <SourceEditorCard
+                key={
+                  row.clientKey
+                }
+                index={index}
+                row={row}
+                validation={
+                  validation
+                }
+                isDuplicate={duplicateIndexes.has(
+                  index
+                )}
+                isSaved={isSaved}
+                cleanValue={
+                  cleanValue
+                }
+                mosqueId={
+                  cleanMosqueId
+                }
+                isSaving={
+                  isSaving
+                }
+                canRemove={
+                  !isSaved &&
+                  rows.length >
+                    1
+                }
+                onUpdate={
+                  updateRow
+                }
+                onRemove={
+                  removeRow
+                }
+              />
             );
-
-          const isSaved =
-            Boolean(row.id && isUuid(row.id));
-
-          const isDuplicate =
-            duplicateUrlIndexes.has(index);
-
-          return (
-            <SourceEditorCard
-              key={row.clientKey}
-              index={index}
-              row={row}
-              validation={validation}
-              isDuplicate={isDuplicate}
-              isSaved={isSaved}
-              cleanUrl={cleanUrl}
-              mosqueId={cleanMosqueId}
-              isSaving={isSaving}
-              canRemove={
-                !isSaved &&
-                rows.length > 1
-              }
-              onUpdate={updateRow}
-              onRemove={removeRow}
-            />
-          );
-        })}
+          }
+        )}
       </div>
 
       <div className="mt-6 flex flex-wrap gap-3">
@@ -836,7 +1272,8 @@ export default function MosqueTimetableSourcesEditor({
           onClick={addRow}
           disabled={
             isSaving ||
-            rows.length >= MAX_SOURCE_ROWS
+            rows.length >=
+              MAX_SOURCE_ROWS
           }
           className="rounded-2xl border border-yellow-500/30 bg-black px-6 py-3 text-sm font-bold text-yellow-400 transition hover:bg-yellow-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -854,7 +1291,14 @@ export default function MosqueTimetableSourcesEditor({
             hasValidationErrors
           }
           aria-busy={isSaving}
-          aria-describedby={statusId}
+          aria-disabled={
+            isSaving ||
+            !hasUnsavedChanges ||
+            hasValidationErrors
+          }
+          aria-describedby={
+            statusId
+          }
           className="inline-flex min-h-12 items-center justify-center rounded-2xl bg-yellow-500 px-6 py-3 text-sm font-bold text-black transition hover:bg-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isSaving ? (
@@ -874,7 +1318,8 @@ export default function MosqueTimetableSourcesEditor({
           type="button"
           onClick={resetChanges}
           disabled={
-            isSaving || !hasUnsavedChanges
+            isSaving ||
+            !hasUnsavedChanges
           }
           className="rounded-2xl border border-white/15 bg-white/5 px-6 py-3 text-sm font-bold text-white/70 transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -882,11 +1327,15 @@ export default function MosqueTimetableSourcesEditor({
         </button>
       </div>
 
-      {rows.length >= MAX_SOURCE_ROWS ? (
+      {rows.length >=
+      MAX_SOURCE_ROWS ? (
         <p className="mt-3 text-xs text-amber-300">
           A maximum of{" "}
-          {MAX_SOURCE_ROWS.toLocaleString()} timetable
-          sources can be configured for one mosque.
+          {MAX_SOURCE_ROWS.toLocaleString(
+            "en-GB"
+          )}{" "}
+          timetable sources can be
+          configured for one mosque.
         </p>
       ) : null}
     </section>
@@ -899,7 +1348,7 @@ function SourceEditorCard({
   validation,
   isDuplicate,
   isSaved,
-  cleanUrl,
+  cleanValue,
   mosqueId,
   isSaving,
   canRemove,
@@ -911,7 +1360,7 @@ function SourceEditorCard({
   validation: RowValidation;
   isDuplicate: boolean;
   isSaved: boolean;
-  cleanUrl: string;
+  cleanValue: string;
   mosqueId: string;
   isSaving: boolean;
   canRemove: boolean;
@@ -927,18 +1376,25 @@ function SourceEditorCard({
     field: K,
     value: FormRow[K]
   ) => void;
-  onRemove: (index: number) => void;
+  onRemove: (
+    index: number
+  ) => void;
 }) {
   const urlInputId = useId();
   const typeInputId = useId();
-  const automaticInputId = useId();
+  const automaticInputId =
+    useId();
   const urlErrorId = useId();
 
   const urlError =
     validation.url ||
     (isDuplicate
-      ? "This source URL is duplicated."
+      ? "This source is duplicated."
       : "");
+
+  const isManual =
+    row.source_type ===
+    "manual";
 
   return (
     <article className="rounded-2xl border border-white/10 bg-black/30 p-5">
@@ -949,20 +1405,25 @@ function SourceEditorCard({
           </h2>
 
           {isSaved ? (
-            <div className="mt-1 text-xs font-semibold text-green-300">
-              Saved source — import is available
+            <div className="mt-1 text-xs font-semibold text-emerald-300">
+              Saved source
             </div>
           ) : (
             <div className="mt-1 text-xs font-semibold text-yellow-300">
-              Unsaved source — save it before importing
+              Unsaved source
             </div>
           )}
         </div>
 
         <button
           type="button"
-          onClick={() => onRemove(index)}
-          disabled={isSaving || !canRemove}
+          onClick={() =>
+            onRemove(index)
+          }
+          disabled={
+            isSaving ||
+            !canRemove
+          }
           title={
             isSaved
               ? "Saved sources cannot currently be deleted from this editor."
@@ -982,37 +1443,54 @@ function SourceEditorCard({
             htmlFor={urlInputId}
             className="text-sm font-semibold text-yellow-400"
           >
-            Source URL
+            {isManual
+              ? "Manual source label"
+              : "Source URL"}
           </label>
 
           <input
             id={urlInputId}
             type={
-              row.source_type === "manual"
+              isManual
                 ? "text"
                 : "url"
             }
-            value={row.source_url}
-            onChange={(event) =>
+            value={
+              row.source_url
+            }
+            onChange={(
+              event
+            ) =>
               onUpdate(
                 index,
                 "source_url",
-                event.target.value
+                event.target
+                  .value
               )
             }
             placeholder={
-              row.source_type === "manual"
-                ? "Manual timetable source"
+              isManual
+                ? "Example: Mosque office timetable"
                 : "https://mosque.org.uk/prayer-timetable.pdf"
             }
-            maxLength={MAX_URL_LENGTH}
-            disabled={isSaving}
+            maxLength={
+              isManual
+                ? MAX_MANUAL_LABEL_LENGTH
+                : MAX_URL_LENGTH
+            }
+            disabled={
+              isSaving
+            }
             autoCapitalize="off"
             autoCorrect="off"
             spellCheck={false}
-            aria-invalid={Boolean(urlError)}
+            aria-invalid={Boolean(
+              urlError
+            )}
             aria-describedby={
-              urlError ? urlErrorId : undefined
+              urlError
+                ? urlErrorId
+                : undefined
             }
             className="mt-2 w-full rounded-2xl border border-yellow-500/20 bg-black px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400/40 disabled:opacity-60"
           />
@@ -1037,59 +1515,85 @@ function SourceEditorCard({
 
           <select
             id={typeInputId}
-            value={row.source_type}
-            onChange={(event) =>
+            value={
+              row.source_type
+            }
+            onChange={(
+              event
+            ) =>
               onUpdate(
                 index,
                 "source_type",
-                event.target.value as SourceType
+                event.target
+                  .value as SourceType
               )
             }
-            disabled={isSaving}
+            disabled={
+              isSaving
+            }
             aria-invalid={Boolean(
               validation.sourceType
             )}
             className="mt-2 w-full rounded-2xl border border-yellow-500/20 bg-black px-4 py-3 text-sm text-white outline-none transition focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400/40 disabled:opacity-60"
           >
-            {SOURCE_TYPES.map((option) => (
-              <option
-                key={option.value}
-                value={option.value}
-              >
-                {option.label}
-              </option>
-            ))}
+            {SOURCE_TYPES.map(
+              (option) => (
+                <option
+                  key={
+                    option.value
+                  }
+                  value={
+                    option.value
+                  }
+                >
+                  {option.label}
+                </option>
+              )
+            )}
           </select>
 
           {validation.sourceType ? (
             <p className="mt-2 text-xs text-red-300">
-              {validation.sourceType}
+              {
+                validation.sourceType
+              }
             </p>
           ) : null}
         </div>
       </div>
 
       <label
-        htmlFor={automaticInputId}
+        htmlFor={
+          automaticInputId
+        }
         className="mt-4 flex cursor-pointer items-center gap-3 text-sm text-white/70"
       >
         <input
           id={automaticInputId}
           type="checkbox"
-          checked={row.auto_import_enabled}
-          onChange={(event) =>
+          checked={
+            row.auto_import_enabled
+          }
+          onChange={(
+            event
+          ) =>
             onUpdate(
               index,
               "auto_import_enabled",
-              event.target.checked
+              event.target
+                .checked
             )
           }
-          disabled={isSaving}
+          disabled={
+            isSaving ||
+            isManual
+          }
           className="size-4 rounded border-white/20 bg-black accent-yellow-500"
         />
 
-        Enable automatic monthly import checks when
-        scheduled imports become available
+        {isManual
+          ? "Automatic import is unavailable for manual sources"
+          : "Enable automatic monthly import checks when scheduled imports become available"}
       </label>
 
       {isSaved ? (
@@ -1127,20 +1631,39 @@ function SourceEditorCard({
       ) : null}
 
       {isSaved &&
-      cleanUrl &&
+      !isManual &&
+      cleanValue &&
       row.id &&
       isUuid(row.id) &&
       isUuid(mosqueId) ? (
         <MosqueTimetableImportButton
-          mosqueId={mosqueId}
-          sourceId={row.id}
-          sourceUrl={cleanUrl}
-          sourceType={row.source_type}
+          mosqueId={
+            mosqueId
+          }
+          sourceId={
+            row.id
+          }
+          sourceUrl={
+            cleanValue
+          }
+          sourceType={
+            row.source_type
+          }
         />
+      ) : isSaved &&
+        isManual ? (
+        <div className="mt-4 rounded-xl border border-purple-500/20 bg-purple-500/10 p-3 text-xs leading-5 text-purple-100">
+          Use the manual raw-text
+          editor in the timetable
+          import workflow for this
+          source.
+        </div>
       ) : (
         <div className="mt-4 rounded-xl border border-yellow-500/20 bg-yellow-500/10 p-3 text-xs leading-5 text-yellow-100">
-          Save this source successfully before starting
-          a timetable import.
+          Save this source
+          successfully before
+          starting a timetable
+          import.
         </div>
       )}
     </article>
@@ -1160,7 +1683,9 @@ function InfoBlock({
         {label}
       </div>
 
-      <div className="mt-1">{value}</div>
+      <div className="mt-1">
+        {value}
+      </div>
     </div>
   );
 }
