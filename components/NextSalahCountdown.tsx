@@ -14,12 +14,23 @@ type PrayerTimes = {
 type Props = {
   prayerTimes: PrayerTimes | null;
   cityName?: string | null;
+  timezone?: string | null;
 };
 
+type PrayerKey =
+  | "fajr_start"
+  | "sunrise"
+  | "dhuhr_start"
+  | "asr_start"
+  | "maghrib_start"
+  | "isha_start";
+
 type PrayerItem = {
+  key: PrayerKey;
   label: string;
   timeText: string;
   date: Date;
+  isPrayer: boolean;
 };
 
 type PrayerWindow = {
@@ -28,98 +39,268 @@ type PrayerWindow = {
   previous: PrayerItem | null;
   progress: number;
   remaining: number;
+  dayLabel: "today" | "tomorrow";
 };
 
-const prayers = [
-  { key: "fajr_start", label: "Fajr" },
-  { key: "sunrise", label: "Sunrise" },
-  { key: "dhuhr_start", label: "Dhuhr" },
-  { key: "asr_start", label: "Asr" },
-  { key: "maghrib_start", label: "Maghrib" },
-  { key: "isha_start", label: "Isha" },
-] as const;
+const PRAYERS: ReadonlyArray<{
+  key: PrayerKey;
+  label: string;
+  isPrayer: boolean;
+}> = [
+  {
+    key: "fajr_start",
+    label: "Fajr",
+    isPrayer: true,
+  },
+  {
+    key: "sunrise",
+    label: "Sunrise",
+    isPrayer: false,
+  },
+  {
+    key: "dhuhr_start",
+    label: "Dhuhr",
+    isPrayer: true,
+  },
+  {
+    key: "asr_start",
+    label: "Asr",
+    isPrayer: true,
+  },
+  {
+    key: "maghrib_start",
+    label: "Maghrib",
+    isPrayer: true,
+  },
+  {
+    key: "isha_start",
+    label: "Isha",
+    isPrayer: true,
+  },
+];
 
-function parseTimeToday(value: string | null | undefined): Date | null {
-  if (!value) return null;
+function cleanTime(
+  value: string | null | undefined
+): string | null {
+  const trimmed = String(value ?? "").trim();
 
-  const match = value.match(/^(\d{1,2}):(\d{2})/);
-  if (!match) return null;
+  return trimmed || null;
+}
 
-  const date = new Date();
-  date.setHours(Number(match[1]), Number(match[2]), 0, 0);
+function parseTimeForDate(
+  value: string | null | undefined,
+  baseDate: Date,
+  dayOffset = 0
+): Date | null {
+  const cleaned = cleanTime(value);
+
+  if (!cleaned) {
+    return null;
+  }
+
+  const match = cleaned.match(
+    /^(\d{1,2}):(\d{2})(?::(\d{2}))?/
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3] ?? "0");
+
+  if (
+    !Number.isInteger(hours) ||
+    !Number.isInteger(minutes) ||
+    !Number.isInteger(seconds) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59 ||
+    seconds < 0 ||
+    seconds > 59
+  ) {
+    return null;
+  }
+
+  const date = new Date(baseDate);
+  date.setDate(date.getDate() + dayOffset);
+  date.setHours(hours, minutes, seconds, 0);
 
   return date;
 }
 
-function formatDuration(ms: number) {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
+function formatClockTime(
+  value: string | null | undefined
+): string {
+  const cleaned = cleanTime(value);
 
-  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
-  return `${minutes}m ${seconds}s`;
+  if (!cleaned) {
+    return "—";
+  }
+
+  return cleaned.slice(0, 5);
 }
 
-function buildPrayerItems(prayerTimes: PrayerTimes): PrayerItem[] {
-  return prayers
-    .map((p): PrayerItem | null => {
-      const timeText = prayerTimes[p.key];
-      const date = parseTimeToday(timeText);
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(
+    0,
+    Math.floor(ms / 1000)
+  );
+
+  const hours = Math.floor(
+    totalSeconds / 3600
+  );
+
+  const minutes = Math.floor(
+    (totalSeconds % 3600) / 60
+  );
+
+  const seconds =
+    totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${String(hours).padStart(
+      2,
+      "0"
+    )}:${String(minutes).padStart(
+      2,
+      "0"
+    )}:${String(seconds).padStart(
+      2,
+      "0"
+    )}`;
+  }
+
+  return `${String(minutes).padStart(
+    2,
+    "0"
+  )}:${String(seconds).padStart(
+    2,
+    "0"
+  )}`;
+}
+
+function buildPrayerItems(
+  prayerTimes: PrayerTimes,
+  baseDate: Date
+): PrayerItem[] {
+  return PRAYERS.map(
+    (prayer): PrayerItem | null => {
+      const timeText =
+        prayerTimes[prayer.key];
+
+      const date = parseTimeForDate(
+        timeText,
+        baseDate
+      );
 
       if (!date || !timeText) {
         return null;
       }
 
       return {
-        label: p.label,
+        key: prayer.key,
+        label: prayer.label,
         timeText,
         date,
+        isPrayer: prayer.isPrayer,
       };
-    })
-    .filter((value): value is PrayerItem => value !== null);
+    }
+  ).filter(
+    (
+      value
+    ): value is PrayerItem =>
+      value !== null
+  );
 }
 
 function getPrayerWindow(
   prayerTimes: PrayerTimes | null,
   now: Date | null
 ): PrayerWindow | null {
-  if (!prayerTimes || !now) return null;
+  if (!prayerTimes || !now) {
+    return null;
+  }
 
-  const items = buildPrayerItems(prayerTimes);
-  if (items.length === 0) return null;
+  const items = buildPrayerItems(
+    prayerTimes,
+    now
+  );
+
+  if (items.length === 0) {
+    return null;
+  }
 
   const upcoming =
-    items.find((item) => item.date.getTime() > now.getTime()) ?? null;
+    items.find(
+      (item) =>
+        item.date.getTime() >
+        now.getTime()
+    ) ?? null;
 
   const previous =
-    [...items].reverse().find((item) => item.date.getTime() <= now.getTime()) ??
-    null;
+    [...items]
+      .reverse()
+      .find(
+        (item) =>
+          item.date.getTime() <=
+          now.getTime()
+      ) ?? null;
 
   let next = upcoming;
+  let dayLabel: "today" | "tomorrow" =
+    "today";
 
   if (!next) {
-    const tomorrowFajr = parseTimeToday(prayerTimes.fajr_start);
+    const tomorrowFajr =
+      parseTimeForDate(
+        prayerTimes.fajr_start,
+        now,
+        1
+      );
 
-    if (!tomorrowFajr || !prayerTimes.fajr_start) return null;
-
-    tomorrowFajr.setDate(tomorrowFajr.getDate() + 1);
+    if (
+      !tomorrowFajr ||
+      !prayerTimes.fajr_start
+    ) {
+      return null;
+    }
 
     next = {
+      key: "fajr_start",
       label: "Fajr",
-      timeText: prayerTimes.fajr_start,
+      timeText:
+        prayerTimes.fajr_start,
       date: tomorrowFajr,
+      isPrayer: true,
     };
+
+    dayLabel = "tomorrow";
   }
 
   let progress = 0;
 
   if (previous) {
-    const total = next.date.getTime() - previous.date.getTime();
-    const elapsed = now.getTime() - previous.date.getTime();
+    const total =
+      next.date.getTime() -
+      previous.date.getTime();
+
+    const elapsed =
+      now.getTime() -
+      previous.date.getTime();
 
     if (total > 0) {
-      progress = Math.min(100, Math.max(0, Math.round((elapsed / total) * 100)));
+      progress = Math.min(
+        100,
+        Math.max(
+          0,
+          Math.round(
+            (elapsed / total) * 100
+          )
+        )
+      );
     }
   }
 
@@ -128,179 +309,270 @@ function getPrayerWindow(
     previous,
     next,
     progress,
-    remaining: next.date.getTime() - now.getTime(),
+    remaining:
+      next.date.getTime() -
+      now.getTime(),
+    dayLabel,
   };
+}
+
+function getCurrentStatusLabel(
+  current: PrayerItem | null
+): string {
+  if (!current) {
+    return "Before Fajr";
+  }
+
+  if (current.label === "Sunrise") {
+    return "Morning";
+  }
+
+  return `Current: ${current.label}`;
 }
 
 export default function NextSalahCountdown({
   prayerTimes,
   cityName,
 }: Props) {
-  const [now, setNow] = useState<Date | null>(null);
+  const [now, setNow] =
+    useState<Date | null>(null);
 
   useEffect(() => {
-    setNow(new Date());
-
-    const timer = window.setInterval(() => {
+    const update = () =>
       setNow(new Date());
-    }, 1000);
 
-    return () => window.clearInterval(timer);
+    update();
+
+    const timer =
+      window.setInterval(
+        update,
+        1000
+      );
+
+    return () =>
+      window.clearInterval(timer);
   }, []);
 
-  const prayerWindow = useMemo(() => {
-    return getPrayerWindow(prayerTimes, now);
-  }, [prayerTimes, now]);
+  const prayerWindow =
+    useMemo(
+      () =>
+        getPrayerWindow(
+          prayerTimes,
+          now
+        ),
+      [prayerTimes, now]
+    );
 
-  if (!now) return null;
+  if (!now) {
+    return null;
+  }
 
-  if (!prayerTimes || !prayerWindow) {
+  if (
+    !prayerTimes ||
+    !prayerWindow
+  ) {
     return (
-      <section className="luxe-card relative overflow-hidden rounded-3xl p-8">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(212,175,55,0.12),transparent_40%)]" />
+      <section className="premium-panel relative overflow-hidden rounded-[2rem] p-6 sm:p-8">
+        <div
+          aria-hidden="true"
+          className="absolute -right-24 -top-24 h-72 w-72 rounded-full border border-yellow-400/10 bg-yellow-400/[0.025]"
+        />
 
-        <div className="relative z-10">
-          <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
+        <div className="relative">
+          <div className="section-kicker">
             Next Salah
           </div>
 
-          <div className="luxe-heading-font white-soft-glow mt-3 text-3xl text-white">
-            Select a city to view prayer countdown
-          </div>
+          <h2 className="mt-3 text-3xl font-black text-white">
+            Choose a city to activate
+            the live prayer countdown.
+          </h2>
 
-          <p className="mt-3 max-w-xl text-white/60">
-            SalahNearMe will display live prayer countdowns, current salah
-            window, and prayer progression.
+          <p className="mt-3 max-w-2xl text-sm leading-7 text-white/55">
+            SalahNearMe will show the
+            current prayer window, the
+            next salah and a live
+            second-by-second countdown.
           </p>
         </div>
       </section>
     );
   }
 
-  return (
-    <section className="luxe-card relative overflow-hidden rounded-3xl p-8">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(212,175,55,0.14),transparent_40%)]" />
-      <div className="absolute inset-y-0 right-0 w-[40%] bg-[linear-gradient(to_left,rgba(212,175,55,0.04),transparent)]" />
+  const currentStatus =
+    getCurrentStatusLabel(
+      prayerWindow.current
+    );
 
-      <div className="relative z-10">
+  return (
+    <section
+      aria-labelledby="next-salah-heading"
+      className="premium-panel relative overflow-hidden rounded-[2rem] p-5 sm:p-7 lg:p-8"
+    >
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 bg-[radial-gradient(circle_at_88%_18%,rgba(212,175,55,0.13),transparent_31rem)]"
+      />
+
+      <div
+        aria-hidden="true"
+        className="absolute -right-32 -top-32 h-96 w-96 rounded-full border border-yellow-300/[0.08]"
+      />
+
+      <div className="relative">
         <div className="flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
           <div>
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.15em] text-yellow-400">
-                Salah Status
-              </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="premium-badge">
+                Live prayer clock
+              </span>
 
-              {cityName && (
-                <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs text-white/60">
+              {cityName ? (
+                <span className="rounded-full border border-white/10 bg-black/25 px-3 py-1 text-xs text-white/60">
                   {cityName}
-                </div>
-              )}
+                </span>
+              ) : null}
 
-              <div className="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-1 text-xs font-semibold text-green-300">
-                Current: {prayerWindow.current?.label ?? "Before Fajr"}
-              </div>
-            </div>
-
-            <div className="dashboard-hero-glow mt-6 text-5xl font-black tracking-[-0.04em] text-white md:text-6xl">
-              {prayerWindow.next.label}
-                </div>
-
-            <div className="mt-3 text-lg text-white/70">
-              Starts at{" "}
-              <span className="font-semibold text-yellow-400">
-                {prayerWindow.next.timeText}
+              <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-xs font-bold text-emerald-200">
+                {currentStatus}
               </span>
             </div>
-          </div>
 
-          <div className="rounded-3xl border border-yellow-500/30 bg-yellow-500/10 px-8 py-6 backdrop-blur-xl">
-            <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
-              Time Remaining
+            <div className="mt-6 text-xs font-black uppercase tracking-[0.22em] text-yellow-300/80">
+              Next salah
             </div>
 
-            <div className="dashboard-hero-glow mt-3 text-4xl font-bold tracking-tight text-white md:text-5xl">
-              {formatDuration(prayerWindow.remaining)}
-              </div>
+            <h2
+              id="next-salah-heading"
+              className="dashboard-hero-glow mt-2 text-5xl font-black tracking-[-0.045em] text-white sm:text-6xl lg:text-7xl"
+            >
+              {prayerWindow.next.label}
+            </h2>
+
+            <p className="mt-3 text-base text-white/60 sm:text-lg">
+              Begins{" "}
+              {prayerWindow.dayLabel ===
+              "tomorrow"
+                ? "tomorrow "
+                : ""}
+              at{" "}
+              <span className="font-black text-yellow-300">
+                {formatClockTime(
+                  prayerWindow.next
+                    .timeText
+                )}
+              </span>
+            </p>
+          </div>
+
+          <div className="min-w-[260px] rounded-[1.75rem] border border-yellow-400/25 bg-yellow-400/[0.08] px-6 py-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl sm:px-8 sm:py-6">
+            <div className="text-xs font-black uppercase tracking-[0.22em] text-yellow-300/80">
+              Time remaining
+            </div>
+
+            <div
+              aria-live="polite"
+              className="dashboard-hero-glow mt-3 font-mono text-4xl font-black tracking-[-0.04em] text-white sm:text-5xl"
+            >
+              {formatDuration(
+                prayerWindow.remaining
+              )}
+            </div>
           </div>
         </div>
 
         <div className="mt-8">
-          <div className="mb-3 flex items-center justify-between text-xs font-semibold uppercase tracking-[0.15em] text-white/45">
-            <span>{prayerWindow.previous?.label ?? "Start"}</span>
+          <div className="mb-3 flex items-center justify-between gap-3 text-xs font-bold uppercase tracking-[0.14em] text-white/40">
+            <span>
+              {prayerWindow.previous
+                ?.label ?? "Start"}
+            </span>
 
-            <span className="rounded-full border border-yellow-500/20 bg-yellow-500/10 px-3 py-1 text-yellow-300">
+            <span className="rounded-full border border-yellow-400/20 bg-yellow-400/[0.08] px-3 py-1 text-yellow-200">
               {prayerWindow.progress}%
             </span>
 
-            <span>{prayerWindow.next.label}</span>
+            <span>
+              {prayerWindow.next.label}
+            </span>
           </div>
 
-          <div className="relative h-4 overflow-hidden rounded-full border border-yellow-500/20 bg-black/50 backdrop-blur-xl">
-          <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.02),transparent)]" />
-
-         <div
-          className="relative h-full rounded-full bg-[linear-gradient(90deg,#b8860b_0%,#f4d675_35%,#fff4c2_50%,#f4d675_65%,#b8860b_100%)] shadow-[0_0_25px_rgba(212,175,55,0.45)] transition-all duration-1000"
-          style={{
-            width: `${prayerWindow.progress}%`,
-          }}
-              >
-          <div className="absolute inset-0 animate-pulse bg-white/10" />
-        </div>
-      </div>
-              </div>
-
-        <div className="mt-8 grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
-          {prayers.map((prayer) => {
-    const isActive = prayer.label === prayerWindow.next.label;
-
-    return (
-      <div
-        key={prayer.label}
-        className={`group relative overflow-hidden rounded-2xl border p-4 transition-all duration-300 ${
-          isActive
-            ? "border-yellow-500/40 bg-yellow-500/10 shadow-[0_0_30px_rgba(212,175,55,0.12)]"
-            : "border-white/10 bg-black/30 hover:border-yellow-500/20 hover:bg-white/[0.03]"
-        }`}
-      >
-        {isActive && (
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(212,175,55,0.14),transparent_55%)]" />
-        )}
-
-        <div className="relative z-10">
-          <div className="flex items-center justify-between gap-2">
+          <div className="relative h-3 overflow-hidden rounded-full border border-yellow-400/15 bg-black/45">
             <div
-              className={`text-sm font-semibold ${
-                isActive ? "text-yellow-300" : "text-yellow-400"
-              }`}
-            >
-              {prayer.label}
-            </div>
-
-            {isActive && (
-              <div className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.15em] text-yellow-300">
-                Next
-              </div>
-            )}
-          </div>
-
-          <div
-            className={`mt-3 text-2xl font-black tracking-tight ${
-              isActive ? "text-white" : "text-white/90"
-            }`}
-          >
-            {prayerTimes[prayer.key] ?? "—"}
-          </div>
-
-          <div className="mt-1 text-xs uppercase tracking-[0.15em] text-white/40">
-            Begins
+              className="h-full rounded-full bg-[linear-gradient(90deg,#8f6506_0%,#d4af37_35%,#fff0a8_52%,#d4af37_75%,#8f6506_100%)] shadow-[0_0_24px_rgba(212,175,55,0.42)] transition-[width] duration-1000 ease-linear"
+              style={{
+                width: `${prayerWindow.progress}%`,
+              }}
+            />
           </div>
         </div>
-      </div>
-    );
-  })}
-</div>
-</div>
-</section>
-);
-}
 
+        <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          {PRAYERS.map((prayer) => {
+            const isNext =
+              prayer.label ===
+              prayerWindow.next.label;
+
+            const isCurrent =
+              prayer.label ===
+              prayerWindow.current
+                ?.label;
+
+            return (
+              <div
+                key={prayer.key}
+                className={[
+                  "relative overflow-hidden rounded-2xl border p-4 transition duration-300",
+                  isNext
+                    ? "border-yellow-400/35 bg-yellow-400/[0.09] shadow-[0_0_30px_rgba(212,175,55,0.10)]"
+                    : isCurrent
+                      ? "border-emerald-400/25 bg-emerald-400/[0.06]"
+                      : "border-white/10 bg-black/25 hover:border-yellow-400/20",
+                ].join(" ")}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className={[
+                      "text-sm font-black",
+                      isNext
+                        ? "text-yellow-200"
+                        : isCurrent
+                          ? "text-emerald-200"
+                          : "text-white/70",
+                    ].join(" ")}
+                  >
+                    {prayer.label}
+                  </span>
+
+                  {isNext ? (
+                    <span className="rounded-full border border-yellow-400/25 bg-yellow-400/10 px-2 py-1 text-[0.58rem] font-black uppercase tracking-[0.12em] text-yellow-200">
+                      Next
+                    </span>
+                  ) : isCurrent ? (
+                    <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2 py-1 text-[0.58rem] font-black uppercase tracking-[0.12em] text-emerald-200">
+                      Current
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="mt-3 text-2xl font-black tracking-tight text-white">
+                  {formatClockTime(
+                    prayerTimes[
+                      prayer.key
+                    ]
+                  )}
+                </div>
+
+                <div className="mt-1 text-[0.62rem] font-bold uppercase tracking-[0.15em] text-white/35">
+                  {prayer.isPrayer
+                    ? "Begins"
+                    : "Solar time"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}

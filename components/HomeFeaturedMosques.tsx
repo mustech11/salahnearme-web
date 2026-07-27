@@ -3,7 +3,9 @@ import Link from "next/link";
 
 import {
   buildMosqueLiveTrust,
+  formatLiveStatusLabel,
   type LiveReportRow,
+  type MosqueLiveTrust,
 } from "@/lib/mosqueTrust";
 import { sortMosquesByTrustAndActivity } from "@/lib/mosqueSmartRanking";
 import { supabasePublic } from "@/lib/supabaseServer";
@@ -107,7 +109,9 @@ function getFacilityLabels(
     labels.push("Parking");
   }
 
-  if (mosque.wheelchair_access) {
+  if (
+    mosque.wheelchair_access
+  ) {
     labels.push("Accessible");
   }
 
@@ -127,7 +131,67 @@ function getImagePosition(
     "object-[58%_48%]",
   ];
 
-  return positions[index % positions.length];
+  return positions[
+    index % positions.length
+  ];
+}
+
+function getLiveTone(
+  live: MosqueLiveTrust
+): "green" | "red" | "orange" | "cyan" | "yellow" {
+  if (
+    live.dominantStatus ===
+      "full" ||
+    live.dominantStatus ===
+      "correction"
+  ) {
+    return "red";
+  }
+
+  if (
+    live.dominantStatus ===
+      "parking_full" ||
+    live.dominantStatus ===
+      "delayed"
+  ) {
+    return "orange";
+  }
+
+  if (
+    live.dominantStatus ===
+    "khutbah"
+  ) {
+    return "cyan";
+  }
+
+  if (
+    live.dominantStatus ===
+      "iqamah" ||
+    live.dominantStatus ===
+      "jumuah"
+  ) {
+    return "green";
+  }
+
+  return "yellow";
+}
+
+function getFreshnessLabel(
+  minutesAgo: number | null
+): string | null {
+  if (minutesAgo === null) {
+    return null;
+  }
+
+  if (minutesAgo <= 0) {
+    return "Updated just now";
+  }
+
+  if (minutesAgo === 1) {
+    return "Updated 1 minute ago";
+  }
+
+  return `Updated ${minutesAgo} minutes ago`;
 }
 
 export default async function HomeFeaturedMosques({
@@ -139,7 +203,8 @@ export default async function HomeFeaturedMosques({
     Math.min(limit, 12)
   );
 
-  const supabase = supabasePublic();
+  const supabase =
+    supabasePublic();
 
   let mosqueQuery = supabase
     .from("mosques")
@@ -177,10 +242,11 @@ export default async function HomeFeaturedMosques({
     .limit(MAX_QUERY_ROWS);
 
   if (city) {
-    mosqueQuery = mosqueQuery.eq(
-      "city_id",
-      city.id
-    );
+    mosqueQuery =
+      mosqueQuery.eq(
+        "city_id",
+        city.id
+      );
   }
 
   const {
@@ -201,19 +267,24 @@ export default async function HomeFeaturedMosques({
     (mosqueData ??
       []) as unknown as HomeMosqueRow[];
 
-  if (mosqueRows.length === 0) {
+  if (
+    mosqueRows.length === 0
+  ) {
     return null;
   }
 
-  const mosqueIds = mosqueRows.map(
-    (mosque) => mosque.id
-  );
+  const mosqueIds =
+    mosqueRows.map(
+      (mosque) => mosque.id
+    );
 
   const {
     data: reportData,
     error: reportError,
   } = await supabase
-    .from("mosque_live_reports")
+    .from(
+      "mosque_live_reports"
+    )
     .select(
       [
         "mosque_id",
@@ -222,7 +293,10 @@ export default async function HomeFeaturedMosques({
         "user_fingerprint",
       ].join(",")
     )
-    .in("mosque_id", mosqueIds)
+    .in(
+      "mosque_id",
+      mosqueIds
+    )
     .order("created_at", {
       ascending: false,
     })
@@ -239,10 +313,11 @@ export default async function HomeFeaturedMosques({
     (reportData ??
       []) as unknown as LiveReportRow[];
 
-  const groupedReports = new Map<
-    string,
-    LiveReportRow[]
-  >();
+  const groupedReports =
+    new Map<
+      string,
+      LiveReportRow[]
+    >();
 
   for (const report of reports) {
     const existing =
@@ -258,19 +333,19 @@ export default async function HomeFeaturedMosques({
     );
   }
 
-  const liveMap = new Map<
-    string,
-    ReturnType<
-      typeof buildMosqueLiveTrust
-    >
-  >();
+  const liveMap =
+    new Map<
+      string,
+      MosqueLiveTrust
+    >();
 
   for (const mosque of mosqueRows) {
     liveMap.set(
       mosque.id,
       buildMosqueLiveTrust(
-        groupedReports.get(mosque.id) ??
-          []
+        groupedReports.get(
+          mosque.id
+        ) ?? []
       )
     );
   }
@@ -281,27 +356,57 @@ export default async function HomeFeaturedMosques({
       liveMap
     )
       .sort((a, b) => {
-        const aVerified = cleanText(
-          (a as HomeMosqueRow)
-            .verified_status
-        )
-          ? 1
-          : 0;
+        const aRow =
+          a as HomeMosqueRow;
 
-        const bVerified = cleanText(
-          (b as HomeMosqueRow)
-            .verified_status
-        )
-          ? 1
-          : 0;
+        const bRow =
+          b as HomeMosqueRow;
 
-        return bVerified - aVerified;
+        const aVerified =
+          cleanText(
+            aRow.verified_status
+          )
+            ? 1
+            : 0;
+
+        const bVerified =
+          cleanText(
+            bRow.verified_status
+          )
+            ? 1
+            : 0;
+
+        if (
+          aVerified !== bVerified
+        ) {
+          return (
+            bVerified -
+            aVerified
+          );
+        }
+
+        return (
+          (liveMap.get(b.id)
+            ?.trustScore ?? 0) -
+          (liveMap.get(a.id)
+            ?.trustScore ?? 0)
+        );
       })
-      .slice(0, safeLimit) as HomeMosqueRow[];
+      .slice(
+        0,
+        safeLimit
+      ) as HomeMosqueRow[];
 
   const viewAllHref = city
     ? `/${city.slug}/mosques`
     : "/near-me/pray";
+
+  const liveMosqueCount =
+    mosques.filter(
+      (mosque) =>
+        liveMap.get(mosque.id)
+          ?.hasLive
+    ).length;
 
   return (
     <section
@@ -315,8 +420,16 @@ export default async function HomeFeaturedMosques({
 
       <div className="relative flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <div className="section-kicker">
-            Featured mosques
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="section-kicker">
+              Live mosque discovery
+            </div>
+
+            {liveMosqueCount > 0 ? (
+              <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-[0.62rem] font-black uppercase tracking-[0.14em] text-emerald-200">
+                {liveMosqueCount} active now
+              </span>
+            ) : null}
           </div>
 
           <h2
@@ -329,9 +442,10 @@ export default async function HomeFeaturedMosques({
           </h2>
 
           <p className="mt-3 max-w-3xl text-sm leading-7 text-white/55">
-            Discover active mosque profiles
-            ranked using verification and
-            recent community trust signals.
+            Mosque profiles ranked using
+            verification, facilities and
+            recent community trust
+            signals.
           </p>
         </div>
 
@@ -350,24 +464,44 @@ export default async function HomeFeaturedMosques({
         {mosques.map(
           (mosque, index) => {
             const live =
-              liveMap.get(mosque.id);
+              liveMap.get(
+                mosque.id
+              ) ??
+              buildMosqueLiveTrust(
+                []
+              );
 
             const name =
-              cleanText(mosque.name) ||
-              "Mosque";
+              cleanText(
+                mosque.name
+              ) || "Mosque";
 
             const slug =
-              cleanText(mosque.slug);
+              cleanText(
+                mosque.slug
+              );
 
             const location =
               getLocation(mosque);
 
             const facilities =
-              getFacilityLabels(mosque);
+              getFacilityLabels(
+                mosque
+              );
 
             const verifiedStatus =
               formatStatus(
                 mosque.verified_status
+              );
+
+            const liveLabel =
+              formatLiveStatusLabel(
+                live.dominantStatus
+              );
+
+            const freshnessLabel =
+              getFreshnessLabel(
+                live.latestReportMinutesAgo
               );
 
             return (
@@ -383,17 +517,23 @@ export default async function HomeFeaturedMosques({
                     sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
                     className={[
                       "scale-[1.04] object-cover opacity-75 transition duration-700 group-hover:scale-[1.09] group-hover:opacity-90",
-                      getImagePosition(index),
+                      getImagePosition(
+                        index
+                      ),
                     ].join(" ")}
                   />
 
                   <div className="absolute inset-0 bg-gradient-to-t from-[#030a1d] via-[#030a1d]/35 to-black/10" />
 
                   <div className="absolute left-4 top-4 flex flex-wrap gap-2">
-                    {live?.hasLive ? (
-                      <Badge variant="live">
-                        Live now
-                      </Badge>
+                    {live.hasLive ? (
+                      <LiveBadge
+                        tone={getLiveTone(
+                          live
+                        )}
+                      >
+                        {liveLabel}
+                      </LiveBadge>
                     ) : null}
 
                     {verifiedStatus ? (
@@ -435,6 +575,26 @@ export default async function HomeFeaturedMosques({
                     <div className="min-h-14" />
                   )}
 
+                  {live.hasLive ? (
+                    <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-black text-white">
+                          {liveLabel}
+                        </span>
+
+                        <span className="capitalize text-[0.64rem] font-bold text-yellow-200">
+                          {live.confidence} confidence
+                        </span>
+                      </div>
+
+                      {freshnessLabel ? (
+                        <p className="mt-1 text-[0.68rem] text-white/40">
+                          {freshnessLabel}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   <div className="mt-4 flex min-h-8 flex-wrap gap-2">
                     {facilities.map(
                       (facility) => (
@@ -449,10 +609,9 @@ export default async function HomeFeaturedMosques({
 
                   <div className="mt-5 flex items-center justify-between gap-3 border-t border-white/10 pt-4">
                     <div className="text-xs text-white/45">
-                      Trust confidence:{" "}
-                      <span className="capitalize text-white/75">
-                        {live?.confidence ??
-                          "none"}
+                      Trust score:{" "}
+                      <span className="font-bold text-white/75">
+                        {live.trustScore}
                       </span>
                     </div>
 
@@ -495,6 +654,43 @@ function MosqueIcon() {
   );
 }
 
+function LiveBadge({
+  children,
+  tone,
+}: {
+  children: React.ReactNode;
+  tone:
+    | "green"
+    | "red"
+    | "orange"
+    | "cyan"
+    | "yellow";
+}) {
+  const styles = {
+    green:
+      "border-emerald-400/25 bg-emerald-400/10 text-emerald-100",
+    red:
+      "border-red-400/25 bg-red-400/10 text-red-100",
+    orange:
+      "border-orange-400/25 bg-orange-400/10 text-orange-100",
+    cyan:
+      "border-cyan-400/25 bg-cyan-400/10 text-cyan-100",
+    yellow:
+      "border-yellow-400/25 bg-yellow-400/10 text-yellow-100",
+  };
+
+  return (
+    <span
+      className={[
+        "inline-flex rounded-full border px-3 py-1 text-[0.64rem] font-black",
+        styles[tone],
+      ].join(" ")}
+    >
+      {children}
+    </span>
+  );
+}
+
 function Badge({
   children,
   variant = "default",
@@ -502,15 +698,12 @@ function Badge({
   children: React.ReactNode;
   variant?:
     | "default"
-    | "verified"
-    | "live";
+    | "verified";
 }) {
   const className =
     variant === "verified"
       ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200"
-      : variant === "live"
-        ? "border-cyan-400/25 bg-cyan-400/10 text-cyan-200"
-        : "border-yellow-400/20 bg-yellow-400/[0.07] text-yellow-200";
+      : "border-yellow-400/20 bg-yellow-400/[0.07] text-yellow-200";
 
   return (
     <span
