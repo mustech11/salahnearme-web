@@ -106,7 +106,11 @@ const APPROVABLE_STATUSES = new Set([
   "parsed",
   "parsed_pending_review",
   "reviewed",
+]);
+
+const ALREADY_APPROVED_STATUSES = new Set([
   "approved",
+  "published",
 ]);
 
 const TIME_FIELDS = [
@@ -505,6 +509,22 @@ export async function POST(request: Request) {
       null;
 
     if (
+      importStatus &&
+      ALREADY_APPROVED_STATUSES.has(importStatus)
+    ) {
+      return jsonResponse({
+        ok: true,
+        message:
+          "This timetable has already been approved and published.",
+        status: importStatus,
+        import_id: importId,
+        approved_rows: 0,
+        published_rows: 0,
+        already_approved: true,
+      });
+    }
+
+    if (
       !importStatus ||
       !APPROVABLE_STATUSES.has(importStatus)
     ) {
@@ -513,6 +533,8 @@ export async function POST(request: Request) {
           ok: false,
           error:
             "This timetable must be parsed and reviewed before it can be approved.",
+          status: importStatus,
+          import_id: importId,
         },
         409
       );
@@ -672,6 +694,9 @@ export async function POST(request: Request) {
             "The timetable rows were published, but the import status could not be updated.",
           published: true,
           approved_rows: rowsToUpsert.length,
+          published_rows: rowsToUpsert.length,
+          status: "published_status_update_failed",
+          import_id: importId,
         },
         500
       );
@@ -685,6 +710,9 @@ export async function POST(request: Request) {
             "The timetable rows were published, but the import changed during approval. Refresh the page before trying again.",
           published: true,
           approved_rows: rowsToUpsert.length,
+          published_rows: rowsToUpsert.length,
+          status: "published_concurrent_change",
+          import_id: importId,
         },
         409
       );
@@ -730,6 +758,9 @@ export async function POST(request: Request) {
         rowsToUpsert.length === 1 ? " was" : "s were"
       } approved and published successfully.`,
       approved_rows: rowsToUpsert.length,
+      published_rows: rowsToUpsert.length,
+      status: cleanString(updatedImport.status) ?? "approved",
+      import_id: importId,
       import: updatedImport,
     });
   } catch (error) {
