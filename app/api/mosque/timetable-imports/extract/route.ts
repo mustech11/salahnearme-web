@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 type Body = {
   import_id?: unknown;
@@ -77,7 +78,10 @@ function jsonResponse(
   return NextResponse.json(body, {
     status,
     headers: {
-      "Cache-Control": "no-store, max-age=0",
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate, max-age=0",
+      Pragma: "no-cache",
+      Expires: "0",
     },
   });
 }
@@ -850,7 +854,9 @@ export async function POST(request: Request) {
         ok: true,
         message:
           "Timetable source extracted successfully.",
+        status: "extracted",
         raw_text_length: rawText.length,
+        extracted_text_length: rawText.length,
         downloaded_bytes: fetched.byteLength,
         content_type: fetched.contentType,
         detected_source_type: fetched.detectedType,

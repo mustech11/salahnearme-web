@@ -33,9 +33,11 @@ const UUID_REGEX =
 
 const MIN_RAW_TEXT_LENGTH = 20;
 const MAX_RAW_TEXT_LENGTH = 100_000;
+const MAX_REQUEST_BYTES = 110_000;
 
 const LOCKED_STATUSES = new Set([
   "approved",
+  "published",
 ]);
 
 function jsonResponse(
@@ -58,7 +60,10 @@ function cleanString(value: unknown): string | null {
     return null;
   }
 
-  const cleaned = value.trim();
+  const cleaned = value
+    .replace(/\u0000/g, "")
+    .replace(/\r\n?/g, "\n")
+    .trim();
 
   return cleaned.length > 0 ? cleaned : null;
 }
@@ -84,27 +89,46 @@ function isJsonRequest(request: Request): boolean {
   return contentType.includes("application/json");
 }
 
+function exceedsRequestLimit(request: Request): boolean {
+  const value = request.headers.get("content-length");
+
+  if (!value) {
+    return false;
+  }
+
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) && parsed > MAX_REQUEST_BYTES;
+}
+
 function calculateConfidenceScore(rawText: string): number {
-  if (rawText.length >= 2_000) {
-    return 55;
-  }
+  const lower = rawText.toLowerCase();
+  const prayerKeywords = [
+    "fajr",
+    "sunrise",
+    "dhuhr",
+    "zuhr",
+    "asr",
+    "maghrib",
+    "isha",
+    "iqamah",
+  ];
 
-  if (rawText.length >= 500) {
-    return 50;
-  }
+  const matchedKeywords = prayerKeywords.filter((keyword) =>
+    lower.includes(keyword)
+  ).length;
 
-  return 40;
+  let score = rawText.length >= 2_000 ? 55 : rawText.length >= 500 ? 50 : 40;
+  score += Math.min(20, matchedKeywords * 3);
+
+  return Math.min(75, score);
 }
 
 async function readBody(request: Request): Promise<Body | null> {
   try {
     const value: unknown = await request.json();
 
-    if (!isPlainObject(value)) {
-      return null;
-    }
-
-    return value as Body;
+    return isPlainObject(value) ? (value as Body) : null;
   } catch {
     return null;
   }
@@ -119,6 +143,16 @@ export async function POST(request: Request) {
           error: "Content-Type must be application/json.",
         },
         415
+      );
+    }
+
+    if (exceedsRequestLimit(request)) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "The request body is too large.",
+        },
+        413
       );
     }
 
@@ -171,7 +205,9 @@ export async function POST(request: Request) {
       return jsonResponse(
         {
           ok: false,
-          error: `Raw timetable text must not exceed ${MAX_RAW_TEXT_LENGTH.toLocaleString()} characters.`,
+          error: `Raw timetable text must not exceed ${MAX_RAW_TEXT_LENGTH.toLocaleString(
+            "en-GB"
+          )} characters.`,
         },
         413
       );
@@ -185,14 +221,11 @@ export async function POST(request: Request) {
         .maybeSingle();
 
     if (lookupError) {
-      console.error(
-        "Manual raw text import lookup failed:",
-        {
-          importId,
-          code: lookupError.code,
-          message: lookupError.message,
-        }
-      );
+      console.error("Manual raw-text import lookup failed:", {
+        importId,
+        code: lookupError.code,
+        message: lookupError.message,
+      });
 
       return jsonResponse(
         {
@@ -213,24 +246,20 @@ export async function POST(request: Request) {
       );
     }
 
-    const importRow =
-      importRowRaw as TimetableImportLookup;
-
+    const importRow = importRowRaw as TimetableImportLookup;
     const mosqueId = cleanString(importRow.mosque_id);
 
     if (!isUuid(mosqueId)) {
       return jsonResponse(
         {
           ok: false,
-          error:
-            "The timetable import is not linked to a valid mosque.",
+          error: "The timetable import is not linked to a valid mosque.",
         },
         409
       );
     }
 
-    const permission =
-      await requireMosqueManager(mosqueId);
+    const permission = await requireMosqueManager(mosqueId);
 
     if (!permission.ok) {
       return jsonResponse(
@@ -245,10 +274,7 @@ export async function POST(request: Request) {
     const currentStatus =
       cleanString(importRow.status)?.toLowerCase() ?? null;
 
-    if (
-      currentStatus &&
-      LOCKED_STATUSES.has(currentStatus)
-    ) {
+    if (currentStatus && LOCKED_STATUSES.has(currentStatus)) {
       return jsonResponse(
         {
           ok: false,
@@ -260,8 +286,7 @@ export async function POST(request: Request) {
     }
 
     const now = new Date().toISOString();
-    const confidenceScore =
-      calculateConfidenceScore(rawText);
+    const confidenceScore = calculateConfidenceScore(rawText);
 
     let updateQuery = supabaseAdmin
       .from("mosque_timetable_imports")
@@ -278,40 +303,29 @@ export async function POST(request: Request) {
       .eq("id", importId)
       .eq("mosque_id", mosqueId);
 
-    if (currentStatus) {
-      updateQuery = updateQuery.eq(
-        "status",
-        currentStatus
-      );
-    } else {
-      updateQuery = updateQuery.is("status", null);
-    }
+    updateQuery = currentStatus
+      ? updateQuery.eq("status", currentStatus)
+      : updateQuery.is("status", null);
 
-    const {
-      data: updatedImportRaw,
-      error: updateError,
-    } = await updateQuery
-      .select(
-        "id,mosque_id,source_id,status,confidence_score,updated_at"
-      )
-      .maybeSingle();
+    const { data: updatedImportRaw, error: updateError } =
+      await updateQuery
+        .select(
+          "id,mosque_id,source_id,status,confidence_score,updated_at"
+        )
+        .maybeSingle();
 
     if (updateError) {
-      console.error(
-        "Manual raw text import update failed:",
-        {
-          importId,
-          mosqueId,
-          code: updateError.code,
-          message: updateError.message,
-        }
-      );
+      console.error("Manual raw-text import update failed:", {
+        importId,
+        mosqueId,
+        code: updateError.code,
+        message: updateError.message,
+      });
 
       return jsonResponse(
         {
           ok: false,
-          error:
-            "Could not save the manual timetable text.",
+          error: "Could not save the manual timetable text.",
         },
         500
       );
@@ -328,35 +342,29 @@ export async function POST(request: Request) {
       );
     }
 
-    const updatedImport =
-      updatedImportRaw as UpdatedImportRow;
-
+    const updatedImport = updatedImportRaw as UpdatedImportRow;
     const sourceId = cleanString(importRow.source_id);
 
     if (isUuid(sourceId)) {
-      const { error: sourceUpdateError } =
-        await supabaseAdmin
-          .from("mosque_timetable_sources")
-          .update({
-            last_checked_at: now,
-            last_success_at: now,
-            last_error: null,
-            updated_at: now,
-          })
-          .eq("id", sourceId)
-          .eq("mosque_id", mosqueId);
+      const { error: sourceUpdateError } = await supabaseAdmin
+        .from("mosque_timetable_sources")
+        .update({
+          last_checked_at: now,
+          last_success_at: now,
+          last_error: null,
+          updated_at: now,
+        })
+        .eq("id", sourceId)
+        .eq("mosque_id", mosqueId);
 
       if (sourceUpdateError) {
-        console.error(
-          "Manual raw text source update failed:",
-          {
-            importId,
-            mosqueId,
-            sourceId,
-            code: sourceUpdateError.code,
-            message: sourceUpdateError.message,
-          }
-        );
+        console.warn("Manual raw-text source metadata update failed:", {
+          importId,
+          mosqueId,
+          sourceId,
+          code: sourceUpdateError.code,
+          message: sourceUpdateError.message,
+        });
       }
     }
 
@@ -364,20 +372,19 @@ export async function POST(request: Request) {
       ok: true,
       message:
         "Raw timetable text saved successfully. It is ready to be parsed.",
+      import_id: importId,
+      status: "extracted",
       raw_text_length: rawText.length,
+      confidence_score: confidenceScore,
       import: updatedImport,
     });
   } catch (error) {
-    console.error(
-      "Manual raw text route failed:",
-      error
-    );
+    console.error("Manual raw-text route failed:", error);
 
     return jsonResponse(
       {
         ok: false,
-        error:
-          "Could not save manual raw timetable text.",
+        error: "Could not save manual raw timetable text.",
       },
       500
     );
