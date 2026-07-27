@@ -21,13 +21,14 @@ type ApproveResponse = {
   error?: string;
   message?: string;
   approved_rows?: number;
+  published_rows?: number;
+  status?: string;
 };
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const REQUEST_TIMEOUT_MS = 60_000;
-
 const DEFAULT_ERROR_MESSAGE =
   "The timetable could not be approved. Please try again.";
 
@@ -35,52 +36,85 @@ function cleanString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function getApprovedRowCount(value: unknown): number | null {
-  if (
-    typeof value !== "number" ||
-    !Number.isFinite(value) ||
-    value < 0
-  ) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function getSafeCount(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return null;
   }
 
   return Math.trunc(value);
 }
 
-async function readApproveResponse(
-  response: Response
-): Promise<ApproveResponse> {
-  try {
-    const value: unknown = await response.json();
+async function readResponse(response: Response): Promise<ApproveResponse> {
+  const contentType = response.headers.get("content-type") ?? "";
 
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (contentType.toLowerCase().includes("application/json")) {
+    try {
+      const value: unknown = await response.json();
+      return isRecord(value) ? (value as ApproveResponse) : {};
+    } catch {
       return {};
     }
+  }
 
-    return value as ApproveResponse;
+  try {
+    const text = cleanString(await response.text());
+    return text ? { message: text } : {};
   } catch {
     return {};
   }
 }
 
-export default function MosqueTimetableApproveButton({
-  importId,
-}: Props) {
+function getResponseError(data: ApproveResponse, status: number): string {
+  const supplied = cleanString(data.error) || cleanString(data.message);
+
+  if (supplied) return supplied;
+  if (status === 400) return "The approval request is invalid.";
+  if (status === 401) return "Your session has expired. Please sign in again.";
+  if (status === 403) return "You do not have permission to approve this timetable.";
+  if (status === 404) return "The timetable import could not be found.";
+  if (status === 409) {
+    return "This timetable is not ready for approval, is already approved, or has changed since review.";
+  }
+  if (status === 422) {
+    return "The reviewed timetable contains invalid or incomplete rows.";
+  }
+  if (status === 429) {
+    return "Too many approval requests were submitted. Please wait and try again.";
+  }
+  if (status >= 500) {
+    return "The approval service is temporarily unavailable. Please try again shortly.";
+  }
+
+  return DEFAULT_ERROR_MESSAGE;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+export default function MosqueTimetableApproveButton({ importId }: Props) {
   const router = useRouter();
-  const statusId = useId();
+  const componentId = useId();
+
+  const validationId = `${componentId}-validation`;
+  const successId = `${componentId}-success`;
+  const errorId = `${componentId}-error`;
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const timeoutTriggeredRef = useRef(false);
   const mountedRef = useRef(true);
 
-  const [submitState, setSubmitState] =
-    useState<SubmitState>("idle");
+  const [submitState, setSubmitState] = useState<SubmitState>("idle");
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [publishedRows, setPublishedRows] = useState<number | null>(null);
+  const [resultStatus, setResultStatus] = useState("");
 
-  const cleanImportId = useMemo(
-    () => cleanString(importId),
-    [importId]
-  );
+  const cleanImportId = useMemo(() => cleanString(importId), [importId]);
 
   const validationError = useMemo(() => {
     if (!UUID_REGEX.test(cleanImportId)) {
@@ -92,9 +126,7 @@ export default function MosqueTimetableApproveButton({
 
   const isSubmitting = submitState === "submitting";
   const isApproved = submitState === "success";
-
-  const isDisabled =
-    isSubmitting || isApproved || Boolean(validationError);
+  const isDisabled = isSubmitting || isApproved || Boolean(validationError);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -110,15 +142,24 @@ export default function MosqueTimetableApproveButton({
     setSubmitState("idle");
     setMessage("");
     setErrorMessage("");
+    setPublishedRows(null);
+    setResultStatus("");
   }, [cleanImportId]);
 
+  const describedBy = useMemo(() => {
+    if (errorMessage) return errorId;
+    if (message) return successId;
+    if (validationError) return validationId;
+    return undefined;
+  }, [errorId, errorMessage, message, successId, validationError, validationId]);
+
   const approveImport = useCallback(async () => {
-    if (isSubmitting || isApproved) {
-      return;
-    }
+    if (isSubmitting || isApproved || !mountedRef.current) return;
 
     setMessage("");
     setErrorMessage("");
+    setPublishedRows(null);
+    setResultStatus("");
 
     if (validationError) {
       setSubmitState("error");
@@ -127,98 +168,84 @@ export default function MosqueTimetableApproveButton({
     }
 
     const confirmed = window.confirm(
-      "Approve this reviewed timetable and publish its rows to the public mosque prayer times? Existing published rows for the same dates may be replaced."
+      "Approve this reviewed timetable and publish it to the public mosque prayer times? Existing published rows for the same dates may be replaced."
     );
 
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     abortControllerRef.current?.abort();
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
-
-    let timedOut = false;
+    timeoutTriggeredRef.current = false;
 
     const timeoutId = window.setTimeout(() => {
-      timedOut = true;
+      timeoutTriggeredRef.current = true;
       controller.abort();
     }, REQUEST_TIMEOUT_MS);
 
-    setSubmitState("submitting");
-
     try {
-      const response = await fetch(
-        "/api/mosque/timetable-imports/approve",
-        {
-          method: "POST",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-          credentials: "same-origin",
-          cache: "no-store",
-          signal: controller.signal,
-          body: JSON.stringify({
-            import_id: cleanImportId,
-          }),
-        }
-      );
+      setSubmitState("submitting");
 
-      const data = await readApproveResponse(response);
+      const response = await fetch("/api/mosque/timetable-imports/approve", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+        body: JSON.stringify({ import_id: cleanImportId }),
+      });
 
-      if (!mountedRef.current) {
-        return;
-      }
+      const data = await readResponse(response);
+
+      if (!mountedRef.current || controller.signal.aborted) return;
 
       if (!response.ok || data.ok !== true) {
         setSubmitState("error");
-        setErrorMessage(
-          cleanString(data.error) ||
-            cleanString(data.message) ||
-            DEFAULT_ERROR_MESSAGE
-        );
+        setErrorMessage(getResponseError(data, response.status));
         return;
       }
 
-      const approvedRows = getApprovedRowCount(
-        data.approved_rows
-      );
-
-      const successMessage =
-        cleanString(data.message) ||
-        (approvedRows === null
-          ? "Timetable approved and published successfully."
-          : `${approvedRows.toLocaleString()} timetable row${
-              approvedRows === 1 ? " was" : "s were"
-            } approved and published successfully.`);
+      const rowCount =
+        getSafeCount(data.approved_rows) ?? getSafeCount(data.published_rows);
 
       setSubmitState("success");
-      setMessage(successMessage);
-      setErrorMessage("");
+      setPublishedRows(rowCount);
+      setResultStatus(cleanString(data.status));
+      setMessage(
+        cleanString(data.message) ||
+          (rowCount === null
+            ? "Timetable approved and published successfully."
+            : `${rowCount.toLocaleString("en-GB")} timetable row${
+                rowCount === 1 ? " was" : "s were"
+              } approved and published successfully.`)
+      );
 
       router.refresh();
     } catch (error) {
-      if (!mountedRef.current) {
-        return;
-      }
+      if (!mountedRef.current) return;
 
       setSubmitState("error");
 
-      if (
-        error instanceof DOMException &&
-        error.name === "AbortError"
-      ) {
+      if (isAbortError(error)) {
         setErrorMessage(
-          timedOut
+          timeoutTriggeredRef.current
             ? "The approval request timed out. Please try again."
-            : "The approval request was cancelled. Please try again."
+            : "The approval request was cancelled."
         );
         return;
       }
 
-      console.error("Timetable approval request failed:", error);
+      if (error instanceof TypeError) {
+        setErrorMessage(
+          "The approval service could not be reached. Check your connection and try again."
+        );
+        return;
+      }
+
       setErrorMessage(DEFAULT_ERROR_MESSAGE);
     } finally {
       window.clearTimeout(timeoutId);
@@ -227,42 +254,27 @@ export default function MosqueTimetableApproveButton({
         abortControllerRef.current = null;
       }
 
+      timeoutTriggeredRef.current = false;
+
       if (mountedRef.current) {
-        setSubmitState((currentState) =>
-          currentState === "submitting"
-            ? "idle"
-            : currentState
+        setSubmitState((current) =>
+          current === "submitting" ? "idle" : current
         );
       }
     }
-  }, [
-    cleanImportId,
-    isApproved,
-    isSubmitting,
-    router,
-    validationError,
-  ]);
-
-  const describedBy = errorMessage
-    ? `${statusId}-error`
-    : message
-      ? `${statusId}-success`
-      : validationError
-        ? `${statusId}-validation`
-        : undefined;
+  }, [cleanImportId, isApproved, isSubmitting, router, validationError]);
 
   return (
     <div className="mt-3">
       <button
         type="button"
-        onClick={() => {
-          void approveImport();
-        }}
+        onClick={() => void approveImport()}
         disabled={isDisabled}
         aria-busy={isSubmitting}
+        aria-disabled={isDisabled}
         aria-describedby={describedBy}
         title={validationError || undefined}
-        className="inline-flex min-h-10 items-center justify-center rounded-xl bg-green-500 px-4 py-2 text-xs font-bold text-black transition hover:bg-green-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+        className="inline-flex min-h-10 items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-xs font-bold text-black transition hover:bg-emerald-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {isSubmitting ? (
           <>
@@ -274,16 +286,15 @@ export default function MosqueTimetableApproveButton({
           </>
         ) : isApproved ? (
           "Approved & published"
+        ) : submitState === "error" ? (
+          "Try approval again"
         ) : (
           "Approve & publish"
         )}
       </button>
 
       {validationError && !errorMessage ? (
-        <p
-          id={`${statusId}-validation`}
-          className="mt-2 text-xs text-amber-300"
-        >
+        <p id={validationId} className="mt-2 text-xs leading-5 text-amber-300">
           {validationError}
         </p>
       ) : null}
@@ -291,17 +302,25 @@ export default function MosqueTimetableApproveButton({
       <div aria-live="polite" aria-atomic="true">
         {message ? (
           <div
-            id={`${statusId}-success`}
+            id={successId}
             role="status"
-            className="mt-3 rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-xs leading-5 text-green-300"
+            className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs leading-5 text-emerald-300"
           >
-            {message}
+            <p>{message}</p>
+            {resultStatus ? (
+              <p className="mt-1 text-emerald-200/70">Status: {resultStatus}</p>
+            ) : null}
+            {publishedRows !== null ? (
+              <p className="mt-1 text-emerald-200/70">
+                Published rows: {publishedRows.toLocaleString("en-GB")}
+              </p>
+            ) : null}
           </div>
         ) : null}
 
         {errorMessage ? (
           <div
-            id={`${statusId}-error`}
+            id={errorId}
             role="alert"
             className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs leading-5 text-red-300"
           >

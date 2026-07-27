@@ -82,8 +82,10 @@ const TIME_COLUMNS: ColumnDefinition[] = [
   { key: "isha_iqamah", label: "Isha iqamah" },
 ];
 
-function cleanString(value: string) {
-  return value.trim();
+function cleanString(
+  value: string | null | undefined
+): string {
+  return String(value ?? "").trim();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -249,6 +251,8 @@ export default function MosqueTimetableParsedRowsEditor({
   const router = useRouter();
   const panelId = useId();
   const abortControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  const timeoutTriggeredRef = useRef(false);
 
   const parsedJson = useMemo<ParsedTimetable>(
     () =>
@@ -284,8 +288,12 @@ export default function MosqueTimetableParsedRowsEditor({
   }, [initialRows]);
 
   useEffect(() => {
+    mountedRef.current = true;
+
     return () => {
+      mountedRef.current = false;
       abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
     };
   }, []);
 
@@ -441,7 +449,10 @@ export default function MosqueTimetableParsedRowsEditor({
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
+    timeoutTriggeredRef.current = false;
+
     const timeoutId = window.setTimeout(() => {
+      timeoutTriggeredRef.current = true;
       controller.abort();
     }, REQUEST_TIMEOUT_MS);
 
@@ -473,6 +484,13 @@ export default function MosqueTimetableParsedRowsEditor({
         .json()
         .catch(() => ({}))) as SaveResponse;
 
+      if (
+        !mountedRef.current ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
+
       if (!response.ok || data.ok !== true) {
         setSaveState("error");
         setErrorMessage(
@@ -498,6 +516,10 @@ export default function MosqueTimetableParsedRowsEditor({
 
       router.refresh();
     } catch (error) {
+      if (!mountedRef.current) {
+        return;
+      }
+
       setSaveState("error");
 
       if (
@@ -505,7 +527,16 @@ export default function MosqueTimetableParsedRowsEditor({
         error.name === "AbortError"
       ) {
         setErrorMessage(
-          "The save request took too long or was cancelled. Please try again."
+          timeoutTriggeredRef.current
+            ? "The save request took too long. Please try again."
+            : "The save request was cancelled."
+        );
+        return;
+      }
+
+      if (error instanceof TypeError) {
+        setErrorMessage(
+          "The timetable review service could not be reached. Check your connection and try again."
         );
         return;
       }
@@ -518,11 +549,15 @@ export default function MosqueTimetableParsedRowsEditor({
         abortControllerRef.current = null;
       }
 
-      setSaveState((currentState) =>
-        currentState === "saving"
-          ? "idle"
-          : currentState
-      );
+      timeoutTriggeredRef.current = false;
+
+      if (mountedRef.current) {
+        setSaveState((currentState) =>
+          currentState === "saving"
+            ? "idle"
+            : currentState
+        );
+      }
     }
   }, [
     cleanImportId,

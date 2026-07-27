@@ -291,10 +291,12 @@ export default function MosqueTimetableManualRawTextEditor({
         return;
       }
 
-      console.error(
-        "Manual timetable raw text save failed:",
-        error
-      );
+      if (error instanceof TypeError) {
+        setErrorMessage(
+          "The timetable text service could not be reached. Check your connection and try again."
+        );
+        return;
+      }
 
       setErrorMessage(DEFAULT_ERROR_MESSAGE);
     } finally {
@@ -431,6 +433,7 @@ export default function MosqueTimetableManualRawTextEditor({
               }}
               disabled={isSaveDisabled}
               aria-busy={isSaving}
+              aria-disabled={isSaveDisabled}
               className="inline-flex min-h-10 items-center justify-center rounded-xl bg-yellow-500 px-4 py-2 text-xs font-bold text-black transition hover:bg-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSaving ? (
