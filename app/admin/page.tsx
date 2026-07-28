@@ -5,174 +5,223 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const dynamic = "force-dynamic";
 
-type AdminLinkItem = {
-  group: string;
-  href: string;
-  title: string;
-  desc: string;
-  tone?: "default" | "green" | "cyan" | "yellow" | "red" | "purple";
-};
-
 type CountResult = {
   count: number | null;
   error: unknown;
 };
 
-const adminLinks: AdminLinkItem[] = [
+type MetricTone =
+  | "gold"
+  | "green"
+  | "red"
+  | "purple"
+  | "cyan"
+  | "neutral";
+
+type MetricCardProps = {
+  title: string;
+  value: number;
+  description: string;
+  href?: string;
+  tone?: MetricTone;
+  urgent?: boolean;
+};
+
+type ActionItem = {
+  title: string;
+  description: string;
+  href: string;
+  count?: number;
+  tone: MetricTone;
+};
+
+type AdminTool = {
+  href: string;
+  title: string;
+  description: string;
+  category: string;
+  tone: MetricTone;
+};
+
+const adminTools: AdminTool[] = [
   {
-    group: "AI & Launch Readiness",
-    href: "/admin/ai-assistant",
-    title: "AI Admin Dashboard",
-    desc: "Read-only launch readiness, SEO, data quality, and duplicate analysis.",
-    tone: "purple",
-  },
-  {
-    group: "AI & Launch Readiness",
-    href: "/admin/ai-actions",
-    title: "AI Actions Queue",
-    desc: "Approve or reject AI suggested actions before future write steps.",
-    tone: "purple",
-  },
-  {
-    group: "AI & Launch Readiness",
-    href: "/admin/city-launch-readiness",
-    title: "City Launch Readiness",
-    desc: "Check launch readiness for every city.",
-    tone: "cyan",
-  },
-  {
-    group: "AI & Launch Readiness",
-    href: "/admin/launch-checklist",
-    title: "Launch Checklist",
-    desc: "Final readiness dashboard before going live.",
-    tone: "yellow",
-  },
-  {
-    group: "Cities & Data Quality",
-    href: "/admin/city-data-fix",
-    title: "City Data Fix",
-    desc: "Find missing coordinates, missing timezones, duplicate city records, and SQL helpers.",
-    tone: "cyan",
-  },
-  {
-    group: "Cities & Data Quality",
-    href: "/admin/priority-city-seed",
-    title: "Priority City Seed SQL",
-    desc: "Generate SQL to seed launch cities with coordinates and timezone data.",
-    tone: "green",
-  },
-  {
-    group: "Cities & Data Quality",
-    href: "/admin/duplicates",
-    title: "Duplicate Review",
-    desc: "Review likely duplicate mosques and businesses.",
-    tone: "yellow",
-  },
-  {
-    group: "Claims & Approvals",
+    category: "Mosque Operations",
     href: "/admin/mosque-claims",
     title: "Mosque Claims",
-    desc: "Review mosque manager access requests.",
-    tone: "yellow",
+    description: "Review and approve mosque management access requests.",
+    tone: "gold",
   },
   {
-    group: "Claims & Approvals",
-    href: "/admin/business-claims",
-    title: "Business Claims",
-    desc: "Approve business ownership requests.",
-    tone: "yellow",
-  },
-  {
-    group: "Mosque Timetables",
+    category: "Mosque Operations",
     href: "/admin/mosque-timetable-imports",
-    title: "Mosque Timetable Imports",
-    desc: "Review mosque timetable imports, parsed rows, approvals, and failed imports.",
+    title: "Timetable Imports",
+    description: "Review extraction, parsing, approval and import failures.",
     tone: "purple",
   },
   {
-    group: "Mosque Timetables",
+    category: "Mosque Operations",
     href: "/admin/mosque-timetable-sources",
-    title: "Mosque Timetable Sources",
-    desc: "Review mosque timetable source URLs, websites, PDFs, and auto-import readiness.",
+    title: "Timetable Sources",
+    description: "Manage official websites, PDFs and timetable source records.",
     tone: "cyan",
   },
   {
-    group: "Mosque Timetables",
-    href: "/admin/mosque-prayer-times",
-    title: "Published Prayer Times",
-    desc: "Review published mosque-specific prayer and iqamah timetable rows.",
-    tone: "green",
+    category: "Mosque Operations",
+    href: "/admin/mosque-duplicates",
+    title: "Mosque Duplicates",
+    description: "Review and merge potential duplicate mosque records.",
+    tone: "red",
   },
   {
-    group: "Businesses & Monetisation",
+    category: "Business Operations",
+    href: "/admin/business-review",
+    title: "Business Review",
+    description: "Review pending and recently submitted business listings.",
+    tone: "gold",
+  },
+  {
+    category: "Business Operations",
+    href: "/admin/business-submissions",
+    title: "Business Submissions",
+    description: "Process community and owner-submitted businesses.",
+    tone: "cyan",
+  },
+  {
+    category: "Business Operations",
+    href: "/admin/business-claims",
+    title: "Business Claims",
+    description: "Approve or reject ownership verification requests.",
+    tone: "gold",
+  },
+  {
+    category: "Business Operations",
+    href: "/admin/businesses",
+    title: "Business Management",
+    description: "Manage published businesses, rankings and listing status.",
+    tone: "cyan",
+  },
+  {
+    category: "Growth & Revenue",
     href: "/admin/campaigns",
     title: "Campaigns",
-    desc: "Manage ads, sponsorships, and featured placements.",
-    tone: "yellow",
-  },
-  {
-    group: "Businesses & Monetisation",
-    href: "/admin/businesses",
-    title: "Businesses",
-    desc: "Manage halal business listings.",
-    tone: "cyan",
-  },
-  {
-    group: "Businesses & Monetisation",
-    href: "/dashboard/business/billing",
-    title: "Business Billing",
-    desc: "Manage subscriptions and business billing.",
+    description: "Manage sponsorships, featured placement and advertising.",
     tone: "green",
   },
   {
-    group: "Imports",
+    category: "Growth & Revenue",
+    href: "/admin/business-promotions",
+    title: "Promotions",
+    description: "Control promoted listings and premium business exposure.",
+    tone: "gold",
+  },
+  {
+    category: "Growth & Revenue",
+    href: "/admin/city-launch-readiness",
+    title: "City Launch Readiness",
+    description: "Assess mosque, business and prayer-time coverage by city.",
+    tone: "cyan",
+  },
+  {
+    category: "Growth & Revenue",
+    href: "/admin/priority-city-seed",
+    title: "Priority City Seed",
+    description: "Generate and prepare data for high-priority launch cities.",
+    tone: "green",
+  },
+  {
+    category: "Data & Imports",
     href: "/admin/import",
-    title: "Bulk CSV Import",
-    desc: "Upload, validate, and import mosque or business CSV files.",
-    tone: "yellow",
+    title: "Bulk Import Centre",
+    description: "Upload and validate mosque or business CSV files.",
+    tone: "gold",
   },
   {
-    group: "Imports",
+    category: "Data & Imports",
+    href: "/admin/import/history",
+    title: "Import History",
+    description: "Review completed, failed and historical import activity.",
+    tone: "neutral",
+  },
+  {
+    category: "Data & Imports",
     href: "/admin/import-mosques",
-    title: "Import Mosques Worldwide",
-    desc: "Import mosques from OpenStreetMap for active SalahNearMe cities.",
+    title: "Import Mosques",
+    description: "Import mosque data for active SalahNearMe cities.",
     tone: "green",
   },
   {
-    group: "Imports",
+    category: "Data & Imports",
     href: "/admin/import-businesses",
-    title: "Import Businesses Worldwide",
-    desc: "Import halal businesses from OpenStreetMap for active SalahNearMe cities.",
+    title: "Import Businesses",
+    description: "Import halal business data for supported cities.",
     tone: "cyan",
+  },
+  {
+    category: "Data & Imports",
+    href: "/admin/duplicates",
+    title: "Duplicate Review",
+    description: "Review potential mosque and business duplicate records.",
+    tone: "red",
+  },
+  {
+    category: "Data & Imports",
+    href: "/admin/city-data-fix",
+    title: "City Data Fix",
+    description: "Find missing coordinates, timezones and duplicate cities.",
+    tone: "purple",
+  },
+  {
+    category: "AI & Safety",
+    href: "/admin/ai-assistant",
+    title: "AI Assistant",
+    description: "Analyse launch readiness, SEO and platform data quality.",
+    tone: "purple",
+  },
+  {
+    category: "AI & Safety",
+    href: "/admin/ai-actions",
+    title: "AI Action Queue",
+    description: "Review proposed AI actions before any approved workflow.",
+    tone: "purple",
+  },
+  {
+    category: "AI & Safety",
+    href: "/admin/launch-checklist",
+    title: "Launch Checklist",
+    description: "Complete final operational and production-readiness checks.",
+    tone: "green",
   },
 ];
 
-function groupAdminLinks() {
-  const groups = new Map<string, AdminLinkItem[]>();
-
-  for (const item of adminLinks) {
-    const existing = groups.get(item.group) ?? [];
-    existing.push(item);
-    groups.set(item.group, existing);
+function safeCount(result: CountResult) {
+  if (result.error) {
+    return 0;
   }
 
-  return Array.from(groups.entries()).map(([title, links]) => ({
-    title,
-    links,
-  }));
-}
-
-function safeCount(result: CountResult) {
   return result.count ?? 0;
 }
 
-async function getCount(table: string) {
-  const { count } = await supabaseAdmin.from(table).select("id", {
-    count: "exact",
-    head: true,
-  });
+function percentage(part: number, total: number) {
+  if (total <= 0) {
+    return 0;
+  }
 
-  return count ?? 0;
+  return Math.min(100, Math.round((part / total) * 100));
+}
+
+function groupTools() {
+  const grouped = new Map<string, AdminTool[]>();
+
+  for (const tool of adminTools) {
+    const current = grouped.get(tool.category) ?? [];
+    current.push(tool);
+    grouped.set(tool.category, current);
+  }
+
+  return Array.from(grouped.entries()).map(([title, tools]) => ({
+    title,
+    tools,
+  }));
 }
 
 async function getAdminCounts() {
@@ -217,10 +266,9 @@ async function getAdminCounts() {
       .select("id", { count: "exact", head: true })
       .eq("status", "active"),
 
-    supabaseAdmin.from("businesses").select("id", {
-      count: "exact",
-      head: true,
-    }),
+    supabaseAdmin
+      .from("businesses")
+      .select("id", { count: "exact", head: true }),
 
     supabaseAdmin
       .from("mosques")
@@ -312,126 +360,212 @@ async function getAdminCounts() {
   };
 }
 
-function AdminAccessDenied({
-  message,
-  status,
-}: {
-  message: string;
-  status: number;
-}) {
-  return (
-    <main className="mx-auto max-w-5xl px-4 py-10">
-      <section className="rounded-3xl border border-red-500/20 bg-red-500/10 p-8">
-        <div className="text-sm uppercase tracking-[0.25em] text-red-300">
-          Admin access denied
-        </div>
+function getToneClasses(tone: MetricTone) {
+  if (tone === "green") {
+    return {
+      border: "border-emerald-400/20",
+      background: "bg-emerald-400/[0.06]",
+      text: "text-emerald-300",
+      glow: "shadow-emerald-950/20",
+      dot: "bg-emerald-400",
+    };
+  }
 
-        <h1 className="mt-3 text-3xl font-black text-white">
-          Access restricted
-        </h1>
+  if (tone === "red") {
+    return {
+      border: "border-red-400/20",
+      background: "bg-red-400/[0.06]",
+      text: "text-red-300",
+      glow: "shadow-red-950/20",
+      dot: "bg-red-400",
+    };
+  }
 
-        <p className="mt-3 text-sm leading-7 text-red-100/80">{message}</p>
+  if (tone === "purple") {
+    return {
+      border: "border-purple-400/20",
+      background: "bg-purple-400/[0.06]",
+      text: "text-purple-300",
+      glow: "shadow-purple-950/20",
+      dot: "bg-purple-400",
+    };
+  }
 
-        <div className="mt-5 text-xs text-red-100/50">Status: {status}</div>
+  if (tone === "cyan") {
+    return {
+      border: "border-cyan-400/20",
+      background: "bg-cyan-400/[0.06]",
+      text: "text-cyan-300",
+      glow: "shadow-cyan-950/20",
+      dot: "bg-cyan-400",
+    };
+  }
 
-        <div className="mt-6 flex flex-wrap gap-3">
-          <Link href="/" className="luxe-button text-sm">
-            Return home
-          </Link>
+  if (tone === "neutral") {
+    return {
+      border: "border-white/[0.08]",
+      background: "bg-white/[0.025]",
+      text: "text-white/60",
+      glow: "shadow-black/20",
+      dot: "bg-white/50",
+    };
+  }
 
-          <Link
-            href="/business-dashboard"
-            className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-bold text-white/80 hover:bg-white/10"
-          >
-            Business dashboard
-          </Link>
-        </div>
-      </section>
-    </main>
-  );
+  return {
+    border: "border-yellow-400/20",
+    background: "bg-yellow-400/[0.06]",
+    text: "text-yellow-300",
+    glow: "shadow-yellow-950/20",
+    dot: "bg-yellow-400",
+  };
 }
 
 function MetricCard({
   title,
   value,
+  description,
   href,
-  tone = "yellow",
-}: {
-  title: string;
-  value: number;
-  href?: string;
-  tone?: "yellow" | "green" | "red" | "purple" | "cyan";
-}) {
-  const toneClass =
-    tone === "green"
-      ? "border-green-500/25 bg-green-500/10 text-green-300"
-      : tone === "red"
-        ? "border-red-500/25 bg-red-500/10 text-red-300"
-        : tone === "purple"
-          ? "border-purple-500/25 bg-purple-500/10 text-purple-300"
-          : tone === "cyan"
-            ? "border-cyan-500/25 bg-cyan-500/10 text-cyan-300"
-            : "border-yellow-500/25 bg-yellow-500/10 text-yellow-300";
+  tone = "gold",
+  urgent = false,
+}: MetricCardProps) {
+  const styles = getToneClasses(tone);
 
-  const content = (
+  const card = (
     <div
-      className={`rounded-2xl border p-5 transition duration-300 hover:-translate-y-1 hover:bg-white/[0.03] ${toneClass}`}
+      className={`group h-full rounded-[1.6rem] border p-5 shadow-xl transition duration-300 hover:-translate-y-1 hover:border-white/20 ${styles.border} ${styles.background} ${styles.glow}`}
     >
-      <div className="text-sm font-bold">{title}</div>
-      <div className="mt-3 text-4xl font-black text-white">{value}</div>
+      <div className="flex items-start justify-between gap-4">
+        <div
+          className={`flex h-10 w-10 items-center justify-center rounded-2xl border ${styles.border} bg-black/20`}
+        >
+          <span
+            className={`h-2.5 w-2.5 rounded-full ${styles.dot} ${
+              urgent ? "animate-pulse" : ""
+            }`}
+          />
+        </div>
+
+        {href ? (
+          <span className="text-sm text-white/20 transition group-hover:translate-x-0.5 group-hover:text-white/60">
+            →
+          </span>
+        ) : null}
+      </div>
+
+      <div className="mt-5 text-4xl font-black tracking-[-0.05em] text-white">
+        {value.toLocaleString("en-GB")}
+      </div>
+
+      <div className={`mt-2 text-sm font-black ${styles.text}`}>{title}</div>
+
+      <p className="mt-2 text-xs leading-5 text-white/35">{description}</p>
     </div>
   );
 
   if (!href) {
-    return content;
+    return card;
   }
 
-  return <Link href={href}>{content}</Link>;
-}
-
-function AdminLink({
-  href,
-  title,
-  desc,
-  tone = "default",
-}: {
-  href: string;
-  title: string;
-  desc: string;
-  tone?: AdminLinkItem["tone"];
-}) {
-  const toneClass =
-    tone === "green"
-      ? "border-green-500/20 bg-green-500/10 hover:border-green-400"
-      : tone === "red"
-        ? "border-red-500/20 bg-red-500/10 hover:border-red-400"
-        : tone === "purple"
-          ? "border-purple-500/20 bg-purple-500/10 hover:border-purple-400"
-          : tone === "cyan"
-            ? "border-cyan-500/20 bg-cyan-500/10 hover:border-cyan-400"
-            : tone === "yellow"
-              ? "border-yellow-500/20 bg-yellow-500/10 hover:border-yellow-400"
-              : "border-white/10 bg-black/30 hover:border-yellow-400";
-
   return (
-    <Link
-      href={href}
-      className={`rounded-2xl border p-6 transition duration-300 hover:-translate-y-1 ${toneClass}`}
-    >
-      <div className="text-xl font-bold text-white">{title}</div>
-      <p className="mt-3 text-sm leading-relaxed text-white/60">{desc}</p>
-      <div className="mt-5 text-sm font-semibold text-yellow-400">Open →</div>
+    <Link href={href} className="block h-full">
+      {card}
     </Link>
   );
 }
 
-function MiniLink({ href, title }: { href: string; title: string }) {
+function PriorityAction({
+  title,
+  description,
+  href,
+  count,
+  tone,
+}: ActionItem) {
+  const styles = getToneClasses(tone);
+
   return (
     <Link
       href={href}
-      className="rounded-2xl border border-white/10 bg-black/30 p-4 text-sm font-bold text-yellow-400 transition hover:border-yellow-400 hover:bg-yellow-500/10"
+      className={`group flex items-center gap-4 rounded-2xl border p-4 transition hover:border-white/20 hover:bg-white/[0.035] ${styles.border} ${styles.background}`}
     >
-      {title} →
+      <div
+        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border text-lg font-black ${styles.border} ${styles.text}`}
+      >
+        {count ?? "→"}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-black text-white">{title}</div>
+        <p className="mt-1 text-xs leading-5 text-white/35">{description}</p>
+      </div>
+
+      <span className="text-white/20 transition group-hover:translate-x-1 group-hover:text-white/60">
+        →
+      </span>
+    </Link>
+  );
+}
+
+function ProgressRow({
+  label,
+  value,
+  total,
+  tone,
+}: {
+  label: string;
+  value: number;
+  total: number;
+  tone: MetricTone;
+}) {
+  const progress = percentage(value, total);
+  const styles = getToneClasses(tone);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-4 text-xs">
+        <span className="font-bold text-white/55">{label}</span>
+        <span className={`font-black ${styles.text}`}>{progress}%</span>
+      </div>
+
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/[0.06]">
+        <div
+          className={`h-full rounded-full ${styles.dot}`}
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+
+      <div className="mt-2 text-[11px] text-white/25">
+        {value.toLocaleString("en-GB")} of{" "}
+        {total.toLocaleString("en-GB")}
+      </div>
+    </div>
+  );
+}
+
+function ToolCard({ tool }: { tool: AdminTool }) {
+  const styles = getToneClasses(tool.tone);
+
+  return (
+    <Link
+      href={tool.href}
+      className={`group rounded-[1.4rem] border p-5 transition duration-300 hover:-translate-y-1 hover:border-white/20 hover:bg-white/[0.04] ${styles.border} ${styles.background}`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <span
+          className={`flex h-9 w-9 items-center justify-center rounded-xl border text-sm font-black ${styles.border} ${styles.text}`}
+        >
+          ◆
+        </span>
+
+        <span className="text-white/20 transition group-hover:translate-x-1 group-hover:text-white/60">
+          →
+        </span>
+      </div>
+
+      <h3 className="mt-5 text-base font-black text-white">{tool.title}</h3>
+
+      <p className="mt-2 text-xs leading-6 text-white/35">
+        {tool.description}
+      </p>
     </Link>
   );
 }
@@ -441,280 +575,571 @@ export default async function AdminHomePage() {
 
   if (!permission.ok) {
     return (
-      <AdminAccessDenied
-        message={permission.error}
-        status={permission.status}
-      />
+      <main className="px-4 py-10">
+        <section className="mx-auto max-w-3xl rounded-3xl border border-red-500/20 bg-red-500/[0.07] p-8">
+          <div className="text-xs font-black uppercase tracking-[0.25em] text-red-300">
+            Admin access denied
+          </div>
+
+          <h1 className="mt-3 text-3xl font-black text-white">
+            Access restricted
+          </h1>
+
+          <p className="mt-3 text-sm leading-7 text-red-100/75">
+            {permission.error}
+          </p>
+        </section>
+      </main>
     );
   }
 
   const counts = await getAdminCounts();
-  const groupedLinks = groupAdminLinks();
+  const groupedTools = groupTools();
+
+  const pendingWork =
+    counts.pendingMosqueClaims +
+    counts.pendingBusinessClaims +
+    counts.pendingTimetableReviews +
+    counts.openCorrectionReports +
+    counts.pendingAiActions +
+    counts.pendingCampaigns;
+
+  const timetableResolved =
+    counts.approvedTimetableImports + counts.failedTimetableImports;
+
+  const timetableSuccessRate = percentage(
+    counts.approvedTimetableImports,
+    timetableResolved,
+  );
+
+  const priorityActions: ActionItem[] = [
+    {
+      title: "Review mosque claims",
+      description: "Verify organisations requesting mosque management access.",
+      href: "/admin/mosque-claims",
+      count: counts.pendingMosqueClaims,
+      tone: counts.pendingMosqueClaims > 0 ? "gold" : "green",
+    },
+    {
+      title: "Review business claims",
+      description: "Process ownership and listing-access requests.",
+      href: "/admin/business-claims",
+      count: counts.pendingBusinessClaims,
+      tone: counts.pendingBusinessClaims > 0 ? "gold" : "green",
+    },
+    {
+      title: "Review timetable imports",
+      description: "Approve parsed timetable rows waiting for review.",
+      href: "/admin/mosque-timetable-imports",
+      count: counts.pendingTimetableReviews,
+      tone: counts.pendingTimetableReviews > 0 ? "purple" : "green",
+    },
+    {
+      title: "Resolve failed imports",
+      description: "Investigate extraction and timetable parsing failures.",
+      href: "/admin/mosque-timetable-imports",
+      count: counts.failedTimetableImports,
+      tone: counts.failedTimetableImports > 0 ? "red" : "green",
+    },
+    {
+      title: "Review AI actions",
+      description: "Approve or reject suggested operational actions.",
+      href: "/admin/ai-actions",
+      count: counts.pendingAiActions,
+      tone: counts.pendingAiActions > 0 ? "purple" : "green",
+    },
+    {
+      title: "Manage draft campaigns",
+      description: "Prepare sponsorship and featured-placement campaigns.",
+      href: "/admin/campaigns",
+      count: counts.pendingCampaigns,
+      tone: counts.pendingCampaigns > 0 ? "gold" : "green",
+    },
+  ];
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-10">
-      <div className="space-y-8">
-        <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8 md:p-10">
-          <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
-            SalahNearMe Admin
-          </div>
+    <main className="px-4 py-6 sm:px-6 sm:py-8 xl:px-10">
+      <div className="mx-auto max-w-[1500px] space-y-8">
+        <section className="relative overflow-hidden rounded-[2rem] border border-yellow-400/15 bg-gradient-to-br from-yellow-400/[0.09] via-[#0b0f16] to-[#080b11] p-6 shadow-2xl shadow-black/30 sm:p-8 xl:p-10">
+          <div className="pointer-events-none absolute -right-28 -top-28 h-72 w-72 rounded-full bg-yellow-400/[0.07] blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-32 left-1/3 h-72 w-72 rounded-full bg-purple-500/[0.05] blur-3xl" />
 
-          <div className="mt-4 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div className="relative">
+            <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-xs font-black uppercase tracking-[0.3em] text-yellow-400">
+                    SalahNearMe Admin
+                  </span>
+
+                  <span className="rounded-full border border-emerald-400/20 bg-emerald-400/[0.08] px-3 py-1 text-[10px] font-black uppercase tracking-wider text-emerald-300">
+                    Platform operational
+                  </span>
+                </div>
+
+                <h1 className="dashboard-hero-glow mt-4 max-w-4xl text-4xl font-black tracking-[-0.055em] text-white sm:text-5xl xl:text-6xl">
+                  Control Centre
+                </h1>
+
+                <p className="mt-4 max-w-3xl text-sm leading-7 text-white/50 sm:text-base">
+                  Manage platform quality, mosque timetables, claims, business
+                  listings, imports, campaigns, city expansion and
+                  approval-controlled AI operations.
+                </p>
+              </div>
+
+              <div className="grid min-w-full gap-3 sm:grid-cols-2 xl:min-w-[430px]">
+                <div className="rounded-2xl border border-white/[0.08] bg-black/20 p-4">
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-white/30">
+                    Pending workload
+                  </div>
+
+                  <div className="mt-2 text-3xl font-black text-white">
+                    {pendingWork.toLocaleString("en-GB")}
+                  </div>
+
+                  <div className="mt-1 text-xs text-white/35">
+                    Items requiring attention
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-emerald-400/15 bg-emerald-400/[0.06] p-4">
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-300/70">
+                    Access level
+                  </div>
+
+                  <div className="mt-2 text-xl font-black uppercase text-white">
+                    {permission.role}
+                  </div>
+
+                  <div className="mt-1 truncate text-xs text-white/35">
+                    {permission.email ?? permission.userId}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-7 flex flex-wrap gap-3">
+              <Link href="/admin/business-review" className="luxe-button text-sm">
+                Review businesses
+              </Link>
+
+              <Link
+                href="/admin/mosque-timetable-imports"
+                className="luxe-button-outline text-sm"
+              >
+                Timetable queue
+              </Link>
+
+              <Link
+                href="/admin/ai-assistant"
+                className="luxe-button-outline text-sm"
+              >
+                Open AI assistant
+              </Link>
+
+              <Link
+                href="/admin/launch-checklist"
+                className="luxe-button-outline text-sm"
+              >
+                Launch checklist
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <h1 className="dashboard-hero-glow text-4xl font-black tracking-[-0.04em] text-white md:text-5xl">
-                Control Centre
-              </h1>
+              <div className="text-[10px] font-black uppercase tracking-[0.25em] text-yellow-400">
+                Platform footprint
+              </div>
 
-              <p className="mt-4 max-w-3xl text-sm leading-7 text-white/70">
-                AI launch readiness, mosque timetable imports, mosque claims,
-                business claims, duplicate review, monetisation, imports,
-                correction reports, security checks, and operational control.
-              </p>
+              <h2 className="mt-2 text-2xl font-black tracking-[-0.03em] text-white">
+                Live directory coverage
+              </h2>
             </div>
 
-            <div className="w-fit rounded-full border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-xs font-black text-emerald-300">
-              {permission.role.toUpperCase()} ACCESS
+            <div className="text-xs text-white/30">
+              Server-side Supabase counts
             </div>
           </div>
 
-          <div className="mt-5 rounded-2xl border border-white/10 bg-black/25 p-4 text-sm text-white/55">
-            Signed in as{" "}
-            <span className="font-bold text-white">
-              {permission.email ?? permission.userId}
-            </span>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard
+              title="Active cities"
+              value={counts.totalCities}
+              description="Cities currently published across the platform."
+              href="/admin/city-launch-readiness"
+              tone="cyan"
+            />
+
+            <MetricCard
+              title="Active mosques"
+              value={counts.totalMosques}
+              description="Active mosque profiles available to users."
+              tone="green"
+            />
+
+            <MetricCard
+              title="Businesses"
+              value={counts.totalBusinesses}
+              description="Halal businesses stored in the directory."
+              href="/admin/businesses"
+              tone="cyan"
+            />
+
+            <MetricCard
+              title="Active campaigns"
+              value={counts.activeCampaigns}
+              description="Advertising and sponsorship campaigns currently live."
+              href="/admin/campaigns"
+              tone="green"
+            />
+          </div>
+        </section>
+
+        <section>
+          <div className="mb-4">
+            <div className="text-[10px] font-black uppercase tracking-[0.25em] text-yellow-400">
+              Operations
+            </div>
+
+            <h2 className="mt-2 text-2xl font-black tracking-[-0.03em] text-white">
+              Items requiring attention
+            </h2>
           </div>
 
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Link href="/admin/mosque-claims" className="luxe-button text-sm">
-              Review mosque claims
-            </Link>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <MetricCard
+              title="Mosque claims"
+              value={counts.pendingMosqueClaims}
+              description="Pending mosque manager verification requests."
+              href="/admin/mosque-claims"
+              tone={counts.pendingMosqueClaims > 0 ? "gold" : "green"}
+              urgent={counts.pendingMosqueClaims > 0}
+            />
 
-            <Link
+            <MetricCard
+              title="Business claims"
+              value={counts.pendingBusinessClaims}
+              description="Pending business ownership requests."
               href="/admin/business-claims"
-              className="luxe-button-outline text-sm"
-            >
-              Review business claims
-            </Link>
+              tone={counts.pendingBusinessClaims > 0 ? "gold" : "green"}
+              urgent={counts.pendingBusinessClaims > 0}
+            />
 
-            <Link
+            <MetricCard
+              title="Timetable reviews"
+              value={counts.pendingTimetableReviews}
+              description="Parsed timetable imports awaiting approval."
               href="/admin/mosque-timetable-imports"
-              className="luxe-button-outline text-sm"
-            >
-              Timetable imports
-            </Link>
+              tone={counts.pendingTimetableReviews > 0 ? "purple" : "green"}
+              urgent={counts.pendingTimetableReviews > 0}
+            />
 
-            <Link
+            <MetricCard
+              title="Failed imports"
+              value={counts.failedTimetableImports}
+              description="Timetable imports requiring investigation."
+              href="/admin/mosque-timetable-imports"
+              tone={counts.failedTimetableImports > 0 ? "red" : "green"}
+              urgent={counts.failedTimetableImports > 0}
+            />
+
+            <MetricCard
+              title="Correction reports"
+              value={counts.openCorrectionReports}
+              description="New or reviewing mosque correction reports."
               href="/business-dashboard/mosques"
-              className="luxe-button-outline text-sm"
-            >
-              Mosque manager dashboard
-            </Link>
-          </div>
-        </section>
-
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard
-            title="Pending Mosque Claims"
-            value={counts.pendingMosqueClaims}
-            href="/admin/mosque-claims"
-            tone={counts.pendingMosqueClaims > 0 ? "yellow" : "green"}
-          />
-
-          <MetricCard
-            title="Pending Business Claims"
-            value={counts.pendingBusinessClaims}
-            href="/admin/business-claims"
-            tone={counts.pendingBusinessClaims > 0 ? "yellow" : "green"}
-          />
-
-          <MetricCard
-            title="Open Correction Reports"
-            value={counts.openCorrectionReports}
-            href="/business-dashboard/mosques"
-            tone={counts.openCorrectionReports > 0 ? "yellow" : "green"}
-          />
-
-          <MetricCard
-            title="Pending Timetable Reviews"
-            value={counts.pendingTimetableReviews}
-            href="/admin/mosque-timetable-imports"
-            tone={counts.pendingTimetableReviews > 0 ? "purple" : "green"}
-          />
-
-          <MetricCard
-            title="Failed Timetable Imports"
-            value={counts.failedTimetableImports}
-            href="/admin/mosque-timetable-imports"
-            tone={counts.failedTimetableImports > 0 ? "red" : "green"}
-          />
-
-          <MetricCard
-            title="Timetable Imports"
-            value={counts.timetableImports}
-            href="/admin/mosque-timetable-imports"
-          />
-
-          <MetricCard
-            title="Approved Imports"
-            value={counts.approvedTimetableImports}
-            href="/admin/mosque-timetable-imports"
-            tone="green"
-          />
-
-          <MetricCard
-            title="Timetable Sources"
-            value={counts.timetableSources}
-            href="/admin/mosque-timetable-sources"
-            tone="cyan"
-          />
-
-          <MetricCard
-            title="Prayer-Time Rows"
-            value={counts.publishedPrayerRows}
-            href="/admin/mosque-prayer-times"
-            tone="green"
-          />
-
-          <MetricCard
-            title="Active Jumu’ah Rows"
-            value={counts.publishedJumuahRows}
-            tone="green"
-          />
-
-          <MetricCard
-            title="Correction Reports"
-            value={counts.correctionReports}
-            href="/business-dashboard/mosques"
-            tone="cyan"
-          />
-
-          <MetricCard
-            title="Draft Campaigns"
-            value={counts.pendingCampaigns}
-            href="/admin/campaigns"
-          />
-
-          <MetricCard
-            title="Active Campaigns"
-            value={counts.activeCampaigns}
-            href="/admin/campaigns"
-            tone="green"
-          />
-
-          <MetricCard
-            title="Businesses"
-            value={counts.totalBusinesses}
-            href="/admin/businesses"
-            tone="cyan"
-          />
-
-          <MetricCard
-            title="Mosques"
-            value={counts.totalMosques}
-            tone="green"
-          />
-
-          <MetricCard
-            title="Cities"
-            value={counts.totalCities}
-            tone="cyan"
-          />
-
-          <MetricCard
-            title="Pending AI Actions"
-            value={counts.pendingAiActions}
-            href="/admin/ai-actions"
-            tone={counts.pendingAiActions > 0 ? "purple" : "green"}
-          />
-
-          <MetricCard
-            title="Approved AI Actions"
-            value={counts.approvedAiActions}
-            href="/admin/ai-actions"
-            tone="green"
-          />
-
-          <MetricCard
-            title="Active Admin Users"
-            value={counts.adminUsers}
-            tone="green"
-          />
-        </section>
-
-        <section className="rounded-3xl border border-green-500/20 bg-green-500/10 p-6 backdrop-blur-xl">
-          <div className="text-lg font-bold text-green-300">
-            Server-Side Admin Protection
-          </div>
-
-          <p className="mt-2 text-sm leading-relaxed text-white/70">
-            This page is now protected by server-side admin role verification.
-            The old client-side AdminGate check has been removed to prevent the
-            admin page from getting stuck on “Checking access...”.
-          </p>
-        </section>
-
-        <section className="rounded-3xl border border-purple-500/20 bg-purple-500/10 p-6 backdrop-blur-xl">
-          <div className="text-lg font-bold text-purple-300">
-            AI Safety Layer
-          </div>
-
-          <p className="mt-2 text-sm leading-relaxed text-white/70">
-            AI tools remain read-only or approval-only. No database records are
-            automatically modified unless an approved write workflow is built.
-          </p>
-        </section>
-
-        <section className="rounded-3xl border border-yellow-500/20 bg-yellow-500/10 p-6">
-          <div className="text-lg font-bold text-yellow-300">
-            Mosque Timetable Engine
-          </div>
-
-          <p className="mt-2 max-w-4xl text-sm leading-relaxed text-white/70">
-            Mosque-specific prayer times are powered by official manager
-            entries, timetable source imports, raw text extraction, smart
-            parsing, review/edit approval, and published monthly timetable rows.
-          </p>
-
-          <div className="mt-5 grid gap-3 md:grid-cols-3">
-            <MiniLink
-              href="/admin/mosque-timetable-imports"
-              title="Review imports"
+              tone={counts.openCorrectionReports > 0 ? "gold" : "green"}
+              urgent={counts.openCorrectionReports > 0}
             />
 
-            <MiniLink
-              href="/admin/mosque-timetable-sources"
-              title="Check sources"
-            />
-
-            <MiniLink
-              href="/admin/mosque-prayer-times"
-              title="Published rows"
+            <MetricCard
+              title="AI action queue"
+              value={counts.pendingAiActions}
+              description="Approval-controlled AI actions awaiting review."
+              href="/admin/ai-actions"
+              tone={counts.pendingAiActions > 0 ? "purple" : "green"}
+              urgent={counts.pendingAiActions > 0}
             />
           </div>
         </section>
 
-        {groupedLinks.map((group) => (
-          <section key={group.title} className="space-y-4">
-            <div>
-              <h2 className="text-2xl font-black text-white">{group.title}</h2>
-              <div className="mt-2 h-px bg-gradient-to-r from-yellow-500/50 to-transparent" />
+        <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+          <div className="rounded-[1.8rem] border border-white/[0.08] bg-[#090d14] p-5 sm:p-6">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-[0.24em] text-yellow-400">
+                  Priority queue
+                </div>
+
+                <h2 className="mt-2 text-xl font-black text-white">
+                  Recommended next actions
+                </h2>
+              </div>
+
+              <span className="rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-white/35">
+                {pendingWork} pending
+              </span>
             </div>
 
-            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-              {group.links.map((item) => (
-                <AdminLink
-                  key={`${item.href}-${item.title}`}
-                  href={item.href}
-                  title={item.title}
-                  desc={item.desc}
-                  tone={item.tone}
+            <div className="mt-5 grid gap-3">
+              {priorityActions.map((action) => (
+                <PriorityAction
+                  key={action.href}
+                  title={action.title}
+                  description={action.description}
+                  href={action.href}
+                  count={action.count}
+                  tone={action.tone}
                 />
               ))}
             </div>
-          </section>
-        ))}
+          </div>
+
+          <div className="space-y-6">
+            <section className="rounded-[1.8rem] border border-purple-400/15 bg-purple-400/[0.045] p-5 sm:p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-purple-300">
+                    AI safety layer
+                  </div>
+
+                  <h2 className="mt-2 text-xl font-black text-white">
+                    Human approval remains required
+                  </h2>
+                </div>
+
+                <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-purple-400/20 bg-purple-400/[0.08] text-purple-300">
+                  AI
+                </span>
+              </div>
+
+              <p className="mt-4 text-sm leading-7 text-white/45">
+                AI tools remain read-only or approval-controlled. Suggested
+                actions do not modify production records without an approved
+                administrative workflow.
+              </p>
+
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <div className="rounded-2xl border border-white/[0.07] bg-black/20 p-4">
+                  <div className="text-2xl font-black text-white">
+                    {counts.pendingAiActions}
+                  </div>
+                  <div className="mt-1 text-xs text-white/35">Pending</div>
+                </div>
+
+                <div className="rounded-2xl border border-white/[0.07] bg-black/20 p-4">
+                  <div className="text-2xl font-black text-emerald-300">
+                    {counts.approvedAiActions}
+                  </div>
+                  <div className="mt-1 text-xs text-white/35">Approved</div>
+                </div>
+              </div>
+
+              <Link
+                href="/admin/ai-assistant"
+                className="mt-5 inline-flex text-sm font-black text-purple-300 transition hover:text-purple-200"
+              >
+                Open AI operations →
+              </Link>
+            </section>
+
+            <section className="rounded-[1.8rem] border border-emerald-400/15 bg-emerald-400/[0.045] p-5 sm:p-6">
+              <div className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-300">
+                Platform security
+              </div>
+
+              <h2 className="mt-2 text-xl font-black text-white">
+                Server-side protection active
+              </h2>
+
+              <p className="mt-4 text-sm leading-7 text-white/45">
+                Admin access is verified on the server before protected pages
+                render. Sensitive operational data is not exposed through a
+                client-only access gate.
+              </p>
+
+              <div className="mt-5 flex items-center gap-3 rounded-2xl border border-emerald-400/15 bg-black/20 p-4">
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.6)]" />
+
+                <div>
+                  <div className="text-sm font-black text-emerald-300">
+                    Admin session verified
+                  </div>
+
+                  <div className="mt-1 text-xs text-white/30">
+                    {counts.adminUsers} active admin account
+                    {counts.adminUsers === 1 ? "" : "s"}
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section className="rounded-[1.8rem] border border-white/[0.08] bg-[#090d14] p-5 sm:p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-[0.24em] text-yellow-400">
+                Timetable intelligence
+              </div>
+
+              <h2 className="mt-2 text-xl font-black text-white">
+                Mosque timetable engine
+              </h2>
+
+              <p className="mt-2 max-w-3xl text-sm leading-7 text-white/40">
+                Monitor timetable sources, imported files, approval results,
+                published prayer rows and active Jumu’ah records.
+              </p>
+            </div>
+
+            <Link
+              href="/admin/mosque-timetable-imports"
+              className="text-sm font-black text-yellow-300 transition hover:text-yellow-200"
+            >
+              Open timetable operations →
+            </Link>
+          </div>
+
+          <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_1fr]">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <MetricCard
+                title="Total imports"
+                value={counts.timetableImports}
+                description="All timetable import records."
+                href="/admin/mosque-timetable-imports"
+                tone="purple"
+              />
+
+              <MetricCard
+                title="Approved imports"
+                value={counts.approvedTimetableImports}
+                description="Imports approved for publication."
+                href="/admin/mosque-timetable-imports"
+                tone="green"
+              />
+
+              <MetricCard
+                title="Timetable sources"
+                value={counts.timetableSources}
+                description="Official source records being monitored."
+                href="/admin/mosque-timetable-sources"
+                tone="cyan"
+              />
+
+              <MetricCard
+                title="Published prayer rows"
+                value={counts.publishedPrayerRows}
+                description="Mosque prayer-time records currently stored."
+                tone="green"
+              />
+            </div>
+
+            <div className="rounded-[1.5rem] border border-white/[0.07] bg-black/20 p-5">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm font-black text-white">
+                    Import performance
+                  </div>
+
+                  <div className="mt-1 text-xs text-white/30">
+                    Current timetable processing overview
+                  </div>
+                </div>
+
+                <div className="text-3xl font-black text-emerald-300">
+                  {timetableSuccessRate}%
+                </div>
+              </div>
+
+              <div className="mt-6 space-y-6">
+                <ProgressRow
+                  label="Approved imports"
+                  value={counts.approvedTimetableImports}
+                  total={counts.timetableImports}
+                  tone="green"
+                />
+
+                <ProgressRow
+                  label="Pending review"
+                  value={counts.pendingTimetableReviews}
+                  total={counts.timetableImports}
+                  tone="purple"
+                />
+
+                <ProgressRow
+                  label="Failed imports"
+                  value={counts.failedTimetableImports}
+                  total={counts.timetableImports}
+                  tone="red"
+                />
+              </div>
+
+              <div className="mt-6 grid grid-cols-2 gap-3">
+                <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4">
+                  <div className="text-2xl font-black text-white">
+                    {counts.publishedJumuahRows.toLocaleString("en-GB")}
+                  </div>
+
+                  <div className="mt-1 text-xs text-white/30">
+                    Active Jumu’ah rows
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4">
+                  <div className="text-2xl font-black text-white">
+                    {counts.correctionReports.toLocaleString("en-GB")}
+                  </div>
+
+                  <div className="mt-1 text-xs text-white/30">
+                    Total corrections
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div className="mb-5">
+            <div className="text-[10px] font-black uppercase tracking-[0.25em] text-yellow-400">
+              Administration
+            </div>
+
+            <h2 className="mt-2 text-2xl font-black tracking-[-0.03em] text-white">
+              Platform management tools
+            </h2>
+
+            <p className="mt-2 text-sm text-white/35">
+              Existing admin modules grouped into clear operational areas.
+            </p>
+          </div>
+
+          <div className="space-y-8">
+            {groupedTools.map((group) => (
+              <section key={group.title}>
+                <div className="mb-4 flex items-center gap-4">
+                  <h3 className="shrink-0 text-sm font-black text-white/70">
+                    {group.title}
+                  </h3>
+
+                  <div className="h-px flex-1 bg-gradient-to-r from-white/[0.1] to-transparent" />
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                  {group.tools.map((tool) => (
+                    <ToolCard key={`${tool.href}-${tool.title}`} tool={tool} />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </section>
       </div>
     </main>
   );
 }
-
