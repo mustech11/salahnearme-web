@@ -5,14 +5,25 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const MAX_NOTES_LENGTH = 1200;
-const MAX_RANGE_DAYS = 370;
+const DATE_REGEX =
+  /^\d{4}-\d{2}-\d{2}$/;
 
-const SOURCES = ["manual", "imported", "official", "community"] as const;
+const MAX_NOTES_LENGTH = 1_200;
+const MAX_RANGE_DAYS = 370;
+const MAX_REQUEST_BODY_BYTES = 20_000;
+
+const SOURCES = [
+  "manual",
+  "imported",
+  "official",
+  "community",
+] as const;
+
 const CONFIDENCES = [
   "official",
   "verified",
@@ -23,13 +34,32 @@ const CONFIDENCES = [
   "high",
 ] as const;
 
-type Source = (typeof SOURCES)[number];
-type Confidence = (typeof CONFIDENCES)[number];
+const TIME_FIELDS = [
+  "fajr_begins",
+  "fajr_iqamah",
+  "sunrise",
+  "dhuhr_begins",
+  "dhuhr_iqamah",
+  "asr_begins",
+  "asr_iqamah",
+  "maghrib_begins",
+  "maghrib_iqamah",
+  "isha_begins",
+  "isha_iqamah",
+] as const;
+
+type Source =
+  (typeof SOURCES)[number];
+
+type Confidence =
+  (typeof CONFIDENCES)[number];
+
+type TimeField =
+  (typeof TIME_FIELDS)[number];
 
 type Body = {
   mosque_id?: unknown;
   prayer_date?: unknown;
-
   fajr_begins?: unknown;
   fajr_iqamah?: unknown;
   sunrise?: unknown;
@@ -41,160 +71,332 @@ type Body = {
   maghrib_iqamah?: unknown;
   isha_begins?: unknown;
   isha_iqamah?: unknown;
-
   source?: unknown;
   confidence?: unknown;
   notes?: unknown;
 };
 
-function jsonResponse(body: Record<string, unknown>, status = 200) {
+type TimeResult =
+  | {
+      ok: true;
+      value: string | null;
+    }
+  | {
+      ok: false;
+    };
+
+function jsonResponse(
+  body: Record<string, unknown>,
+  status = 200
+) {
   return NextResponse.json(body, {
     status,
     headers: {
-      "Cache-Control": "no-store",
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate, max-age=0",
+      Pragma: "no-cache",
+      Expires: "0",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 }
 
-function cleanString(value: unknown, maxLength = 300) {
+function cleanString(
+  value: unknown,
+  maxLength = 300
+): string | null {
   if (typeof value !== "string") {
     return null;
   }
 
-  const cleaned = value.trim().replace(/\s+/g, " ").slice(0, maxLength);
+  const cleaned = value
+    .replace(/\u0000/g, "")
+    .trim()
+    .slice(0, maxLength);
 
-  return cleaned.length > 0 ? cleaned : null;
+  return cleaned || null;
 }
 
-function isUuid(value: string | null): value is string {
-  return Boolean(value && UUID_REGEX.test(value));
+function isUuid(
+  value: string | null
+): value is string {
+  return Boolean(
+    value &&
+      UUID_REGEX.test(value)
+  );
 }
 
-function cleanDate(value: unknown) {
-  const cleaned = cleanString(value, 20);
-
-  if (!cleaned || !/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) {
-    return null;
-  }
-
-  const date = new Date(`${cleaned}T00:00:00.000Z`);
-
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-
-  return cleaned;
+function isPlainObject(
+  value: unknown
+): value is Record<string, unknown> {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value)
+  );
 }
 
-function cleanTime(value: unknown) {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
+function isJsonRequest(
+  request: Request
+): boolean {
+  return Boolean(
+    request.headers
+      .get("content-type")
+      ?.toLowerCase()
+      .includes("application/json")
+  );
+}
 
-  const cleaned = cleanString(value, 20);
-
-  if (!cleaned) {
-    return null;
-  }
-
-  const match = cleaned.match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
-
-  if (!match) {
-    return null;
-  }
-
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  const second = Number(match[3] ?? "0");
+function cleanDate(
+  value: unknown
+): string | null {
+  const cleaned =
+    cleanString(value, 20);
 
   if (
-    hour < 0 ||
-    hour > 23 ||
-    minute < 0 ||
-    minute > 59 ||
-    second < 0 ||
-    second > 59
+    !cleaned ||
+    !DATE_REGEX.test(cleaned)
   ) {
     return null;
   }
 
-  return `${match[1]}:${match[2]}:00`;
-}
+  const [year, month, day] =
+    cleaned
+      .split("-")
+      .map(Number);
 
-function cleanSource(value: unknown): Source {
-  const cleaned = cleanString(value, 40);
+  const date = new Date(
+    Date.UTC(
+      year,
+      month - 1,
+      day
+    )
+  );
 
-  if (!cleaned) {
-    return "manual";
-  }
-
-  return SOURCES.includes(cleaned as Source) ? (cleaned as Source) : "manual";
-}
-
-function cleanConfidence(value: unknown): Confidence {
-  const cleaned = cleanString(value, 40);
-
-  if (!cleaned) {
-    return "official";
-  }
-
-  return CONFIDENCES.includes(cleaned as Confidence)
-    ? (cleaned as Confidence)
-    : "official";
-}
-
-function parseRangeDate(value: string | null) {
-  const cleaned = cleanDate(value);
-
-  if (!cleaned) {
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() + 1 !== month ||
+    date.getUTCDate() !== day
+  ) {
     return null;
   }
 
   return cleaned;
 }
 
-function getDayDifference(startDate: string, endDate: string) {
-  const start = new Date(`${startDate}T00:00:00.000Z`).getTime();
-  const end = new Date(`${endDate}T00:00:00.000Z`).getTime();
+function parseTime(
+  value: unknown
+): TimeResult {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return {
+      ok: true,
+      value: null,
+    };
+  }
 
-  return Math.round((end - start) / 86_400_000);
+  const cleaned =
+    cleanString(value, 20);
+
+  if (!cleaned) {
+    return {
+      ok: true,
+      value: null,
+    };
+  }
+
+  const match = cleaned.match(
+    /^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/
+  );
+
+  if (!match) {
+    return {
+      ok: false,
+    };
+  }
+
+  return {
+    ok: true,
+    value: `${match[1]}:${match[2]}:${
+      match[3] ?? "00"
+    }`,
+  };
 }
 
-export async function GET(req: Request) {
+function cleanSource(
+  value: unknown
+): Source | null {
+  const cleaned =
+    cleanString(value, 40)
+      ?.toLowerCase();
+
+  return cleaned &&
+    SOURCES.includes(
+      cleaned as Source
+    )
+    ? (cleaned as Source)
+    : null;
+}
+
+function cleanConfidence(
+  value: unknown
+): Confidence | null {
+  const cleaned =
+    cleanString(value, 40)
+      ?.toLowerCase();
+
+  return cleaned &&
+    CONFIDENCES.includes(
+      cleaned as Confidence
+    )
+    ? (cleaned as Confidence)
+    : null;
+}
+
+function getDayDifference(
+  startDate: string,
+  endDate: string
+): number {
+  const start = Date.parse(
+    `${startDate}T00:00:00.000Z`
+  );
+
+  const end = Date.parse(
+    `${endDate}T00:00:00.000Z`
+  );
+
+  return Math.round(
+    (end - start) / 86_400_000
+  );
+}
+
+async function readBody(
+  request: Request
+): Promise<Body | null> {
+  const contentLength = Number(
+    request.headers.get(
+      "content-length"
+    )
+  );
+
+  if (
+    Number.isFinite(contentLength) &&
+    contentLength >
+      MAX_REQUEST_BODY_BYTES
+  ) {
+    return null;
+  }
+
   try {
-    const { searchParams } = new URL(req.url);
+    const value: unknown =
+      await request.json();
 
-    const mosqueId = cleanString(searchParams.get("mosque_id"), 80);
-    const date = cleanDate(searchParams.get("date"));
+    return isPlainObject(value)
+      ? (value as Body)
+      : null;
+  } catch {
+    return null;
+  }
+}
 
-    const from = parseRangeDate(searchParams.get("from"));
-    const to = parseRangeDate(searchParams.get("to"));
+export async function GET(
+  request: Request
+) {
+  try {
+    const url =
+      new URL(request.url);
+
+    const mosqueId =
+      cleanString(
+        url.searchParams.get(
+          "mosque_id"
+        ),
+        80
+      );
+
+    const date =
+      cleanDate(
+        url.searchParams.get(
+          "date"
+        )
+      );
+
+    const from =
+      cleanDate(
+        url.searchParams.get(
+          "from"
+        )
+      );
+
+    const to =
+      cleanDate(
+        url.searchParams.get(
+          "to"
+        )
+      );
 
     if (!isUuid(mosqueId)) {
       return jsonResponse(
         {
           ok: false,
-          error: "Missing or invalid mosque_id.",
+          error:
+            "Missing or invalid mosque_id.",
+        },
+        400
+      );
+    }
+
+    if (
+      (from && !to) ||
+      (!from && to)
+    ) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "Both from and to dates are required for a date range.",
         },
         400
       );
     }
 
     let query = supabaseAdmin
-      .from("mosque_prayer_times")
+      .from(
+        "mosque_prayer_times"
+      )
       .select("*")
-      .eq("mosque_id", mosqueId)
+      .eq(
+        "mosque_id",
+        mosqueId
+      )
       .order("prayer_date", {
         ascending: true,
       })
       .limit(MAX_RANGE_DAYS);
 
     if (date) {
-      query = query.eq("prayer_date", date);
-    } else if (from && to) {
-      const dayDifference = getDayDifference(from, to);
+      query = query.eq(
+        "prayer_date",
+        date
+      );
+    } else if (
+      from &&
+      to
+    ) {
+      const difference =
+        getDayDifference(
+          from,
+          to
+        );
 
-      if (dayDifference < 0 || dayDifference > MAX_RANGE_DAYS) {
+      if (
+        difference < 0 ||
+        difference >
+          MAX_RANGE_DAYS
+      ) {
         return jsonResponse(
           {
             ok: false,
@@ -204,18 +406,37 @@ export async function GET(req: Request) {
         );
       }
 
-      query = query.gte("prayer_date", from).lte("prayer_date", to);
+      query = query
+        .gte(
+          "prayer_date",
+          from
+        )
+        .lte(
+          "prayer_date",
+          to
+        );
     }
 
-    const { data, error } = await query;
+    const {
+      data,
+      error,
+    } = await query;
 
     if (error) {
-      console.error("mosque prayer times GET database error:", error);
+      console.error(
+        "Mosque prayer-time query failed:",
+        {
+          mosqueId,
+          code: error.code,
+          message: error.message,
+        }
+      );
 
       return jsonResponse(
         {
           ok: false,
-          error: error.message,
+          error:
+            "Could not load mosque prayer times.",
         },
         500
       );
@@ -223,58 +444,77 @@ export async function GET(req: Request) {
 
     return jsonResponse({
       ok: true,
-      count: data?.length ?? 0,
-      prayer_times: data ?? [],
+      mosque_id: mosqueId,
+      count:
+        data?.length ?? 0,
+      prayer_times:
+        data ?? [],
     });
   } catch (error) {
-    console.error("mosque prayer times GET error:", error);
+    console.error(
+      "Mosque prayer-time GET route failed:",
+      error
+    );
 
     return jsonResponse(
       {
         ok: false,
-        error: "Could not load mosque prayer times.",
+        error:
+          "Could not load mosque prayer times.",
       },
       500
     );
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(
+  request: Request
+) {
   try {
-    const body = (await req.json().catch(() => null)) as Body | null;
-
-    if (!body || typeof body !== "object") {
+    if (!isJsonRequest(request)) {
       return jsonResponse(
         {
           ok: false,
-          error: "Invalid JSON body.",
+          error:
+            "Content-Type must be application/json.",
+        },
+        415
+      );
+    }
+
+    const body =
+      await readBody(request);
+
+    if (!body) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "Invalid JSON body.",
         },
         400
       );
     }
 
-    const mosqueId = cleanString(body.mosque_id, 80);
-    const prayerDate = cleanDate(body.prayer_date);
+    const mosqueId =
+      cleanString(
+        body.mosque_id,
+        80
+      );
+
+    const prayerDate =
+      cleanDate(
+        body.prayer_date
+      );
 
     if (!isUuid(mosqueId)) {
       return jsonResponse(
         {
           ok: false,
-          error: "Missing or invalid mosque_id.",
+          error:
+            "Missing or invalid mosque_id.",
         },
         400
-      );
-    }
-
-    const permission = await requireMosqueManager(mosqueId);
-
-    if (!permission.ok) {
-      return jsonResponse(
-        {
-          ok: false,
-          error: permission.error,
-        },
-        permission.status
       );
     }
 
@@ -282,75 +522,210 @@ export async function POST(req: Request) {
       return jsonResponse(
         {
           ok: false,
-          error: "Missing or invalid prayer_date.",
+          error:
+            "Missing or invalid prayer_date.",
         },
         400
       );
     }
 
-    const now = new Date().toISOString();
+    const permission =
+      await requireMosqueManager(
+        mosqueId
+      );
+
+    if (!permission.ok) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            permission.error,
+        },
+        permission.status
+      );
+    }
+
+    const parsedTimes: Record<
+      TimeField,
+      string | null
+    > = {
+      fajr_begins: null,
+      fajr_iqamah: null,
+      sunrise: null,
+      dhuhr_begins: null,
+      dhuhr_iqamah: null,
+      asr_begins: null,
+      asr_iqamah: null,
+      maghrib_begins: null,
+      maghrib_iqamah: null,
+      isha_begins: null,
+      isha_iqamah: null,
+    };
+
+    for (const field of TIME_FIELDS) {
+      const parsed =
+        parseTime(body[field]);
+
+      if (!parsed.ok) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: `${field.replace(
+              /_/g,
+              " "
+            )} must use a valid 24-hour HH:MM time.`,
+          },
+          400
+        );
+      }
+
+      parsedTimes[field] =
+        parsed.value;
+    }
+
+    const hasPrayerTime =
+      TIME_FIELDS.some(
+        (field) =>
+          Boolean(
+            parsedTimes[field]
+          )
+      );
+
+    if (!hasPrayerTime) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "Enter at least one prayer time.",
+        },
+        400
+      );
+    }
+
+    const source =
+      body.source ===
+        undefined
+        ? "manual"
+        : cleanSource(
+            body.source
+          );
+
+    const confidence =
+      body.confidence ===
+        undefined
+        ? "official"
+        : cleanConfidence(
+            body.confidence
+          );
+
+    if (!source) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "Invalid prayer-time source.",
+          allowed_sources:
+            SOURCES,
+        },
+        400
+      );
+    }
+
+    if (!confidence) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "Invalid prayer-time confidence.",
+          allowed_confidences:
+            CONFIDENCES,
+        },
+        400
+      );
+    }
+
+    const notes =
+      cleanString(
+        body.notes,
+        MAX_NOTES_LENGTH
+      );
+
+    const now =
+      new Date().toISOString();
 
     const payload = {
       mosque_id: mosqueId,
-      prayer_date: prayerDate,
-
-      fajr_begins: cleanTime(body.fajr_begins),
-      fajr_iqamah: cleanTime(body.fajr_iqamah),
-      sunrise: cleanTime(body.sunrise),
-
-      dhuhr_begins: cleanTime(body.dhuhr_begins),
-      dhuhr_iqamah: cleanTime(body.dhuhr_iqamah),
-
-      asr_begins: cleanTime(body.asr_begins),
-      asr_iqamah: cleanTime(body.asr_iqamah),
-
-      maghrib_begins: cleanTime(body.maghrib_begins),
-      maghrib_iqamah: cleanTime(body.maghrib_iqamah),
-
-      isha_begins: cleanTime(body.isha_begins),
-      isha_iqamah: cleanTime(body.isha_iqamah),
-
-      source: cleanSource(body.source),
-      confidence: cleanConfidence(body.confidence),
-      notes: cleanString(body.notes, MAX_NOTES_LENGTH),
+      prayer_date:
+        prayerDate,
+      ...parsedTimes,
+      source,
+      confidence,
+      notes,
       updated_at: now,
     };
 
-    const { data, error } = await supabaseAdmin
-      .from("mosque_prayer_times")
+    const {
+      data,
+      error,
+    } = await supabaseAdmin
+      .from(
+        "mosque_prayer_times"
+      )
       .upsert(payload, {
-        onConflict: "mosque_id,prayer_date",
+        onConflict:
+          "mosque_id,prayer_date",
       })
       .select("*")
       .single();
 
     if (error) {
-      console.error("mosque prayer times POST database error:", error);
+      console.error(
+        "Mosque prayer-time save failed:",
+        {
+          mosqueId,
+          prayerDate,
+          code: error.code,
+          message: error.message,
+        }
+      );
 
       return jsonResponse(
         {
           ok: false,
-          error: error.message,
+          error:
+            error.code ===
+            "23503"
+              ? "The selected mosque could not be found."
+              : "Could not save mosque prayer times.",
         },
-        500
+        error.code ===
+        "23503"
+          ? 400
+          : 500
       );
     }
 
     return jsonResponse({
       ok: true,
+      message:
+        "Prayer times saved successfully.",
+      mosque_id: mosqueId,
+      prayer_date:
+        prayerDate,
       prayer_time: data,
-      message: "Prayer times saved.",
+      created_or_updated: true,
     });
   } catch (error) {
-    console.error("mosque prayer times POST error:", error);
+    console.error(
+      "Mosque prayer-time POST route failed:",
+      error
+    );
 
     return jsonResponse(
       {
         ok: false,
         error:
-          error instanceof Error
-            ? error.message
-            : "Could not save mosque prayer times.",
+          "Could not save mosque prayer times.",
       },
       500
     );

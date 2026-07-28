@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -12,6 +13,7 @@ const UUID_REGEX =
 const MAX_SESSIONS = 8;
 const MAX_LABEL_LENGTH = 80;
 const MAX_NOTES_LENGTH = 500;
+const MAX_REQUEST_BODY_BYTES = 16_000;
 
 type RequestBody = {
   id?: unknown;
@@ -35,11 +37,29 @@ type DatabaseError = {
   hint?: string | null;
 };
 
+function getRowId(value: unknown): string | null {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const id = (value as Record<string, unknown>).id;
+
+  return typeof id === "string" && UUID_REGEX.test(id)
+    ? id
+    : null;
+}
+
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return NextResponse.json(body, {
     status,
     headers: {
-      "Cache-Control": "no-store, max-age=0",
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate, max-age=0",
+      "X-Content-Type-Options": "nosniff",
       Pragma: "no-cache",
       Expires: "0",
     },
@@ -364,6 +384,36 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const contentType =
+      request.headers.get("content-type")?.toLowerCase() ?? "";
+
+    if (!contentType.includes("application/json")) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Content-Type must be application/json.",
+        },
+        415
+      );
+    }
+
+    const contentLength = Number(
+      request.headers.get("content-length")
+    );
+
+    if (
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_REQUEST_BODY_BYTES
+    ) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Request body is too large.",
+        },
+        413
+      );
+    }
+
     const body = (await request
       .json()
       .catch(() => null)) as RequestBody | null;
@@ -587,6 +637,8 @@ export async function POST(request: Request) {
         ok: true,
         jumuah_time: data,
         message: "Jumu’ah session updated successfully.",
+        jumuah_time_id: getRowId(data),
+        created: false,
       });
     }
 
@@ -648,6 +700,8 @@ export async function POST(request: Request) {
         ok: true,
         jumuah_time: data,
         message: "Jumu’ah session created successfully.",
+        jumuah_time_id: getRowId(data),
+        created: true,
       },
       201
     );

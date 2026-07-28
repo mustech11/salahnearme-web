@@ -462,9 +462,9 @@ export async function POST(
     }
 
     const rawReport =
-  existingReportRaw as unknown as Record<string, unknown>;
+      existingReportRaw as unknown as Record<string, unknown>;
 
-const existingReport: ExistingReportRow = {
+    const existingReport: ExistingReportRow = {
   id:
     typeof rawReport.id === "string"
       ? rawReport.id
@@ -494,13 +494,13 @@ const existingReport: ExistingReportRow = {
     typeof rawReport.resolved_at === "string"
       ? rawReport.resolved_at
       : null,
-};
+    };
 
     const existingStatus =
-  cleanStatus(existingReport.status) ?? "new";
+      cleanStatus(existingReport.status) ?? "new";
 
-const existingNotes =
-  normaliseNotes(existingReport.admin_notes);
+    const existingNotes =
+      normaliseNotes(existingReport.admin_notes);
 
     if (
       existingStatus === status &&
@@ -594,6 +594,10 @@ const existingNotes =
       .eq(
         "mosque_id",
         mosqueId
+      )
+      .eq(
+        "status",
+        existingStatus
       )
       .select(
         [

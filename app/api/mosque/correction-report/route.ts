@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 const ALLOWED_REPORT_TYPES = [
   "prayer_time_wrong",
@@ -23,6 +24,7 @@ const MAX_EMAIL_LENGTH = 160;
 const MAX_URL_LENGTH = 700;
 const MAX_METADATA_KEYS = 20;
 const DUPLICATE_WINDOW_MINUTES = 10;
+const MAX_REQUEST_BODY_BYTES = 20_000;
 
 type ReportType = (typeof ALLOWED_REPORT_TYPES)[number];
 
@@ -57,7 +59,11 @@ function jsonResponse(
   return NextResponse.json(body, {
     status,
     headers: {
-      "Cache-Control": "no-store",
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate, max-age=0",
+      Pragma: "no-cache",
+      Expires: "0",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 }
@@ -305,7 +311,54 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json().catch(() => ({}))) as RequestBody;
+    const contentType =
+      req.headers.get("content-type")?.toLowerCase() ?? "";
+
+    if (!contentType.includes("application/json")) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Content-Type must be application/json.",
+        },
+        415
+      );
+    }
+
+    const contentLength = Number(
+      req.headers.get("content-length")
+    );
+
+    if (
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_REQUEST_BODY_BYTES
+    ) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Request body is too large.",
+        },
+        413
+      );
+    }
+
+    const parsed: unknown =
+      await req.json().catch(() => null);
+
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Invalid JSON body.",
+        },
+        400
+      );
+    }
+
+    const body = parsed as RequestBody;
 
     /**
      * Honeypot: return success-looking response but do not save.
@@ -315,6 +368,7 @@ export async function POST(req: Request) {
       return jsonResponse(
         {
           ok: true,
+          accepted: true,
           report: null,
         },
         201
@@ -477,6 +531,8 @@ export async function POST(req: Request) {
     return jsonResponse(
       {
         ok: true,
+        message: "Correction report submitted successfully.",
+        report_id: data.id,
         report: data,
       },
       201
@@ -493,4 +549,3 @@ export async function POST(req: Request) {
     );
   }
 }
-
