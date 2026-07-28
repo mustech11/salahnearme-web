@@ -1,140 +1,259 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
+
+import { requireAdmin } from "@/lib/requireAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
-type Action =
-  | "approve"
-  | "reject"
-  | "verify"
-  | "unverify"
-  | "make_live"
-  | "hide"
-  | "feature"
-  | "unfeature"
-  | "update";
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-type BulkAction =
-  | "approve"
-  | "reject"
-  | "verify"
-  | "hide"
-  | "make_live"
-  | "feature"
-  | "unfeature";
+const ACTIONS = [
+  "approve",
+  "reject",
+  "verify",
+  "unverify",
+  "make_live",
+  "hide",
+  "feature",
+  "unfeature",
+  "update",
+] as const;
+
+const BULK_ACTIONS = [
+  "approve",
+  "reject",
+  "verify",
+  "hide",
+  "make_live",
+  "feature",
+  "unfeature",
+] as const;
+
+type Action = (typeof ACTIONS)[number];
+type BulkAction = (typeof BULK_ACTIONS)[number];
 
 type Body = {
-  business_id?: string;
-  business_ids?: string[];
-  action?: Action | BulkAction;
-  category?: string | null;
-  review_notes?: string | null;
-  featured_until?: string | null;
-  featured_rank?: number | null;
-  bulk?: boolean;
+  business_id?: unknown;
+  business_ids?: unknown;
+  action?: unknown;
+  category?: unknown;
+  review_notes?: unknown;
+  featured_until?: unknown;
+  featured_rank?: unknown;
+  bulk?: unknown;
 };
 
-function cleanString(value: unknown) {
-  if (typeof value !== "string") return null;
+const MAX_BULK_IDS = 250;
+const MAX_REVIEW_NOTES_LENGTH = 2_000;
+const MAX_CATEGORY_LENGTH = 120;
+const MAX_REQUEST_BODY_BYTES = 32_000;
+const DEFAULT_LIMIT = 150;
+const MAX_LIMIT = 500;
 
-  const trimmed = value.trim();
-
-  return trimmed.length ? trimmed : null;
+function jsonResponse(
+  body: Record<string, unknown>,
+  status = 200
+) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate, max-age=0",
+      Pragma: "no-cache",
+      Expires: "0",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
 }
 
-function cleanNumber(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
+function cleanString(
+  value: unknown,
+  maxLength = 300
+): string | null {
+  if (typeof value !== "string") {
+    return null;
   }
 
-  if (typeof value === "string") {
-    const parsed = Number(value);
+  const cleaned = value
+    .replace(/\u0000/g, "")
+    .trim()
+    .slice(0, maxLength);
 
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
+  return cleaned || null;
+}
+
+function cleanInteger(value: unknown): number | null {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
+
+  return Number.isFinite(parsed)
+    ? Math.trunc(parsed)
+    : null;
+}
+
+function cleanDate(value: unknown): string | null {
+  const cleaned = cleanString(value, 100);
+
+  if (!cleaned) {
+    return null;
   }
 
-  return null;
+  const date = new Date(cleaned);
+
+  return Number.isNaN(date.getTime())
+    ? null
+    : date.toISOString();
 }
 
-function isValidAction(value: unknown): value is Action {
-  return [
-    "approve",
-    "reject",
-    "verify",
-    "unverify",
-    "make_live",
-    "hide",
-    "feature",
-    "unfeature",
-    "update",
-  ].includes(String(value));
+function isUuid(value: string | null): value is string {
+  return Boolean(value && UUID_REGEX.test(value));
 }
 
-function isValidBulkAction(value: unknown): value is BulkAction {
-  return [
-    "approve",
-    "reject",
-    "verify",
-    "hide",
-    "make_live",
-    "feature",
-    "unfeature",
-  ].includes(String(value));
+function isPlainObject(
+  value: unknown
+): value is Record<string, unknown> {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value)
+  );
+}
+
+function isJsonRequest(request: Request): boolean {
+  return Boolean(
+    request.headers
+      .get("content-type")
+      ?.toLowerCase()
+      .includes("application/json")
+  );
+}
+
+function isAction(value: unknown): value is Action {
+  return (
+    typeof value === "string" &&
+    ACTIONS.includes(value as Action)
+  );
+}
+
+function isBulkAction(value: unknown): value is BulkAction {
+  return (
+    typeof value === "string" &&
+    BULK_ACTIONS.includes(value as BulkAction)
+  );
+}
+
+function cleanIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      value
+        .map((item) => cleanString(item, 80))
+        .filter(
+          (item): item is string => isUuid(item)
+        )
+    )
+  ).slice(0, MAX_BULK_IDS);
+}
+
+async function readBody(request: Request): Promise<Body | null> {
+  const contentLength = Number(
+    request.headers.get("content-length")
+  );
+
+  if (
+    Number.isFinite(contentLength) &&
+    contentLength > MAX_REQUEST_BODY_BYTES
+  ) {
+    return null;
+  }
+
+  try {
+    const value: unknown = await request.json();
+
+    return isPlainObject(value)
+      ? (value as Body)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildUpdate(
   action: Action | BulkAction,
-  reviewNotes?: string | null
+  reviewNotes: string | null
 ) {
+  const now = new Date().toISOString();
+
   const update: Record<string, unknown> = {
-    reviewed_at: new Date().toISOString(),
+    reviewed_at: now,
     reviewed_by: "admin",
+    updated_at: now,
   };
 
   if (action === "approve") {
-    update.review_status = "approved";
-    update.status = "approved";
-    update.can_advertise = true;
-    update.is_live = true;
-    update.quality_status = "manual_approved";
+    Object.assign(update, {
+      review_status: "approved",
+      status: "approved",
+      can_advertise: true,
+      is_live: true,
+      quality_status: "manual_approved",
+    });
   }
 
   if (action === "reject") {
-    update.review_status = "rejected";
-    update.status = "rejected";
-    update.can_advertise = false;
-    update.is_live = false;
-    update.featured = false;
-    update.quality_status = "manual_rejected";
+    Object.assign(update, {
+      review_status: "rejected",
+      status: "rejected",
+      can_advertise: false,
+      is_live: false,
+      featured: false,
+      featured_rank: null,
+      featured_until: null,
+      quality_status: "manual_rejected",
+    });
   }
 
   if (action === "verify") {
-    update.is_verified = true;
-    update.review_status = "approved";
-    update.status = "approved";
-    update.can_advertise = true;
-    update.is_live = true;
-    update.quality_status = "manual_verified";
+    Object.assign(update, {
+      is_verified: true,
+      review_status: "approved",
+      status: "approved",
+      can_advertise: true,
+      is_live: true,
+      quality_status: "manual_verified",
+    });
   }
 
   if (action === "unverify") {
-    update.is_verified = false;
-    update.quality_status = "manual_unverified";
+    Object.assign(update, {
+      is_verified: false,
+      quality_status: "manual_unverified",
+    });
   }
 
   if (action === "make_live") {
-    update.is_live = true;
-    update.review_status = "approved";
-    update.status = "approved";
-    update.can_advertise = true;
+    Object.assign(update, {
+      is_live: true,
+      review_status: "approved",
+      status: "approved",
+      can_advertise: true,
+    });
   }
 
   if (action === "hide") {
-    update.is_live = false;
-    update.quality_status = "manual_hidden";
+    Object.assign(update, {
+      is_live: false,
+      quality_status: "manual_hidden",
+    });
   }
 
   if (action === "feature") {
@@ -142,34 +261,65 @@ function buildUpdate(
   }
 
   if (action === "unfeature") {
-    update.featured = false;
-    update.featured_rank = null;
-    update.featured_until = null;
+    Object.assign(update, {
+      featured: false,
+      featured_rank: null,
+      featured_until: null,
+    });
   }
 
-  if (reviewNotes) {
+  if (reviewNotes !== null) {
     update.review_notes = reviewNotes;
   }
 
   return update;
 }
 
-export async function GET(req: NextRequest) {
+export async function GET(request: NextRequest) {
+  const admin = await requireAdmin(request);
+
+  if (!admin.ok) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: admin.error,
+      },
+      admin.status
+    );
+  }
+
   try {
-    const { searchParams } = new URL(req.url);
+    const { searchParams } = new URL(request.url);
 
-    const status = searchParams.get("status") ?? "pending";
-    const city = searchParams.get("city");
-    const confidence = searchParams.get("confidence");
-    const quality = searchParams.get("quality");
+    const status =
+      cleanString(searchParams.get("status"), 80) ??
+      "pending";
 
-    const requestedLimit = Number(searchParams.get("limit") ?? "150");
+    const city = cleanString(
+      searchParams.get("city"),
+      120
+    );
 
-    const limit = Number.isFinite(requestedLimit)
-      ? Math.min(Math.max(requestedLimit, 1), 500)
-      : 150;
+    const confidence = cleanString(
+      searchParams.get("confidence"),
+      80
+    );
 
-    let query = supabaseAdmin
+    const quality = cleanString(
+      searchParams.get("quality"),
+      120
+    );
+
+    const requestedLimit =
+      cleanInteger(searchParams.get("limit")) ??
+      DEFAULT_LIMIT;
+
+    const limit = Math.min(
+      MAX_LIMIT,
+      Math.max(1, requestedLimit)
+    );
+
+    let query = admin.supabaseService
       .from("businesses")
       .select(
         `
@@ -220,7 +370,9 @@ export async function GET(req: NextRequest) {
         created_at
       `
       )
-      .order("created_at", { ascending: false })
+      .order("created_at", {
+        ascending: false,
+      })
       .limit(limit);
 
     if (status !== "all") {
@@ -232,173 +384,355 @@ export async function GET(req: NextRequest) {
     }
 
     if (confidence && confidence !== "all") {
-      query = query.eq("halal_confidence", confidence);
+      query = query.eq(
+        "halal_confidence",
+        confidence
+      );
     }
 
     if (quality && quality !== "all") {
-      query = query.eq("quality_status", quality);
+      query = query.eq(
+        "quality_status",
+        quality
+      );
     }
 
     const { data, error } = await query;
 
     if (error) {
-      return NextResponse.json(
-        { error: error.message },
-        { status: 500 }
+      console.error(
+        "Business review queue query failed:",
+        {
+          code: error.code,
+          message: error.message,
+        }
+      );
+
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "Could not load business review queue.",
+        },
+        500
       );
     }
 
-    return NextResponse.json({
+    return jsonResponse({
       ok: true,
       count: data?.length ?? 0,
+      limit,
+      filters: {
+        status,
+        city,
+        confidence,
+        quality,
+      },
       businesses: data ?? [],
     });
   } catch (error) {
-    console.error("business review queue GET error:", error);
+    console.error(
+      "Business review GET route failed:",
+      error
+    );
 
-    return NextResponse.json(
-      { error: "Could not load business review queue." },
-      { status: 500 }
+    return jsonResponse(
+      {
+        ok: false,
+        error:
+          "Could not load business review queue.",
+      },
+      500
     );
   }
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(request: NextRequest) {
+  const admin = await requireAdmin(request);
+
+  if (!admin.ok) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: admin.error,
+      },
+      admin.status
+    );
+  }
+
   try {
-    const body = (await req.json().catch(() => null)) as Body | null;
+    if (!isJsonRequest(request)) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "Content-Type must be application/json.",
+        },
+        415
+      );
+    }
+
+    const body = await readBody(request);
 
     if (!body) {
-      return NextResponse.json(
-        { error: "Missing body." },
-        { status: 400 }
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Invalid JSON body.",
+        },
+        400
       );
     }
 
     const action = body.action;
-    const reviewNotes = cleanString(body.review_notes);
+    const reviewNotes = cleanString(
+      body.review_notes,
+      MAX_REVIEW_NOTES_LENGTH
+    );
 
-    if (body.bulk) {
-      const ids = Array.isArray(body.business_ids)
-        ? body.business_ids
-            .map(cleanString)
-            .filter((id): id is string => !!id)
-        : [];
+    if (body.bulk === true) {
+      const ids = cleanIds(body.business_ids);
 
-      if (!ids.length || !isValidBulkAction(action)) {
-        return NextResponse.json(
+      if (
+        ids.length === 0 ||
+        !isBulkAction(action)
+      ) {
+        return jsonResponse(
           {
-            error: "Missing valid bulk action or selected businesses.",
+            ok: false,
+            error:
+              "Missing valid bulk action or selected businesses.",
           },
-          { status: 400 }
+          400
         );
       }
 
-      const update = buildUpdate(action, reviewNotes);
+      const update = buildUpdate(
+        action,
+        reviewNotes
+      );
 
-      const { error } = await supabaseAdmin
-        .from("businesses")
-        .update(update)
-        .in("id", ids);
+      const { data, error } =
+        await admin.supabaseService
+          .from("businesses")
+          .update(update)
+          .in("id", ids)
+          .select("id");
 
       if (error) {
-        return NextResponse.json(
-          { error: error.message },
-          { status: 500 }
+        console.error(
+          "Business review bulk update failed:",
+          {
+            action,
+            code: error.code,
+            message: error.message,
+          }
+        );
+
+        return jsonResponse(
+          {
+            ok: false,
+            error:
+              "Could not update the selected businesses.",
+          },
+          500
         );
       }
 
-      return NextResponse.json({
+      return jsonResponse({
         ok: true,
-        updated: ids.length,
+        action,
+        requested: ids.length,
+        updated: data?.length ?? 0,
+        business_ids:
+          data?.map((row) => row.id) ?? [],
       });
     }
 
-    const businessId = cleanString(body.business_id);
+    const businessId = cleanString(
+      body.business_id,
+      80
+    );
 
-    const category = cleanString(body.category);
-
-    const featuredUntil = cleanString(body.featured_until);
-
-    const featuredRank = cleanNumber(body.featured_rank);
-
-    if (!businessId || !isValidAction(action)) {
-      return NextResponse.json(
+    if (
+      !isUuid(businessId) ||
+      !isAction(action)
+    ) {
+      return jsonResponse(
         {
-          error: "Missing or invalid business_id/action.",
+          ok: false,
+          error:
+            "Missing or invalid business_id/action.",
         },
-        { status: 400 }
+        400
       );
     }
 
-    const update =
-      action === "update"
-        ? {
-            reviewed_at: new Date().toISOString(),
-            reviewed_by: "admin",
+    let update: Record<string, unknown>;
 
-            ...(category ? { category } : {}),
+    if (action === "update") {
+      update = {
+        reviewed_at:
+          new Date().toISOString(),
+        reviewed_by: "admin",
+        updated_at:
+          new Date().toISOString(),
+      };
 
-            ...(reviewNotes
-              ? {
-                  review_notes: reviewNotes,
-                }
-              : {}),
+      const category = cleanString(
+        body.category,
+        MAX_CATEGORY_LENGTH
+      );
 
-            ...(featuredUntil !== null
-              ? {
-                  featured_until: featuredUntil,
-                }
-              : {}),
+      if (category !== null) {
+        update.category = category;
+      }
 
-            ...(featuredRank !== null
-              ? {
-                  featured_rank: featuredRank,
-                }
-              : {}),
+      if (body.review_notes !== undefined) {
+        update.review_notes = reviewNotes;
+      }
+
+      if (body.featured_until !== undefined) {
+        if (body.featured_until === null) {
+          update.featured_until = null;
+        } else {
+          const featuredUntil = cleanDate(
+            body.featured_until
+          );
+
+          if (!featuredUntil) {
+            return jsonResponse(
+              {
+                ok: false,
+                error:
+                  "Invalid featured_until date.",
+              },
+              400
+            );
           }
-        : buildUpdate(action, reviewNotes);
 
-    const { data, error } = await supabaseAdmin
-      .from("businesses")
-      .update(update)
-      .eq("id", businessId)
-      .select(
+          update.featured_until =
+            featuredUntil;
+        }
+      }
+
+      if (body.featured_rank !== undefined) {
+        if (body.featured_rank === null) {
+          update.featured_rank = null;
+        } else {
+          const featuredRank = cleanInteger(
+            body.featured_rank
+          );
+
+          if (
+            featuredRank === null ||
+            featuredRank < 1
+          ) {
+            return jsonResponse(
+              {
+                ok: false,
+                error:
+                  "featured_rank must be a positive integer or null.",
+              },
+              400
+            );
+          }
+
+          update.featured_rank =
+            featuredRank;
+        }
+      }
+
+      if (Object.keys(update).length === 3) {
+        return jsonResponse(
+          {
+            ok: false,
+            error:
+              "No valid update fields were supplied.",
+          },
+          400
+        );
+      }
+    } else {
+      update = buildUpdate(
+        action,
+        reviewNotes
+      );
+    }
+
+    const { data, error } =
+      await admin.supabaseService
+        .from("businesses")
+        .update(update)
+        .eq("id", businessId)
+        .select(
+          `
+          id,
+          name,
+          category,
+          review_status,
+          status,
+          is_live,
+          is_verified,
+          can_advertise,
+          featured,
+          featured_rank,
+          featured_until,
+          review_notes,
+          reviewed_at
         `
-        id,
-        name,
-        category,
-        review_status,
-        status,
-        is_live,
-        is_verified,
-        can_advertise,
-        featured,
-        featured_rank,
-        featured_until,
-        review_notes,
-        reviewed_at
-      `
-      )
-      .maybeSingle();
+        )
+        .maybeSingle();
 
     if (error) {
-      return NextResponse.json(
-        { error: error.message },
-        { status: 500 }
+      console.error(
+        "Business review update failed:",
+        {
+          businessId,
+          action,
+          code: error.code,
+          message: error.message,
+        }
+      );
+
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "Could not update the business review item.",
+        },
+        500
       );
     }
 
-    return NextResponse.json({
+    if (!data) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Business not found.",
+        },
+        404
+      );
+    }
+
+    return jsonResponse({
       ok: true,
+      action,
       business: data,
     });
   } catch (error) {
-    console.error("business review queue POST error:", error);
+    console.error(
+      "Business review POST route failed:",
+      error
+    );
 
-    return NextResponse.json(
-      { error: "Could not update business review item." },
-      { status: 500 }
+    return jsonResponse(
+      {
+        ok: false,
+        error:
+          "Could not update business review item.",
+      },
+      500
     );
   }
 }
-
