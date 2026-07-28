@@ -1,56 +1,186 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { requireUser } from "@/lib/auth";
+
+import { requireAdmin } from "@/lib/requireAdmin";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 type Body = {
-  claim_id?: string;
+  claim_id?: unknown;
+  reason?: unknown;
 };
 
-function cleanString(value: unknown) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length ? trimmed : null;
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_REASON_LENGTH = 2_000;
+const MAX_REQUEST_BODY_BYTES = 12_000;
+
+function jsonResponse(body: Record<string, unknown>, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      Pragma: "no-cache",
+      Expires: "0",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
 }
 
-export async function POST(req: Request) {
+function cleanString(value: unknown, maxLength = 320): string | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value.replace(/\u0000/g, "").trim().slice(0, maxLength);
+  return cleaned || null;
+}
+
+function isUuid(value: string | null): value is string {
+  return Boolean(value && UUID_REGEX.test(value));
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+export async function POST(request: Request) {
+  const admin = await requireAdmin(request);
+
+  if (!admin.ok) {
+    return jsonResponse({ ok: false, error: admin.error }, admin.status);
+  }
+
   try {
-    const user = await requireUser();
-    const reviewerEmail = (user.email ?? "").trim().toLowerCase();
+    const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
 
-    if (!reviewerEmail) {
-      return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
+    if (!contentType.includes("application/json")) {
+      return jsonResponse(
+        { ok: false, error: "Content-Type must be application/json." },
+        415
+      );
     }
 
-    const body = (await req.json()) as Body;
-    const claimId = cleanString(body.claim_id);
+    const contentLength = Number(request.headers.get("content-length"));
 
-    if (!claimId) {
-      return NextResponse.json({ error: "Missing claim_id" }, { status: 400 });
+    if (
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_REQUEST_BODY_BYTES
+    ) {
+      return jsonResponse({ ok: false, error: "Request body is too large." }, 413);
     }
 
-    const { error } = await supabaseAdmin
+    const parsed: unknown = await request.json().catch(() => null);
+
+    if (!isPlainObject(parsed)) {
+      return jsonResponse({ ok: false, error: "Invalid JSON body." }, 400);
+    }
+
+    const body = parsed as Body;
+    const claimId = cleanString(body.claim_id, 80);
+    const reason = cleanString(body.reason, MAX_REASON_LENGTH);
+
+    if (!isUuid(claimId)) {
+      return jsonResponse({ ok: false, error: "Missing or invalid claim_id." }, 400);
+    }
+
+    const { data: claim, error: claimError } = await admin.supabaseService
       .from("mosque_claim_requests")
-      .update({
-        status: "rejected",
-        reviewed_by: reviewerEmail,
-        reviewed_at: new Date().toISOString(),
-      })
+      .select("id,mosque_id,status")
       .eq("id", claimId)
-      .eq("status", "pending");
+      .maybeSingle();
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    if (claimError) {
+      console.error("Mosque claim rejection lookup failed:", {
+        claimId,
+        code: claimError.code,
+        message: claimError.message,
+      });
+
+      return jsonResponse({ ok: false, error: "Could not load the mosque claim." }, 500);
     }
 
-    return NextResponse.json({ ok: true });
+    if (!claim) {
+      return jsonResponse({ ok: false, error: "Claim not found." }, 404);
+    }
+
+    if (claim.status === "rejected") {
+      return jsonResponse({
+        ok: true,
+        already_rejected: true,
+        message: "Claim already rejected.",
+        claim_id: claimId,
+      });
+    }
+
+    if (claim.status === "approved") {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "This claim has already been approved. Revoke manager access before rejecting it.",
+        },
+        409
+      );
+    }
+
+    if (claim.status && claim.status !== "pending") {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Only pending claims can be rejected.",
+          current_status: claim.status,
+        },
+        409
+      );
+    }
+
+    const now = new Date().toISOString();
+
+    const { data: updatedClaim, error: updateError } =
+      await admin.supabaseService
+        .from("mosque_claim_requests")
+        .update({
+          status: "rejected",
+          review_reason: reason,
+          reviewed_by: "admin",
+          reviewed_at: now,
+        })
+        .eq("id", claimId)
+        .eq("status", "pending")
+        .select("id,mosque_id,status,review_reason,reviewed_by,reviewed_at")
+        .maybeSingle();
+
+    if (updateError) {
+      console.error("Mosque claim rejection update failed:", {
+        claimId,
+        code: updateError.code,
+        message: updateError.message,
+      });
+
+      return jsonResponse({ ok: false, error: "Could not reject the mosque claim." }, 500);
+    }
+
+    if (!updatedClaim) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "The claim changed during review. Refresh and try again.",
+        },
+        409
+      );
+    }
+
+    return jsonResponse({
+      ok: true,
+      message: "Mosque claim rejected successfully.",
+      claim_id: claimId,
+      claim: updatedClaim,
+    });
   } catch (error) {
-    console.error("reject mosque claim error:", error);
-    return NextResponse.json(
-      { error: "Could not reject mosque claim" },
-      { status: 400 }
+    console.error("Mosque claim rejection route failed:", error);
+
+    return jsonResponse(
+      { ok: false, error: "Could not reject mosque claim." },
+      500
     );
   }
 }
-

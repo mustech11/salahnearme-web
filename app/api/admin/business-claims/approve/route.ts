@@ -1,260 +1,328 @@
 import { NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/requireAdmin";
-import { resend, EMAIL_FROM } from "@/lib/email";
+
+import { EMAIL_FROM, resend } from "@/lib/email";
 import { businessClaimApprovedEmail } from "@/lib/emailTemplates";
+import { requireAdmin } from "@/lib/requireAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
-type Body = {
-  claim_id?: string;
-};
+type Body = { claim_id?: unknown };
 
-function clean(value: unknown): string | null {
-  if (typeof value !== "string") return null;
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_REQUEST_BODY_BYTES = 8_000;
 
-  const trimmed = value.trim();
-
-  return trimmed.length ? trimmed : null;
+function jsonResponse(body: Record<string, unknown>, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      Pragma: "no-cache",
+      Expires: "0",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
 }
 
-export async function POST(req: Request) {
+function cleanString(value: unknown, maxLength = 320): string | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value.replace(/\u0000/g, "").trim().slice(0, maxLength);
+  return cleaned || null;
+}
+
+function cleanEmail(value: unknown): string | null {
+  return cleanString(value, 320)?.toLowerCase() ?? null;
+}
+
+function isUuid(value: string | null): value is string {
+  return Boolean(value && UUID_REGEX.test(value));
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+export async function POST(request: Request) {
+  const admin = await requireAdmin(request);
+
+  if (!admin.ok) {
+    return jsonResponse({ ok: false, error: admin.error }, admin.status);
+  }
+
   try {
-    const admin = await requireAdmin(req);
+    const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
 
-    if (!admin.ok) {
-      return NextResponse.json(
-        { error: admin.error },
-        { status: admin.status }
+    if (!contentType.includes("application/json")) {
+      return jsonResponse(
+        { ok: false, error: "Content-Type must be application/json." },
+        415
       );
     }
 
-    const body = (await req.json().catch(() => null)) as Body | null;
+    const contentLength = Number(request.headers.get("content-length"));
 
-    const claimId = clean(body?.claim_id);
-
-    if (!claimId) {
-      return NextResponse.json(
-        { error: "Missing claim_id" },
-        { status: 400 }
-      );
+    if (
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_REQUEST_BODY_BYTES
+    ) {
+      return jsonResponse({ ok: false, error: "Request body is too large." }, 413);
     }
 
-    const { data: claim, error: claimError } =
-      await admin.supabaseService
-        .from("business_claim_requests")
-        .select("*")
-        .eq("id", claimId)
-        .maybeSingle();
+    const parsed: unknown = await request.json().catch(() => null);
+
+    if (!isPlainObject(parsed)) {
+      return jsonResponse({ ok: false, error: "Invalid JSON body." }, 400);
+    }
+
+    const body = parsed as Body;
+    const claimId = cleanString(body.claim_id, 80);
+
+    if (!isUuid(claimId)) {
+      return jsonResponse({ ok: false, error: "Missing or invalid claim_id." }, 400);
+    }
+
+    const { data: claim, error: claimError } = await admin.supabaseService
+      .from("business_claim_requests")
+      .select("id,business_id,business_name,email,status")
+      .eq("id", claimId)
+      .maybeSingle();
 
     if (claimError) {
-      return NextResponse.json(
-        { error: claimError.message },
-        { status: 500 }
-      );
+      console.error("Business claim lookup failed:", {
+        claimId,
+        code: claimError.code,
+        message: claimError.message,
+      });
+
+      return jsonResponse({ ok: false, error: "Could not load the business claim." }, 500);
     }
 
     if (!claim) {
-      return NextResponse.json(
-        { error: "Claim not found" },
-        { status: 404 }
-      );
+      return jsonResponse({ ok: false, error: "Claim not found." }, 404);
     }
 
     if (claim.status === "approved") {
-      return NextResponse.json({
+      return jsonResponse({
         ok: true,
-        message: "Claim already approved",
+        already_approved: true,
+        message: "Claim already approved.",
+        claim_id: claimId,
+        business_id: claim.business_id ?? null,
       });
     }
 
-    if (!claim.business_id) {
-      return NextResponse.json(
-        { error: "Claim has no business_id" },
-        { status: 400 }
+    if (claim.status && claim.status !== "pending") {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Only pending claims can be approved.",
+          current_status: claim.status,
+        },
+        409
       );
     }
 
-    const { data: business, error: businessFetchError } =
-      await admin.supabaseService
-        .from("businesses")
-        .select("id,name,email")
-        .eq("id", claim.business_id)
-        .maybeSingle();
+    const businessId = cleanString(claim.business_id, 80);
+    const claimantEmail = cleanEmail(claim.email);
 
-    if (businessFetchError) {
-      return NextResponse.json(
-        { error: businessFetchError.message },
-        { status: 500 }
-      );
+    if (!isUuid(businessId)) {
+      return jsonResponse({ ok: false, error: "Claim has no valid business_id." }, 422);
+    }
+
+    if (!claimantEmail) {
+      return jsonResponse({ ok: false, error: "Claim has no valid email address." }, 422);
+    }
+
+    const { data: business, error: businessError } = await admin.supabaseService
+      .from("businesses")
+      .select("id,name,email")
+      .eq("id", businessId)
+      .maybeSingle();
+
+    if (businessError) {
+      console.error("Claimed business lookup failed:", {
+        businessId,
+        code: businessError.code,
+        message: businessError.message,
+      });
+
+      return jsonResponse({ ok: false, error: "Could not load the claimed business." }, 500);
     }
 
     if (!business) {
-      return NextResponse.json(
-        { error: "Business not found" },
-        { status: 404 }
-      );
+      return jsonResponse({ ok: false, error: "Business not found." }, 404);
     }
 
-    const nowIso = new Date().toISOString();
+    const now = new Date().toISOString();
 
-    /*
-    --------------------------------------------------
-    UPDATE BUSINESS
-    --------------------------------------------------
-    */
-
-    const { error: businessError } =
+    const { data: updatedBusiness, error: updateBusinessError } =
       await admin.supabaseService
         .from("businesses")
         .update({
           is_claimed: true,
-          claimed_by_email: claim.email,
+          claimed_by_email: claimantEmail,
           is_verified: true,
           can_advertise: true,
           status: "approved",
           review_status: "approved",
           is_live: true,
           quality_status: "manual_verified",
-          reviewed_at: nowIso,
+          reviewed_at: now,
           reviewed_by: "admin",
-          updated_at: nowIso,
+          updated_at: now,
         })
-        .eq("id", claim.business_id);
+        .eq("id", businessId)
+        .select("id,name")
+        .maybeSingle();
 
-    if (businessError) {
-      return NextResponse.json(
-        { error: businessError.message },
-        { status: 500 }
-      );
+    if (updateBusinessError) {
+      console.error("Business claim approval update failed:", {
+        claimId,
+        businessId,
+        code: updateBusinessError.code,
+        message: updateBusinessError.message,
+      });
+
+      return jsonResponse({ ok: false, error: "Could not approve the claimed business." }, 500);
     }
 
-    /*
-    --------------------------------------------------
-    FIND AUTH USER
-    --------------------------------------------------
-    */
+    if (!updatedBusiness) {
+      return jsonResponse({ ok: false, error: "Business not found during approval." }, 404);
+    }
 
     let authUserId: string | null = null;
 
-    if (claim.email) {
+    for (let page = 1; page <= 10 && !authUserId; page += 1) {
       const { data: authUsers, error: authError } =
-        await admin.supabaseService.auth.admin.listUsers();
+        await admin.supabaseService.auth.admin.listUsers({ page, perPage: 1000 });
 
       if (authError) {
-        console.error("auth lookup error:", authError);
-      } else {
-        const matchedUser = authUsers.users.find(
-          (u) =>
-            u.email?.toLowerCase().trim() ===
-            claim.email.toLowerCase().trim()
-        );
-
-        authUserId = matchedUser?.id ?? null;
+        console.error("Business claim auth lookup failed:", authError);
+        break;
       }
+
+      const match = authUsers.users.find(
+        (user) => cleanEmail(user.email) === claimantEmail
+      );
+
+      authUserId = match?.id ?? null;
+
+      if (authUsers.users.length < 1000) break;
     }
 
-    /*
-    --------------------------------------------------
-    CREATE BUSINESS OWNER LINK
-    --------------------------------------------------
-    */
+    let ownerLinkCreated = false;
 
     if (authUserId) {
-      const { error: businessUserError } =
-        await admin.supabaseService
-          .from("business_users")
-          .upsert(
-            {
-              business_id: claim.business_id,
-              user_id: authUserId,
-              role: "owner",
-            },
-            {
-              onConflict: "business_id,user_id",
-            }
-          );
-
-      if (businessUserError) {
-        console.error(
-          "business_users insert error:",
-          businessUserError
+      const { error: linkError } = await admin.supabaseService
+        .from("business_users")
+        .upsert(
+          {
+            business_id: businessId,
+            user_id: authUserId,
+            role: "owner",
+          },
+          { onConflict: "business_id,user_id" }
         );
+
+      if (linkError) {
+        console.error("Business owner-link upsert failed:", {
+          claimId,
+          businessId,
+          authUserId,
+          code: linkError.code,
+          message: linkError.message,
+        });
+      } else {
+        ownerLinkCreated = true;
       }
     }
 
-    /*
-    --------------------------------------------------
-    UPDATE CLAIM
-    --------------------------------------------------
-    */
-
-    const { error: updateClaimError } =
+    const { data: updatedClaim, error: claimUpdateError } =
       await admin.supabaseService
         .from("business_claim_requests")
         .update({
           status: "approved",
-          reviewed_at: nowIso,
+          reviewed_at: now,
         })
-        .eq("id", claimId);
+        .eq("id", claimId)
+        .eq("status", "pending")
+        .select("id,status,reviewed_at")
+        .maybeSingle();
 
-    if (updateClaimError) {
-      return NextResponse.json(
-        { error: updateClaimError.message },
-        { status: 500 }
+    if (claimUpdateError) {
+      console.error("Business claim status update failed:", {
+        claimId,
+        businessId,
+        code: claimUpdateError.code,
+        message: claimUpdateError.message,
+      });
+
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "The business was approved, but the claim status could not be updated.",
+          business_updated: true,
+          business_id: businessId,
+          linked_user_id: authUserId,
+        },
+        500
       );
     }
 
-    /*
-    --------------------------------------------------
-    EMAIL
-    --------------------------------------------------
-    */
-
-    if (claim.email) {
-      try {
-        const template = businessClaimApprovedEmail({
-          businessName:
-            business.name ??
-            claim.business_name ??
-            "Your business",
-        });
-
-        await resend.emails.send({
-          from: EMAIL_FROM,
-          to: claim.email,
-          subject: template.subject,
-          html: template.html,
-        });
-      } catch (emailError) {
-        console.error(
-          "business claim approval email error:",
-          emailError
-        );
-      }
+    if (!updatedClaim) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "The business was approved, but the claim changed during review.",
+          business_updated: true,
+          business_id: businessId,
+          linked_user_id: authUserId,
+        },
+        409
+      );
     }
 
-    return NextResponse.json({
+    let emailSent = false;
+
+    try {
+      const template = businessClaimApprovedEmail({
+        businessName:
+          cleanString(business.name, 180) ??
+          cleanString(claim.business_name, 180) ??
+          "Your business",
+      });
+
+      await resend.emails.send({
+        from: EMAIL_FROM,
+        to: claimantEmail,
+        subject: template.subject,
+        html: template.html,
+      });
+
+      emailSent = true;
+    } catch (emailError) {
+      console.error("Business claim approval email failed:", emailError);
+    }
+
+    return jsonResponse({
       ok: true,
+      message: "Business claim approved successfully.",
       claim_id: claimId,
-      business_id: claim.business_id,
+      business_id: businessId,
       linked_user_id: authUserId,
+      owner_link_created: ownerLinkCreated,
+      email_sent: emailSent,
+      claim: updatedClaim,
     });
   } catch (error) {
-    console.error(
-      "approve business claim route error:",
-      error
-    );
+    console.error("Business claim approval route failed:", error);
 
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not approve business claim",
-      },
-      { status: 500 }
+    return jsonResponse(
+      { ok: false, error: "Could not approve business claim." },
+      500
     );
   }
 }
-
