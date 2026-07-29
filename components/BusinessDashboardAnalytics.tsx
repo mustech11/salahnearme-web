@@ -372,7 +372,7 @@ export default function BusinessDashboardAnalytics({
   return (
     <section
       aria-labelledby="dashboard-analytics-heading"
-      className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8"
+      className="overflow-hidden rounded-[1.8rem] border border-cyan-400/15 bg-gradient-to-br from-cyan-400/[0.055] via-[#090d14] to-[#070a10] p-5 shadow-xl shadow-black/20 sm:p-6 md:p-8"
     >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -382,7 +382,7 @@ export default function BusinessDashboardAnalytics({
 
           <h2
             id="dashboard-analytics-heading"
-            className="mt-3 text-3xl font-black text-white"
+            className="mt-3 text-3xl font-black tracking-[-0.04em] text-white"
           >
             Last {periodDays} days
           </h2>
@@ -500,12 +500,12 @@ function StatCard({
   description: string;
 }) {
   return (
-    <article className="rounded-2xl border border-white/10 bg-black/30 p-5">
+    <article className="group rounded-[1.35rem] border border-white/[0.08] bg-black/25 p-5 transition duration-300 hover:-translate-y-1 hover:border-cyan-400/20 hover:bg-cyan-400/[0.035]">
       <div className="text-xs uppercase tracking-[0.18em] text-yellow-400">
         {title}
       </div>
 
-      <div className="mt-4 text-4xl font-black text-white">
+      <div className="mt-4 text-4xl font-black tracking-[-0.05em] text-white">
         {formatNumber(value)}
       </div>
 
@@ -533,7 +533,7 @@ function RateCard({
   ).format(rate)}%`;
 
   return (
-    <article className="rounded-2xl border border-yellow-500/20 bg-black/30 p-6">
+    <article className="rounded-[1.35rem] border border-yellow-400/15 bg-gradient-to-br from-yellow-400/[0.06] to-black/20 p-6">
       <div className="text-xs uppercase tracking-[0.18em] text-yellow-400">
         {label}
       </div>
@@ -566,7 +566,7 @@ function DashboardAnalyticsSkeleton() {
     <section
       aria-busy="true"
       aria-label="Loading dashboard analytics"
-      className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8"
+      className="overflow-hidden rounded-[1.8rem] border border-cyan-400/15 bg-gradient-to-br from-cyan-400/[0.055] via-[#090d14] to-[#070a10] p-5 shadow-xl shadow-black/20 sm:p-6 md:p-8"
     >
       <div className="h-4 w-24 animate-pulse rounded bg-white/10" />
       <div className="mt-4 h-9 w-52 animate-pulse rounded bg-white/10" />
@@ -576,7 +576,7 @@ function DashboardAnalyticsSkeleton() {
           (_, index) => (
             <div
               key={index}
-              className="rounded-2xl border border-white/10 bg-black/30 p-5"
+              className="group rounded-[1.35rem] border border-white/[0.08] bg-black/25 p-5 transition duration-300 hover:-translate-y-1 hover:border-cyan-400/20 hover:bg-cyan-400/[0.035]"
             >
               <div className="h-3 w-24 animate-pulse rounded bg-white/10" />
               <div className="mt-4 h-9 w-14 animate-pulse rounded bg-white/10" />

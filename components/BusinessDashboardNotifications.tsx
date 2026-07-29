@@ -318,7 +318,7 @@ export default function BusinessDashboardNotifications({
   return (
     <section
       aria-labelledby="business-notifications-heading"
-      className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8"
+      className="overflow-hidden rounded-[1.8rem] border border-yellow-400/15 bg-gradient-to-br from-yellow-400/[0.055] via-[#090d14] to-[#070a10] p-5 shadow-xl shadow-black/20 sm:p-6 md:p-8"
     >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -328,7 +328,7 @@ export default function BusinessDashboardNotifications({
 
           <h2
             id="business-notifications-heading"
-            className="mt-3 text-3xl font-black text-white"
+            className="mt-3 text-3xl font-black tracking-[-0.04em] text-white"
           >
             Business updates
           </h2>
@@ -456,8 +456,8 @@ export default function BusinessDashboardNotifications({
               key={notification.id}
               className={
                 notification.read
-                  ? "rounded-2xl border border-white/10 bg-black/30 p-5"
-                  : "rounded-2xl border border-yellow-500/25 bg-yellow-500/[0.06] p-5"
+                  ? "rounded-[1.35rem] border border-white/[0.08] bg-black/25 p-5 transition hover:border-white/15"
+                  : "rounded-[1.35rem] border border-yellow-400/25 bg-yellow-400/[0.065] p-5 shadow-lg shadow-yellow-950/10"
               }
             >
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -511,7 +511,7 @@ function NotificationsSkeleton() {
         (_, index) => (
           <div
             key={index}
-            className="rounded-2xl border border-white/10 bg-black/30 p-5"
+            className="rounded-[1.35rem] border border-white/[0.08] bg-black/25 p-5 transition hover:border-white/15"
           >
             <div className="h-4 w-48 animate-pulse rounded bg-white/10" />
             <div className="mt-3 h-3 w-full animate-pulse rounded bg-white/10" />

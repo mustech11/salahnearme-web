@@ -413,7 +413,7 @@ export default function BusinessAIInsights({
 
   if (!insights) {
     return (
-      <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6">
+      <section className="overflow-hidden rounded-[1.8rem] border border-purple-400/15 bg-gradient-to-br from-purple-400/[0.07] via-[#090d14] to-[#070a10] p-5 shadow-xl shadow-black/20 sm:p-6">
         <div className="text-lg font-bold text-white">
           No insights available
         </div>
@@ -432,7 +432,7 @@ export default function BusinessAIInsights({
   return (
     <section
       aria-labelledby="business-ai-insights-heading"
-      className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6"
+      className="overflow-hidden rounded-[1.8rem] border border-purple-400/15 bg-gradient-to-br from-purple-400/[0.07] via-[#090d14] to-[#070a10] p-5 shadow-xl shadow-black/20 sm:p-6"
     >
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div>
@@ -442,7 +442,7 @@ export default function BusinessAIInsights({
 
           <h2
             id="business-ai-insights-heading"
-            className="mt-2 text-3xl font-black text-white"
+            className="mt-2 text-3xl font-black tracking-[-0.04em] text-white"
           >
             {insights.performance}
           </h2>
@@ -529,7 +529,7 @@ export default function BusinessAIInsights({
         />
       </div>
 
-      <div className="mt-6 rounded-2xl border border-yellow-500/20 bg-black/30 p-5">
+      <div className="mt-6 rounded-[1.5rem] border border-yellow-400/15 bg-black/25 p-5">
         <div className="text-sm font-bold uppercase tracking-[0.22em] text-yellow-400">
           Recommended actions
         </div>
@@ -572,12 +572,12 @@ function InsightMetric({
   value: number | string;
 }) {
   return (
-    <article className="rounded-2xl border border-yellow-500/20 bg-black/30 p-5">
+    <article className="rounded-[1.35rem] border border-purple-400/15 bg-black/25 p-5 transition hover:border-purple-300/25">
       <div className="text-xs uppercase tracking-[0.16em] text-yellow-400">
         {title}
       </div>
 
-      <div className="mt-3 text-3xl font-black text-white">
+      <div className="mt-3 text-3xl font-black tracking-[-0.04em] text-white">
         {typeof value === "number"
           ? formatNumber(value)
           : value}
@@ -591,7 +591,7 @@ function InsightsSkeleton() {
     <section
       aria-busy="true"
       aria-label="Loading AI business insights"
-      className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6"
+      className="overflow-hidden rounded-[1.8rem] border border-purple-400/15 bg-gradient-to-br from-purple-400/[0.07] via-[#090d14] to-[#070a10] p-5 shadow-xl shadow-black/20 sm:p-6"
     >
       <div className="h-4 w-28 animate-pulse rounded bg-white/10" />
       <div className="mt-4 h-9 w-64 animate-pulse rounded bg-white/10" />

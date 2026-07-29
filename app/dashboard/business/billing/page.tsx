@@ -360,17 +360,17 @@ export default async function BusinessBillingPage({
     : false;
 
   return (
-    <div className="space-y-8">
-      <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8 md:p-10">
-        <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
+    <main className="mx-auto max-w-[1400px] space-y-8 px-4 py-6 sm:px-6 sm:py-8 xl:px-10">
+      <section className="relative overflow-hidden rounded-[2rem] border border-yellow-400/20 bg-gradient-to-br from-yellow-400/[0.10] via-[#0b0f16] to-[#070a10] p-6 shadow-2xl shadow-black/30 sm:p-8 xl:p-10">
+        <div className="text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
           Billing
         </div>
 
-        <h1 className="mt-3 text-4xl font-bold text-white md:text-5xl">
+        <h1 className="dashboard-hero-glow mt-4 text-4xl font-black tracking-[-0.055em] text-white sm:text-5xl xl:text-6xl">
           Subscription and billing
         </h1>
 
-        <p className="mt-3 max-w-3xl text-white/70">
+        <p className="mt-4 max-w-3xl text-sm leading-7 text-white/55 sm:text-base">
           Manage paid placements, renew sponsorships, view the selected business,
           or open Stripe billing when a Stripe customer is attached.
         </p>
@@ -396,7 +396,7 @@ export default async function BusinessBillingPage({
       )}
 
       {!loadError && businesses.length === 0 && (
-        <section className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-8">
+        <section className="rounded-[1.8rem] border border-white/[0.08] bg-[#090d14] p-6 shadow-xl shadow-black/20 sm:p-8">
           <h2 className="text-2xl font-semibold text-white">
             No owned businesses found yet
           </h2>
@@ -433,10 +433,10 @@ export default async function BusinessBillingPage({
 
       {!loadError && businesses.length > 0 && selectedBusiness && (
         <>
-          <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
+          <section className="rounded-[1.8rem] border border-yellow-400/15 bg-[#090d14] p-6 shadow-xl shadow-black/20 sm:p-8">
             <div className="grid gap-6 lg:grid-cols-[1fr_0.8fr] lg:items-end">
               <div>
-                <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
+                <div className="text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
                   Selected business
                 </div>
 
@@ -480,7 +480,7 @@ export default async function BusinessBillingPage({
           </section>
 
           <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6">
+            <div className="rounded-[1.6rem] border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-5 shadow-lg shadow-black/20 sm:p-6">
               <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
                 Placement
               </div>
@@ -489,7 +489,7 @@ export default async function BusinessBillingPage({
               </div>
             </div>
 
-            <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6">
+            <div className="rounded-[1.6rem] border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-5 shadow-lg shadow-black/20 sm:p-6">
               <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
                 Payment
               </div>
@@ -498,7 +498,7 @@ export default async function BusinessBillingPage({
               </div>
             </div>
 
-            <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6">
+            <div className="rounded-[1.6rem] border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-5 shadow-lg shadow-black/20 sm:p-6">
               <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
                 Tier
               </div>
@@ -507,7 +507,7 @@ export default async function BusinessBillingPage({
               </div>
             </div>
 
-            <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6">
+            <div className="rounded-[1.6rem] border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-5 shadow-lg shadow-black/20 sm:p-6">
               <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
                 Stripe
               </div>
@@ -517,7 +517,7 @@ export default async function BusinessBillingPage({
             </div>
           </section>
 
-          <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
+          <section className="rounded-[1.8rem] border border-yellow-400/15 bg-[#090d14] p-6 shadow-xl shadow-black/20 sm:p-8">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-3">
@@ -557,8 +557,8 @@ export default async function BusinessBillingPage({
             </div>
 
             <div className="mt-6 grid gap-6 lg:grid-cols-2">
-              <div className="rounded-2xl border border-white/10 bg-black/30 p-5">
-                <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
+              <div className="rounded-2xl border border-white/[0.08] bg-black/25 p-5">
+                <div className="text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
                   Subscription status
                 </div>
 
@@ -600,8 +600,8 @@ export default async function BusinessBillingPage({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-black/30 p-5">
-                <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
+              <div className="rounded-2xl border border-white/[0.08] bg-black/25 p-5">
+                <div className="text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
                   Billing actions
                 </div>
 
@@ -665,6 +665,6 @@ export default async function BusinessBillingPage({
           </section>
         </>
       )}
-    </div>
+    </main>
   );
 }

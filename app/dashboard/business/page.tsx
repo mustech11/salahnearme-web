@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import BusinessAIInsights from "@/components/BusinessAIInsights";
+import BusinessDashboardAnalytics from "@/components/BusinessDashboardAnalytics";
+import BusinessDashboardNotifications from "@/components/BusinessDashboardNotifications";
+
 import { requireUser } from "@/lib/auth";
 import { buildBusinessOwnerInsights } from "@/lib/businessOwnerIntelligence";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
@@ -411,17 +415,17 @@ export default async function BusinessOwnerDashboardPage({
     : [];
 
   return (
-    <div className="space-y-8">
-      <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8 md:p-10">
-        <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
+    <main className="mx-auto max-w-[1500px] space-y-8 px-4 py-6 sm:px-6 sm:py-8 xl:px-10">
+      <section className="relative overflow-hidden rounded-[2rem] border border-yellow-400/20 bg-gradient-to-br from-yellow-400/[0.10] via-[#0b0f16] to-[#070a10] p-6 shadow-2xl shadow-black/30 sm:p-8 xl:p-10">
+        <div className="text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
           Business Dashboard
         </div>
 
-        <h1 className="mt-3 text-4xl font-bold text-white md:text-5xl">
+        <h1 className="dashboard-hero-glow mt-4 text-4xl font-black tracking-[-0.055em] text-white sm:text-5xl xl:text-6xl">
           {selectedBusiness?.name ?? "Manage your business"}
         </h1>
 
-        <p className="mt-3 max-w-4xl text-white/70">
+        <p className="mt-4 max-w-4xl text-sm leading-7 text-white/55 sm:text-base">
           Manage your listing, sponsorships, analytics, AI insights,
           notifications, opening hours, payments, trust score, and visibility.
         </p>
@@ -443,6 +447,23 @@ export default async function BusinessOwnerDashboardPage({
             Back to website
           </Link>
         </div>
+
+        {selectedBusiness ? (
+          <div className="mt-7 flex gap-2 overflow-x-auto border-t border-white/[0.07] pt-5">
+            <a href="#performance" className="shrink-0 rounded-full border border-yellow-400/20 bg-yellow-400/[0.08] px-4 py-2 text-xs font-black text-yellow-300">
+              Performance
+            </a>
+            <a href="#profile-health" className="shrink-0 rounded-full border border-white/[0.08] bg-white/[0.03] px-4 py-2 text-xs font-bold text-white/55">
+              Profile health
+            </a>
+            <a href="#growth" className="shrink-0 rounded-full border border-white/[0.08] bg-white/[0.03] px-4 py-2 text-xs font-bold text-white/55">
+              Growth
+            </a>
+            <Link href={`/dashboard/business/billing?business=${selectedBusiness.id}`} className="shrink-0 rounded-full border border-white/[0.08] bg-white/[0.03] px-4 py-2 text-xs font-bold text-white/55">
+              Billing
+            </Link>
+          </div>
+        ) : null}
       </section>
 
       {loadError && (
@@ -452,7 +473,7 @@ export default async function BusinessOwnerDashboardPage({
       )}
 
       {!loadError && businesses.length === 0 && (
-        <section className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-8">
+        <section className="rounded-[1.8rem] border border-white/[0.08] bg-[#090d14] p-6 shadow-xl shadow-black/20 sm:p-8">
           <h2 className="text-2xl font-semibold text-white">
             No businesses linked to this account yet
           </h2>
@@ -481,14 +502,14 @@ export default async function BusinessOwnerDashboardPage({
 
       {!loadError && businesses.length > 0 && selectedBusiness && (
         <>
-          <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
+          <section className="rounded-[1.8rem] border border-yellow-400/15 bg-[#090d14] p-6 shadow-xl shadow-black/20 sm:p-8">
             <div className="grid gap-6 lg:grid-cols-[1fr_0.8fr] lg:items-end">
               <div>
-                <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
+                <div className="text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
                   Your businesses
                 </div>
 
-                <h2 className="mt-3 text-3xl font-bold text-white">
+                <h2 className="mt-3 text-3xl font-black tracking-[-0.04em] text-white">
                   {businesses.length} linked{" "}
                   {businesses.length === 1 ? "listing" : "listings"}
                 </h2>
@@ -527,51 +548,51 @@ export default async function BusinessOwnerDashboardPage({
           </section>
 
           <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6">
+            <div className="rounded-[1.6rem] border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-5 shadow-lg shadow-black/20 sm:p-6">
               <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
                 Verification
               </div>
-              <div className="mt-3 text-3xl font-bold text-white">
+              <div className="mt-3 text-3xl font-black tracking-[-0.04em] text-white">
                 {selectedBusiness.is_verified ? "Verified" : "Pending"}
               </div>
             </div>
 
-            <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6">
+            <div className="rounded-[1.6rem] border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-5 shadow-lg shadow-black/20 sm:p-6">
               <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
                 Featured
               </div>
-              <div className="mt-3 text-3xl font-bold text-white">
+              <div className="mt-3 text-3xl font-black tracking-[-0.04em] text-white">
                 {isPremiumVisible(selectedBusiness) ? "Active" : "Inactive"}
               </div>
             </div>
 
-            <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6">
+            <div className="rounded-[1.6rem] border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-5 shadow-lg shadow-black/20 sm:p-6">
               <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
                 Subscription
               </div>
-              <div className="mt-3 text-3xl font-bold text-white">
+              <div className="mt-3 text-3xl font-black tracking-[-0.04em] text-white">
                 {getTierLabel(selectedBusiness.pricing_tier)}
               </div>
             </div>
 
-            <div className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6">
+            <div className="rounded-[1.6rem] border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-5 shadow-lg shadow-black/20 sm:p-6">
               <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
                 Payment
               </div>
-              <div className="mt-3 text-3xl font-bold text-white">
+              <div className="mt-3 text-3xl font-black tracking-[-0.04em] text-white">
                 {getPaymentLabel(selectedBusiness)}
               </div>
             </div>
           </section>
 
-          <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
+          <section className="rounded-[1.8rem] border border-yellow-400/15 bg-[#090d14] p-6 shadow-xl shadow-black/20 sm:p-8">
             <div className="grid gap-6 lg:grid-cols-2">
               <div>
-                <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
+                <div className="text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
                   Selected listing
                 </div>
 
-                <h2 className="mt-3 text-3xl font-bold text-white">
+                <h2 className="mt-3 text-3xl font-black tracking-[-0.04em] text-white">
                   {selectedBusiness.name ?? "Unnamed business"}
                 </h2>
 
@@ -598,8 +619,8 @@ export default async function BusinessOwnerDashboardPage({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-black/30 p-5">
-                <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
+              <div className="rounded-2xl border border-white/[0.08] bg-black/25 p-5">
+                <div className="text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
                   Listing status
                 </div>
 
@@ -673,13 +694,13 @@ export default async function BusinessOwnerDashboardPage({
             </div>
           </section>
 
-          <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
-            <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
+          <section id="profile-health" data-section="profile-health" className="rounded-[1.8rem] border border-yellow-400/15 bg-[#090d14] p-6 shadow-xl shadow-black/20 sm:p-8">
+            <div className="text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
               Account summary
             </div>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-3">
-              <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+              <div className="rounded-2xl border border-white/[0.08] bg-black/25 p-4">
                 <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
                   Approved Listings
                 </div>
@@ -688,7 +709,7 @@ export default async function BusinessOwnerDashboardPage({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+              <div className="rounded-2xl border border-white/[0.08] bg-black/25 p-4">
                 <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
                   Premium Active
                 </div>
@@ -697,7 +718,7 @@ export default async function BusinessOwnerDashboardPage({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+              <div className="rounded-2xl border border-white/[0.08] bg-black/25 p-4">
                 <div className="text-xs uppercase tracking-[0.2em] text-yellow-400">
                   Expiring Soon
                 </div>
@@ -708,25 +729,44 @@ export default async function BusinessOwnerDashboardPage({
             </div>
           </section>
 
-          <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
-            <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
+          <section id="performance" className="grid scroll-mt-28 gap-6">
+            <BusinessDashboardAnalytics
+              key={`analytics-${selectedBusiness.id}`}
+              businessId={selectedBusiness.id}
+              days={30}
+            />
+
+            <BusinessAIInsights
+              key={`ai-${selectedBusiness.id}`}
+              businessId={selectedBusiness.id}
+              days={30}
+            />
+
+            <BusinessDashboardNotifications
+              key={`notifications-${selectedBusiness.id}`}
+              businessId={selectedBusiness.id}
+            />
+          </section>
+
+          <section id="growth" className="scroll-mt-28 rounded-[1.8rem] border border-yellow-400/15 bg-[#090d14] p-6 shadow-xl shadow-black/20 sm:p-8">
+            <div className="text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
               Intelligence
             </div>
 
-            <h2 className="mt-3 text-2xl font-bold text-white">
+            <h2 className="mt-3 text-2xl font-black tracking-[-0.03em] text-white">
               Growth and renewal insights
             </h2>
 
             <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {insights.length === 0 ? (
-                <div className="rounded-2xl border border-white/10 bg-black/30 p-5 text-white/60">
+                <div className="rounded-2xl border border-white/[0.08] bg-black/25 p-5 text-white/60">
                   No urgent issues detected right now.
                 </div>
               ) : (
                 insights.map((insight, index) => (
                   <div
                     key={`${insight.type}-${index}`}
-                    className="rounded-2xl border border-white/10 bg-black/30 p-5"
+                    className="rounded-2xl border border-white/[0.08] bg-black/25 p-5"
                   >
                     <div
                       className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${badgeClass(
@@ -749,21 +789,21 @@ export default async function BusinessOwnerDashboardPage({
             </div>
           </section>
 
-          <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
+          <section className="rounded-[1.8rem] border border-yellow-400/15 bg-[#090d14] p-6 shadow-xl shadow-black/20 sm:p-8">
             <div className="text-xl font-semibold text-yellow-400">
               Recent activity for {selectedBusiness.name ?? "this business"}
             </div>
 
             <div className="mt-5 space-y-3">
               {selectedCampaigns.length === 0 ? (
-                <div className="rounded-2xl border border-white/10 bg-black/30 p-4 text-white/60">
+                <div className="rounded-2xl border border-white/[0.08] bg-black/25 p-4 text-white/60">
                   No recent campaign activity found for this listing yet.
                 </div>
               ) : (
                 selectedCampaigns.slice(0, 8).map((campaign) => (
                   <div
                     key={campaign.id}
-                    className="rounded-2xl border border-white/10 bg-black/30 p-4"
+                    className="rounded-2xl border border-white/[0.08] bg-black/25 p-4"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
@@ -787,6 +827,6 @@ export default async function BusinessOwnerDashboardPage({
           </section>
         </>
       )}
-    </div>
+    </main>
   );
 }
