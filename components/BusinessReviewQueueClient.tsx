@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Business = {
   id: string;
@@ -45,6 +45,9 @@ type ApiResponse = {
   businesses?: Business[];
   error?: string;
 };
+
+const REQUEST_TIMEOUT_MS = 20_000;
+const MAX_REVIEW_NOTES_LENGTH = 1_000;
 
 const CATEGORY_OPTIONS = [
   "halal_restaurant",
@@ -105,6 +108,7 @@ function badgeClass(
 }
 
 export default function BusinessReviewQueueClient() {
+  const requestControllerRef = useRef<AbortController | null>(null);
   const [status, setStatus] = useState("pending");
   const [confidence, setConfidence] = useState("all");
   const [quality, setQuality] = useState("all");
@@ -119,6 +123,8 @@ export default function BusinessReviewQueueClient() {
 
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [search, setSearch] = useState("");
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
 
   const cities = useMemo(() => {
     return Array.from(
@@ -136,9 +142,31 @@ export default function BusinessReviewQueueClient() {
     };
   }, [businesses, selectedIds]);
 
+  const visibleBusinesses = useMemo(() => {
+    const term = search.trim().toLowerCase();
+
+    if (!term) return businesses;
+
+    return businesses.filter((business) =>
+      [
+        business.name,
+        business.category,
+        business.city,
+        business.area,
+        business.postcode,
+        business.address,
+        business.import_source,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(term)
+    );
+  }, [businesses, search]);
+
   const allVisibleSelected =
-    businesses.length > 0 &&
-    businesses.every((b) => selectedIds.includes(b.id));
+    visibleBusinesses.length > 0 &&
+    visibleBusinesses.every((b) => selectedIds.includes(b.id));
 
   function toggleSelected(id: string) {
     setSelectedIds((current) =>
@@ -152,11 +180,20 @@ export default function BusinessReviewQueueClient() {
     if (allVisibleSelected) {
       setSelectedIds([]);
     } else {
-      setSelectedIds(businesses.map((b) => b.id));
+      setSelectedIds(visibleBusinesses.map((b) => b.id));
     }
   }
 
-  async function loadQueue() {
+  const loadQueue = useCallback(async () => {
+    requestControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const timeoutId = window.setTimeout(
+      () => controller.abort(),
+      REQUEST_TIMEOUT_MS
+    );
+
     try {
       setLoading(true);
       setMessage("");
@@ -170,28 +207,42 @@ export default function BusinessReviewQueueClient() {
         limit: "200",
       });
 
-      const res = await fetch(
+      const response = await fetch(
         `/api/admin/business-review?${params.toString()}`,
         {
+          headers: { Accept: "application/json" },
+          credentials: "same-origin",
           cache: "no-store",
+          signal: controller.signal,
         }
       );
 
-      const data = (await res.json().catch(() => ({}))) as ApiResponse;
+      const data = (await response.json().catch(() => ({}))) as ApiResponse;
 
-      if (!res.ok || !data.ok) {
+      if (!response.ok || data.ok !== true) {
         setErrorMessage(data.error ?? "Could not load queue.");
         return;
       }
 
-      setBusinesses(data.businesses ?? []);
+      setBusinesses(Array.isArray(data.businesses) ? data.businesses : []);
       setSelectedIds([]);
-    } catch {
-      setErrorMessage("Could not load review queue.");
+      setLastUpdatedAt(new Date());
+    } catch (error) {
+      setErrorMessage(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "The review queue request timed out."
+          : "Could not load review queue."
+      );
     } finally {
+      window.clearTimeout(timeoutId);
+
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+      }
+
       setLoading(false);
     }
-  }
+  }, [city, confidence, quality, status]);
 
   async function updateBusiness(
     businessId: string,
@@ -284,10 +335,12 @@ export default function BusinessReviewQueueClient() {
   }
 
   useEffect(() => {
-    loadQueue();
+    void loadQueue();
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, confidence, quality, city]);
+    return () => {
+      requestControllerRef.current?.abort();
+    };
+  }, [loadQueue]);
 
   return (
     <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8">
@@ -340,6 +393,26 @@ export default function BusinessReviewQueueClient() {
             {loading ? "Loading..." : "Refresh"}
           </button>
         </div>
+      </div>
+
+      <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <input
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search the loaded review queue"
+          className="min-h-11 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-2.5 text-sm text-white outline-none placeholder:text-white/30 focus:border-yellow-400 sm:max-w-md"
+        />
+
+        {lastUpdatedAt ? (
+          <span className="text-xs text-white/35">
+            Updated{" "}
+            {lastUpdatedAt.toLocaleTimeString("en-GB", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
+        ) : null}
       </div>
 
       <div className="mt-6 grid gap-4 md:grid-cols-5">
@@ -413,7 +486,7 @@ export default function BusinessReviewQueueClient() {
       )}
 
       <div className="mt-8 space-y-4">
-        {businesses.map((business) => (
+        {visibleBusinesses.map((business) => (
           <BusinessReviewCard
             key={business.id}
             business={business}
@@ -425,7 +498,7 @@ export default function BusinessReviewQueueClient() {
         ))}
       </div>
 
-      {!loading && businesses.length === 0 && (
+      {!loading && visibleBusinesses.length === 0 && (
         <div className="mt-8 rounded-2xl border border-white/10 bg-black/30 p-6 text-white/60">
           No businesses found for this filter.
         </div>
@@ -708,6 +781,7 @@ function BusinessReviewCard({
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={3}
+              maxLength={MAX_REVIEW_NOTES_LENGTH}
               className="mt-2 w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white"
               placeholder="Optional admin note"
             />
@@ -803,4 +877,3 @@ function InfoBox({
     </div>
   );
 }
-

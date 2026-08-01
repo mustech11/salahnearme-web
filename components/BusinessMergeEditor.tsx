@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   buildBusinessMergeSuggestions,
   type BusinessMergeRow,
@@ -13,6 +13,11 @@ type Props = {
 };
 
 type FieldKey = keyof BusinessMergeRow;
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const REQUEST_TIMEOUT_MS = 25_000;
 
 const fields: Array<{ key: FieldKey; label: string }> = [
   { key: "name", label: "Name" },
@@ -59,6 +64,7 @@ export default function BusinessMergeEditor({ queueId, left, right }: Props) {
     [left, right]
   );
 
+  const requestControllerRef = useRef<AbortController | null>(null);
   const [primarySide, setPrimarySide] = useState<"left" | "right">("left");
   const [selected, setSelected] = useState<Record<string, "left" | "right">>(() =>
     Object.fromEntries(
@@ -73,6 +79,20 @@ export default function BusinessMergeEditor({ queueId, left, right }: Props) {
 
   const primaryId = primarySide === "left" ? left.id : right.id;
   const duplicateId = primarySide === "left" ? right.id : left.id;
+
+  const differingFields = useMemo(
+    () => fields.filter((field) => !sameValue(left[field.key], right[field.key])),
+    [left, right]
+  );
+
+  const suggestedSelectionCount = useMemo(
+    () =>
+      fields.filter(
+        (field) =>
+          selected[field.key] === (suggestions[field.key]?.side ?? "left")
+      ).length,
+    [selected, suggestions]
+  );
 
   const merged = useMemo(() => {
     const result: Record<string, unknown> = {};
@@ -101,15 +121,46 @@ export default function BusinessMergeEditor({ queueId, left, right }: Props) {
   }
 
   async function submitMerge() {
+    if (
+      !UUID_REGEX.test(queueId) ||
+      !UUID_REGEX.test(primaryId) ||
+      !UUID_REGEX.test(duplicateId) ||
+      primaryId === duplicateId
+    ) {
+      setErrorMessage("The merge identifiers are invalid.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Merge "${displayValue(
+        primarySide === "left" ? left.name : right.name
+      )}" and permanently remove the duplicate record?`
+    );
+
+    if (!confirmed) return;
+
+    requestControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const timeoutId = window.setTimeout(
+      () => controller.abort(),
+      REQUEST_TIMEOUT_MS
+    );
+
     try {
       setLoading(true);
       setErrorMessage("");
 
-      const res = await fetch("/api/admin/duplicates/merge-business", {
+      const response = await fetch("/api/admin/duplicates/merge-business", {
         method: "POST",
         headers: {
+          Accept: "application/json",
           "Content-Type": "application/json",
         },
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
         body: JSON.stringify({
           queue_id: queueId,
           primary_id: primaryId,
@@ -118,17 +169,30 @@ export default function BusinessMergeEditor({ queueId, left, right }: Props) {
         }),
       });
 
-      const data = await res.json().catch(() => ({}));
+      const data = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+      };
 
-      if (!res.ok) {
-        setErrorMessage(data?.error ?? "Could not merge businesses.");
+      if (!response.ok || data.ok === false) {
+        setErrorMessage(data.error ?? "Could not merge businesses.");
         return;
       }
 
-      window.location.href = "/admin/duplicates";
-    } catch {
-      setErrorMessage("Something went wrong during merge.");
+      window.location.assign("/admin/duplicates");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "The merge request timed out. Please try again."
+          : "Something went wrong during merge."
+      );
     } finally {
+      window.clearTimeout(timeoutId);
+
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+      }
+
       setLoading(false);
     }
   }
@@ -174,6 +238,15 @@ export default function BusinessMergeEditor({ queueId, left, right }: Props) {
           </div>
         </div>
 
+        <div className="mt-6 grid gap-3 sm:grid-cols-3">
+          <SummaryMetric label="Fields compared" value={fields.length} />
+          <SummaryMetric label="Differences" value={differingFields.length} />
+          <SummaryMetric
+            label="Smart choices used"
+            value={suggestedSelectionCount}
+          />
+        </div>
+
         <div className="mt-6 flex flex-wrap gap-3">
           <button
             type="button"
@@ -202,7 +275,8 @@ export default function BusinessMergeEditor({ queueId, left, right }: Props) {
       </section>
 
       <section className="overflow-hidden rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))]">
-        <div className="grid grid-cols-[220px_1fr_1fr_220px] border-b border-white/10 bg-black/30">
+        <div className="overflow-x-auto">
+        <div className="min-w-[980px] grid grid-cols-[220px_1fr_1fr_220px] border-b border-white/10 bg-black/30">
           <div className="p-4 text-sm font-semibold uppercase tracking-[0.2em] text-yellow-400">
             Field
           </div>
@@ -226,7 +300,7 @@ export default function BusinessMergeEditor({ queueId, left, right }: Props) {
           return (
             <div
               key={field.key}
-              className={`grid grid-cols-[220px_1fr_1fr_220px] border-b border-white/10 ${
+              className={`min-w-[980px] grid grid-cols-[220px_1fr_1fr_220px] border-b border-white/10 ${
                 equal ? "bg-black/20" : "bg-yellow-500/[0.03]"
               }`}
             >
@@ -275,6 +349,7 @@ export default function BusinessMergeEditor({ queueId, left, right }: Props) {
             </div>
           );
         })}
+        </div>
       </section>
 
       <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
@@ -314,3 +389,21 @@ export default function BusinessMergeEditor({ queueId, left, right }: Props) {
   );
 }
 
+
+
+function SummaryMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
+      <div className="text-xs uppercase tracking-[0.16em] text-white/40">
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-black text-white">{value}</div>
+    </div>
+  );
+}

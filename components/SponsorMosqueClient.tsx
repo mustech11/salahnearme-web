@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Business = {
   id: string;
@@ -12,6 +12,11 @@ type Business = {
 };
 
 type PricingTier = "bronze" | "silver" | "gold" | "platinum";
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const REQUEST_TIMEOUT_MS = 25_000;
 
 const monthlyPrices: Record<PricingTier, number> = {
   bronze: 19,
@@ -38,15 +43,34 @@ export default function SponsorMosqueClient({
   mosqueName: string | null;
   businesses: Business[];
 }) {
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedBusinessId, setSelectedBusinessId] = useState("");
   const [pricingTier, setPricingTier] = useState<PricingTier>("silver");
   const [durationDays, setDurationDays] = useState(30);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
+  const safeBusinesses = useMemo(
+    () =>
+      (businesses ?? [])
+        .filter((business) => UUID_REGEX.test(business.id))
+        .sort((first, second) =>
+          (first.name ?? "").localeCompare(second.name ?? "", "en-GB", {
+            sensitivity: "base",
+          })
+        ),
+    [businesses]
+  );
+
   const selectedBusiness = useMemo(() => {
-    return businesses.find((b) => b.id === selectedBusinessId) ?? null;
-  }, [businesses, selectedBusinessId]);
+    return safeBusinesses.find((b) => b.id === selectedBusinessId) ?? null;
+  }, [safeBusinesses, selectedBusinessId]);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   const pricingCopy: Record<PricingTier, string> = {
     bronze: "Bronze · Entry placement",
@@ -79,88 +103,144 @@ export default function SponsorMosqueClient({
   };
 
   const totalPrice = getTierPrice(pricingTier, durationDays);
-  const hasBusinesses = businesses.length > 0;
+  const hasBusinesses = safeBusinesses.length > 0;
+
+  async function requestJson(
+    url: string,
+    body: Record<string, unknown>,
+    signal: AbortSignal
+  ) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      credentials: "same-origin",
+      cache: "no-store",
+      signal,
+      body: JSON.stringify(body),
+    });
+
+    const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+
+    if (!response.ok) {
+      throw new Error(
+        typeof data.error === "string" && data.error.trim()
+          ? data.error.trim()
+          : "The request could not be completed."
+      );
+    }
+
+    return data;
+  }
 
   async function startSponsorCheckout() {
-    if (!selectedBusinessId) {
+    if (!UUID_REGEX.test(mosqueId)) {
+      setErrorMessage("A valid mosque is required.");
+      return;
+    }
+
+    if (!selectedBusinessId || !UUID_REGEX.test(selectedBusinessId)) {
       setErrorMessage("Please choose a business first.");
       return;
     }
+
+    abortControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    let timedOut = false;
+
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
 
     try {
       setLoading(true);
       setErrorMessage("");
 
-      console.log("Sponsor checkout payload", {
-        business_id: selectedBusinessId,
-        pricing_tier: pricingTier,
-        duration_days: durationDays,
-        advertising_type: "mosque_sponsor",
-        sponsor_mosque_id: mosqueId,
-      });
-
-      const campaignRes = await fetch("/api/advertise/setup", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      const campaignData = await requestJson(
+        "/api/advertise/setup",
+        {
           advertising_type: "mosque_sponsor",
           selected_mosque_id: mosqueId,
           notes: `Mosque sponsorship requested for ${mosqueName ?? "mosque"}`,
-        }),
-      });
+        },
+        controller.signal
+      );
 
-      const campaignData = await campaignRes.json().catch(() => ({}));
+      const campaignId =
+        typeof campaignData.id === "string" ? campaignData.id : "";
 
-      if (!campaignRes.ok || !campaignData?.id) {
-        setErrorMessage(
-          campaignData?.error ?? "Could not create campaign setup."
-        );
-        return;
+      if (!campaignId) {
+        throw new Error("Could not create campaign setup.");
       }
 
-      const checkoutRes = await fetch("/api/checkout/create-session", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          campaign_id: campaignData.id,
+      const checkoutData = await requestJson(
+        "/api/checkout/create-session",
+        {
+          campaign_id: campaignId,
           business_id: selectedBusinessId,
           pricing_tier: pricingTier,
           duration_days: durationDays,
           advertising_type: "mosque_sponsor",
           sponsor_mosque_id: mosqueId,
-        }),
-      });
+        },
+        controller.signal
+      );
 
-      const checkoutData = await checkoutRes.json().catch(() => ({}));
+      const checkoutUrl =
+        typeof checkoutData.url === "string" ? checkoutData.url : "";
 
-      if (!checkoutRes.ok) {
-        setErrorMessage(
-          checkoutData?.error ?? "Could not start checkout session."
-        );
-        return;
+      if (!checkoutUrl) {
+        throw new Error("Checkout URL was not returned.");
       }
 
-      if (checkoutData?.url) {
-        window.location.href = checkoutData.url;
-        return;
+      const parsed = new URL(checkoutUrl);
+
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+        throw new Error("The checkout URL is invalid.");
       }
 
-      setErrorMessage("Checkout URL was not returned.");
-    } catch {
-      setErrorMessage("Something went wrong. Please try again.");
+      window.location.assign(parsed.toString());
+    } catch (error) {
+      setErrorMessage(
+        error instanceof DOMException && error.name === "AbortError"
+          ? timedOut
+            ? "Checkout setup timed out. Please try again."
+            : "Checkout setup was cancelled."
+          : error instanceof Error
+            ? error.message
+            : "Something went wrong. Please try again."
+      );
     } finally {
+      window.clearTimeout(timeoutId);
+
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+
       setLoading(false);
     }
   }
 
   return (
     <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
-      <div className="text-2xl font-semibold text-yellow-400">
-        Choose a business to sponsor this mosque
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="text-2xl font-semibold text-yellow-400">
+            Choose a business to sponsor this mosque
+          </div>
+          <p className="mt-2 text-sm text-white/50">
+            Sponsorship target: {mosqueName ?? "Selected mosque"}
+          </p>
+        </div>
+
+        <span className="w-fit rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-300">
+          Secure Stripe checkout
+        </span>
       </div>
 
       <p className="mt-3 max-w-3xl text-white/70">
@@ -190,7 +270,7 @@ export default function SponsorMosqueClient({
             disabled={!hasBusinesses || loading}
           >
             <option value="">Select a business</option>
-            {businesses.map((b) => (
+            {safeBusinesses.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name} {b.category ? `• ${b.category}` : ""}
               </option>
@@ -342,4 +422,3 @@ export default function SponsorMosqueClient({
     </section>
   );
 }
-

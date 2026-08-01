@@ -33,8 +33,8 @@ const REQUEST_TIMEOUT_MS = 60_000;
 const DEFAULT_ERROR_MESSAGE =
   "The timetable could not be parsed. Please try again.";
 
-function cleanString(value: string | null | undefined): string {
-  return String(value ?? "").trim();
+function cleanString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -96,6 +96,56 @@ function getResponseError(data: ParseResponse, status: number): string {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function StatusIcon({
+  type,
+}: {
+  type: "parse" | "success" | "error" | "refresh";
+}) {
+  const common = {
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    className: "size-4",
+    "aria-hidden": true,
+  };
+
+  if (type === "success") {
+    return (
+      <svg {...common}>
+        <path d="m5 12 4 4L19 6" />
+      </svg>
+    );
+  }
+
+  if (type === "error") {
+    return (
+      <svg {...common}>
+        <path d="M12 3 2.8 20h18.4L12 3Z" />
+        <path d="M12 9v4M12 17h.01" />
+      </svg>
+    );
+  }
+
+  if (type === "refresh") {
+    return (
+      <svg {...common}>
+        <path d="M20 11a8 8 0 1 0 2 5" />
+        <path d="M20 4v7h-7" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg {...common}>
+      <path d="M4 5h16M4 12h10M4 19h7" />
+      <path d="m17 14 3 3-3 3M14 17h6" />
+    </svg>
+  );
 }
 
 export default function MosqueTimetableParseButton({ importId }: Props) {
@@ -238,6 +288,7 @@ export default function MosqueTimetableParseButton({ importId }: Props) {
         return;
       }
 
+      console.error("Timetable parsing failed:", error);
       setErrorMessage(DEFAULT_ERROR_MESSAGE);
     } finally {
       window.clearTimeout(timeoutId);
@@ -266,22 +317,27 @@ export default function MosqueTimetableParseButton({ importId }: Props) {
         aria-disabled={isDisabled}
         aria-describedby={describedBy}
         title={validationError || undefined}
-        className="inline-flex min-h-10 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-xs font-bold text-emerald-300 transition hover:bg-emerald-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+        className="group inline-flex min-h-11 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-xs font-black text-emerald-200 shadow-[0_10px_30px_rgba(16,185,129,0.06)] transition hover:border-emerald-400/50 hover:bg-emerald-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {isSubmitting ? (
           <>
             <span
               aria-hidden="true"
-              className="mr-2 size-3.5 animate-spin rounded-full border-2 border-emerald-300/30 border-t-emerald-300"
+              className="mr-2 size-4 animate-spin rounded-full border-2 border-emerald-200/30 border-t-emerald-200"
             />
-            Parsing...
+            Parsing timetable…
           </>
-        ) : submitState === "success" ? (
-          "Parse again"
-        ) : submitState === "error" ? (
-          "Try parsing again"
         ) : (
-          "Parse timetable"
+          <>
+            <span className="mr-2">
+              <StatusIcon type={submitState === "success" ? "refresh" : "parse"} />
+            </span>
+            {submitState === "success"
+              ? "Parse again"
+              : submitState === "error"
+                ? "Try parsing again"
+                : "Parse timetable"}
+          </>
         )}
       </button>
 
@@ -296,20 +352,29 @@ export default function MosqueTimetableParseButton({ importId }: Props) {
           <div
             id={successId}
             role="status"
-            className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs leading-5 text-emerald-300"
+            className="mt-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-4 text-xs leading-5 text-emerald-100"
           >
-            <p>{message}</p>
-            {resultStatus ? <p className="mt-1 text-emerald-200/70">Status: {resultStatus}</p> : null}
-            {parsedRows !== null ? (
-              <p className="mt-1 text-emerald-200/70">
-                Parsed rows: {parsedRows.toLocaleString("en-GB")}
-              </p>
-            ) : null}
-            {warningCount !== null ? (
-              <p className="mt-1 text-emerald-200/70">
-                Parser warnings: {warningCount.toLocaleString("en-GB")}
-              </p>
-            ) : null}
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-200">
+                <StatusIcon type="success" />
+              </span>
+              <div className="min-w-0">
+                <p className="font-bold">{message}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {resultStatus ? <ResultBadge label="Status" value={resultStatus} /> : null}
+                  {parsedRows !== null ? (
+                    <ResultBadge label="Rows" value={parsedRows.toLocaleString("en-GB")} />
+                  ) : null}
+                  {warningCount !== null ? (
+                    <ResultBadge
+                      label="Warnings"
+                      value={warningCount.toLocaleString("en-GB")}
+                      warning={warningCount > 0}
+                    />
+                  ) : null}
+                </div>
+              </div>
+            </div>
           </div>
         ) : null}
 
@@ -317,12 +382,36 @@ export default function MosqueTimetableParseButton({ importId }: Props) {
           <div
             id={errorId}
             role="alert"
-            className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs leading-5 text-red-300"
+            className="mt-3 flex items-start gap-3 rounded-2xl border border-red-500/25 bg-red-500/[0.08] p-4 text-xs leading-5 text-red-100"
           >
-            {errorMessage}
+            <span className="mt-0.5 shrink-0"><StatusIcon type="error" /></span>
+            <span>{errorMessage}</span>
           </div>
         ) : null}
       </div>
     </div>
+  );
+}
+
+function ResultBadge({
+  label,
+  value,
+  warning = false,
+}: {
+  label: string;
+  value: string;
+  warning?: boolean;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[0.68rem] font-bold ${
+        warning
+          ? "border-amber-500/25 bg-amber-500/10 text-amber-200"
+          : "border-white/10 bg-black/20 text-white/60"
+      }`}
+    >
+      <span className="text-white/35">{label}</span>
+      {value}
+    </span>
   );
 }

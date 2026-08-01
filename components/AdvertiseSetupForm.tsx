@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { type FormEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 
 type City = {
   id: number;
@@ -22,6 +22,31 @@ type AdvertisingType =
   | "multi_mosque"
   | "multi_city";
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const REQUEST_TIMEOUT_MS = 25_000;
+const MAX_NOTES_LENGTH = 2_000;
+const MAX_MULTI_SELECTION = 50;
+
+function cleanText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getCheckoutUrl(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+
+  try {
+    const url = new URL(value);
+
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 type Props = {
   advertisingType: AdvertisingType;
   cities: City[];
@@ -33,6 +58,8 @@ export default function AdvertiseSetupForm({
   cities,
   mosques,
 }: Props) {
+  const feedbackId = useId();
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedCity, setSelectedCity] = useState("");
   const [selectedMosque, setSelectedMosque] = useState("");
   const [selectedMosques, setSelectedMosques] = useState<string[]>([]);
@@ -43,91 +70,294 @@ export default function AdvertiseSetupForm({
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
+  const safeCities = useMemo(
+    () =>
+      (cities ?? [])
+        .filter(
+          (city) =>
+            Number.isInteger(city.id) &&
+            city.id > 0 &&
+            cleanText(city.name)
+        )
+        .sort((first, second) =>
+          first.name.localeCompare(second.name, "en-GB", {
+            sensitivity: "base",
+          })
+        ),
+    [cities]
+  );
+
+  const safeMosques = useMemo(
+    () =>
+      (mosques ?? [])
+        .filter(
+          (mosque) =>
+            UUID_REGEX.test(cleanText(mosque.id)) &&
+            cleanText(mosque.name) &&
+            cleanText(mosque.slug)
+        )
+        .sort((first, second) =>
+          first.name.localeCompare(second.name, "en-GB", {
+            sensitivity: "base",
+          })
+        ),
+    [mosques]
+  );
+
   const cityName = useMemo(() => {
-    return cities.find((c) => String(c.id) === selectedCity)?.name ?? "";
-  }, [cities, selectedCity]);
+    return (
+      safeCities.find(
+        (city) => String(city.id) === selectedCity
+      )?.name ?? ""
+    );
+  }, [safeCities, selectedCity]);
 
   const filteredMosques = useMemo(() => {
-    if (!cityName) return mosques;
-    return mosques.filter((m) => m.city === cityName);
-  }, [mosques, cityName]);
+    if (!cityName) return safeMosques;
+
+    return safeMosques.filter(
+      (mosque) => cleanText(mosque.city) === cityName
+    );
+  }, [safeMosques, cityName]);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   function toggleCity(id: number) {
-    setSelectedCities((prev) =>
-      prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id]
-    );
+    setSelectedCities((previous) => {
+      if (previous.includes(id)) {
+        return previous.filter((value) => value !== id);
+      }
+
+      if (previous.length >= MAX_MULTI_SELECTION) {
+        setErrorMessage(
+          `Select no more than ${MAX_MULTI_SELECTION} cities.`
+        );
+        return previous;
+      }
+
+      return [...previous, id];
+    });
   }
 
   function toggleMosque(id: string) {
-    setSelectedMosques((prev) =>
-      prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id]
-    );
+    setSelectedMosques((previous) => {
+      if (previous.includes(id)) {
+        return previous.filter((value) => value !== id);
+      }
+
+      if (previous.length >= MAX_MULTI_SELECTION) {
+        setErrorMessage(
+          `Select no more than ${MAX_MULTI_SELECTION} mosques.`
+        );
+        return previous;
+      }
+
+      return [...previous, id];
+    });
   }
 
-  async function handleSave(e: React.FormEvent) {
-  e.preventDefault();
+  function validateSelection(): string | null {
+    if (
+      advertisingType === "city_featured" &&
+      !selectedCity
+    ) {
+      return "Choose a city.";
+    }
 
-  setLoading(true);
-  setErrorMessage("");
-  setSuccessMessage("");
+    if (
+      advertisingType === "mosque_sponsor" &&
+      !UUID_REGEX.test(selectedMosque)
+    ) {
+      return "Choose a valid mosque.";
+    }
 
-  try {
-    // 1. Save campaign
-    const res = await fetch("/api/advertise/setup", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        advertising_type: advertisingType,
-        selected_city_id: selectedCity ? Number(selectedCity) : null,
-        selected_mosque_id: selectedMosque || null,
-        selected_mosque_ids: selectedMosques,
-        selected_city_ids: selectedCities,
-        notes,
-      }),
-    });
+    if (
+      advertisingType === "multi_mosque" &&
+      selectedMosques.length === 0
+    ) {
+      return "Select at least one mosque.";
+    }
 
-    const data = await res.json();
+    if (
+      advertisingType === "multi_city" &&
+      selectedCities.length === 0
+    ) {
+      return "Select at least one city.";
+    }
 
-    if (!res.ok) {
-      setErrorMessage(data?.error ?? "Failed to save campaign.");
+    return null;
+  }
+
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (loading) return;
+
+    setErrorMessage("");
+    setSuccessMessage("");
+
+    const validationError = validateSelection();
+
+    if (validationError) {
+      setErrorMessage(validationError);
       return;
     }
 
-    // 2. Redirect to checkout
-    const checkout = await fetch("/api/checkout/create-session", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        campaign_id: data.id,
-        business_id: null, // later: connect selected business
-        pricing_tier: "silver",
-        duration_days: 30,
-        advertising_type: advertisingType,
-        selected_city_ids: selectedCities,
-        selected_mosque_ids: selectedMosques,
-      }),
-    });
+    abortControllerRef.current?.abort();
 
-    const checkoutData = await checkout.json();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
-    if (!checkout.ok) {
-      setErrorMessage("Could not start checkout.");
-      return;
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
+
+    try {
+      setLoading(true);
+
+      const campaignResponse = await fetch(
+        "/api/advertise/setup",
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          credentials: "same-origin",
+          cache: "no-store",
+          signal: controller.signal,
+          body: JSON.stringify({
+            advertising_type: advertisingType,
+            selected_city_id: selectedCity
+              ? Number(selectedCity)
+              : null,
+            selected_mosque_id:
+              selectedMosque || null,
+            selected_mosque_ids:
+              selectedMosques,
+            selected_city_ids:
+              selectedCities,
+            notes: notes.trim(),
+          }),
+        }
+      );
+
+      const campaignData = (await campaignResponse
+        .json()
+        .catch(() => ({}))) as {
+        ok?: boolean;
+        id?: string;
+        error?: string;
+      };
+
+      if (
+        !campaignResponse.ok ||
+        campaignData.ok === false
+      ) {
+        setErrorMessage(
+          cleanText(campaignData.error) ||
+            "Failed to save campaign."
+        );
+        return;
+      }
+
+      const campaignId = cleanText(campaignData.id);
+
+      if (!campaignId) {
+        setErrorMessage(
+          "Campaign ID was not returned."
+        );
+        return;
+      }
+
+      setSuccessMessage(
+        "Campaign saved. Preparing secure checkout…"
+      );
+
+      const checkoutResponse = await fetch(
+        "/api/checkout/create-session",
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          credentials: "same-origin",
+          cache: "no-store",
+          signal: controller.signal,
+          body: JSON.stringify({
+            campaign_id: campaignId,
+            business_id: null,
+            pricing_tier: "silver",
+            duration_days: 30,
+            advertising_type: advertisingType,
+            selected_city_ids: selectedCities,
+            selected_mosque_ids: selectedMosques,
+            selected_city_id: selectedCity
+              ? Number(selectedCity)
+              : null,
+            selected_mosque_id:
+              selectedMosque || null,
+          }),
+        }
+      );
+
+      const checkoutData = (await checkoutResponse
+        .json()
+        .catch(() => ({}))) as {
+        ok?: boolean;
+        url?: string;
+        error?: string;
+      };
+
+      if (
+        !checkoutResponse.ok ||
+        checkoutData.ok === false
+      ) {
+        setErrorMessage(
+          cleanText(checkoutData.error) ||
+            "Could not start checkout."
+        );
+        return;
+      }
+
+      const checkoutUrl = getCheckoutUrl(
+        checkoutData.url
+      );
+
+      if (!checkoutUrl) {
+        setErrorMessage(
+          "A valid checkout URL was not returned."
+        );
+        return;
+      }
+
+      window.location.assign(checkoutUrl);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof DOMException &&
+          error.name === "AbortError"
+          ? timedOut
+            ? "Campaign setup timed out. Please try again."
+            : "Campaign setup was cancelled."
+          : "Something went wrong."
+      );
+    } finally {
+      window.clearTimeout(timeoutId);
+
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+
+      setLoading(false);
     }
-
-    if (checkoutData.url) {
-      window.location.href = checkoutData.url;
-    }
-  } catch {
-    setErrorMessage("Something went wrong.");
-  } finally {
-    setLoading(false);
   }
-}
 
   return (
     <form onSubmit={handleSave} className="mt-6 grid gap-5">
@@ -146,7 +376,7 @@ export default function AdvertiseSetupForm({
             className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
           >
             <option value="">Select a city</option>
-            {cities.map((city) => (
+            {safeCities.map((city) => (
               <option key={city.id} value={String(city.id)}>
                 {city.name}
               </option>
@@ -174,7 +404,7 @@ export default function AdvertiseSetupForm({
               className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
             >
               <option value="">Select a city</option>
-              {cities.map((city) => (
+              {safeCities.map((city) => (
                 <option key={city.id} value={String(city.id)}>
                   {city.name}
                 </option>
@@ -226,7 +456,7 @@ export default function AdvertiseSetupForm({
               className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
             >
               <option value="">Select a city</option>
-              {cities.map((city) => (
+              {safeCities.map((city) => (
                 <option key={city.id} value={String(city.id)}>
                   {city.name}
                 </option>
@@ -278,7 +508,7 @@ export default function AdvertiseSetupForm({
           </div>
 
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {cities.map((city) => (
+            {safeCities.map((city) => (
               <label
                 key={city.id}
                 className="flex items-start gap-3 rounded-2xl border border-white/10 bg-[rgb(var(--card))] p-4 text-white/80"
@@ -306,34 +536,48 @@ export default function AdvertiseSetupForm({
           id="setup-notes"
           rows={5}
           value={notes}
+          maxLength={MAX_NOTES_LENGTH}
+          disabled={loading}
           onChange={(e) => setNotes(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
           placeholder="Tell us about your preferred locations, audience, or campaign goals."
         />
+
+        <p className="mt-2 text-right text-xs text-white/40">
+          {notes.length}/{MAX_NOTES_LENGTH}
+        </p>
       </div>
 
-      {errorMessage && (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
-          {errorMessage}
-        </div>
-      )}
+      <div id={feedbackId} aria-live="polite" aria-atomic="true">
+        {errorMessage ? (
+          <div
+            role="alert"
+            className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200"
+          >
+            {errorMessage}
+          </div>
+        ) : null}
 
-      {successMessage && (
-        <div className="rounded-2xl border border-green-500/30 bg-green-500/10 p-4 text-sm text-green-200">
-          {successMessage}
-        </div>
-      )}
+        {successMessage ? (
+          <div
+            role="status"
+            className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-200"
+          >
+            {successMessage}
+          </div>
+        ) : null}
+      </div>
 
       <div className="flex flex-wrap gap-3">
         <button
           type="submit"
           disabled={loading}
+          aria-busy={loading}
           className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-black hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {loading ? "Saving..." : "Save campaign setup"}
+          {loading ? "Saving and opening checkout…" : "Save campaign setup"}
         </button>
       </div>
     </form>
   );
 }
-

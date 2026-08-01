@@ -137,6 +137,7 @@ function isValidCityRow(
 
   return (
     typeof city.id === "number" &&
+    Number.isFinite(city.id) &&
     typeof city.slug === "string" &&
     city.slug.trim().length > 0 &&
     typeof city.name === "string" &&
@@ -222,6 +223,15 @@ function getHeroContextDescription(
   }
 
   return `Personalised for ${selectedCity.name}. Prayer information will appear when available.`;
+}
+
+function serialiseJsonLd(
+  value: unknown
+): string {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026");
 }
 
 async function getPrayerTimesForCity(
@@ -395,7 +405,7 @@ function PlatformCard({
   return (
     <Link
       href={href}
-      className="block h-full"
+      className="block h-full rounded-3xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300"
     >
       {card}
     </Link>
@@ -465,6 +475,7 @@ function MosqueIcon() {
       strokeWidth="1.7"
       strokeLinecap="round"
       strokeLinejoin="round"
+      aria-hidden="true"
     >
       <path d="M4 21v-7h16v7" />
       <path d="M7 14V9h10v5" />
@@ -485,6 +496,7 @@ function ClockIcon() {
       strokeWidth="1.7"
       strokeLinecap="round"
       strokeLinejoin="round"
+      aria-hidden="true"
     >
       <circle
         cx="12"
@@ -507,6 +519,7 @@ function StoreIcon() {
       strokeWidth="1.7"
       strokeLinecap="round"
       strokeLinejoin="round"
+      aria-hidden="true"
     >
       <path d="M4 10v10h16V10" />
       <path d="M3 10l2-6h14l2 6" />
@@ -526,6 +539,7 @@ function TravelIcon() {
       strokeWidth="1.7"
       strokeLinecap="round"
       strokeLinejoin="round"
+      aria-hidden="true"
     >
       <path d="M3 12h18" />
       <path d="m14 5 7 7-7 7" />
@@ -543,6 +557,7 @@ function PlusIcon() {
       stroke="currentColor"
       strokeWidth="1.7"
       strokeLinecap="round"
+      aria-hidden="true"
     >
       <path d="M12 5v14M5 12h14" />
     </svg>
@@ -559,6 +574,7 @@ function InfoIcon() {
       strokeWidth="1.7"
       strokeLinecap="round"
       strokeLinejoin="round"
+      aria-hidden="true"
     >
       <circle
         cx="12"
@@ -642,7 +658,7 @@ export default async function Home() {
     );
 
     return (
-      <div
+      <section
         role="alert"
         className="rounded-3xl border border-red-500/30 bg-red-500/10 p-8 text-red-100"
       >
@@ -667,7 +683,7 @@ export default async function Home() {
         >
           Refresh homepage
         </Link>
-      </div>
+      </section>
     );
   }
 
@@ -782,14 +798,14 @@ export default async function Home() {
   };
 
   return (
-    <div
+    <main
       className={`${anton.variable} compact-page-stack`}
     >
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
           __html:
-            JSON.stringify([
+            serialiseJsonLd([
               websiteJsonLd,
               organisationJsonLd,
             ]),
@@ -812,7 +828,7 @@ export default async function Home() {
               alt=""
               fill
               priority
-              quality={75}
+              quality={78}
               sizes="(max-width: 1024px) 0px, 54vw"
               className="object-contain object-top"
             />
@@ -890,7 +906,10 @@ export default async function Home() {
               </div>
             </div>
 
-            <div className="hidden min-h-[340px] lg:block" />
+            <div
+              aria-hidden="true"
+              className="hidden min-h-[340px] lg:block"
+            />
           </div>
 
           <div className="mt-7 w-full rounded-[1.5rem] border border-white/12 bg-[#020817]/92 p-3 shadow-[0_22px_55px_rgba(0,0,0,0.38)] backdrop-blur-2xl sm:p-4">
@@ -918,7 +937,7 @@ export default async function Home() {
 
             <Link
               href="/travel"
-              className="inline-flex min-h-12 items-center justify-center rounded-2xl border border-white/15 bg-white/[0.04] px-6 py-3 text-sm font-bold text-white/75 backdrop-blur-xl transition hover:border-yellow-400/30 hover:bg-yellow-400/[0.06] hover:text-yellow-100"
+              className="inline-flex min-h-12 items-center justify-center rounded-2xl border border-white/15 bg-white/[0.04] px-6 py-3 text-sm font-bold text-white/75 backdrop-blur-xl transition hover:border-yellow-400/30 hover:bg-yellow-400/[0.06] hover:text-yellow-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300"
             >
               Travel
             </Link>
@@ -969,53 +988,65 @@ export default async function Home() {
         />
       </section>
 
-{selectedCity ? (
-  <NextSalahCountdown
-    prayerTimes={prayerTimes}
-    cityName={selectedCity.name}
-  />
-) : null}
+      {selectedCity ? (
+        <NextSalahCountdown
+          prayerTimes={prayerTimes}
+          cityName={selectedCity.name}
+        />
+      ) : null}
 
-<SmartDailyModePanel className="mt-0" />
+      <SmartDailyModePanel className="mt-0" />
 
-{selectedCity ? (
-  <>
-    <SelectedCityHomePanel
-      city={{
-        name: selectedCity.name,
-        slug: selectedCity.slug,
-        timezone:
-          selectedCity.timezone ??
-          "Europe/London",
-      }}
-      prayerTimes={prayerTimes}
-      prayerTimesSource={
-        prayerTimesSource
-      }
-      prayerTimesUpdatedAt={
-        prayerTimesUpdatedAt
-      }
-    />
+      <SelectedCityHomePanel
+        city={
+          selectedCity
+            ? {
+                name:
+                  selectedCity.name,
+                slug:
+                  selectedCity.slug,
+                timezone:
+                  selectedCity.timezone ??
+                  "Europe/London",
+              }
+            : null
+        }
+        prayerTimes={
+          selectedCity
+            ? prayerTimes
+            : null
+        }
+        prayerTimesSource={
+          selectedCity
+            ? prayerTimesSource
+            : "unavailable"
+        }
+        prayerTimesUpdatedAt={
+          selectedCity
+            ? prayerTimesUpdatedAt
+            : null
+        }
+      />
 
-    <HomeDailyPanel
-      cityId={selectedCity.id}
-      cityName={selectedCity.name}
-      citySlug={selectedCity.slug}
-      prayerTimes={prayerTimes}
-    />
-  </>
-) : (
-  <>
-    <SelectedCityHomePanel
-      city={null}
-      prayerTimes={null}
-      prayerTimesSource="unavailable"
-      prayerTimesUpdatedAt={null}
-    />
+      <HomeDailyPanel
+        cityId={
+          selectedCity?.id ?? null
+        }
+        cityName={
+          selectedCity?.name ??
+          null
+        }
+        citySlug={
+          selectedCity?.slug ??
+          null
+        }
+        prayerTimes={
+          selectedCity
+            ? prayerTimes
+            : null
+        }
+      />
 
-    <HomeDailyPanel />
-  </>
-)}
       <section
         aria-labelledby="pray-near-me-heading"
         className="premium-panel relative overflow-hidden rounded-[2rem] p-5 sm:p-7 lg:p-8"
@@ -1102,10 +1133,10 @@ export default async function Home() {
           </h2>
 
           <p className="mt-3 text-sm leading-7 text-white/55">
-            Six clear routes into the
-            platform, without repeating
-            the same destination across
-            the page.
+            Clear routes into prayer,
+            mosque discovery, halal
+            businesses, Muslim travel and
+            community participation.
           </p>
         </div>
 
@@ -1203,6 +1234,6 @@ export default async function Home() {
           </p>
         </div>
       </section>
-    </div>
+    </main>
   );
 }

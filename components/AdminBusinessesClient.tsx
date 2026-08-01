@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import BuyFeaturedButton from "@/components/BuyFeaturedButton";
 
@@ -44,6 +44,12 @@ type Props = {
   selectedMosqueId?: string;
   selectedPlan?: string;
 };
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const REQUEST_TIMEOUT_MS = 20_000;
+const MAX_BULK_SELECTION = 500;
 
 type Patch = Partial<
   Pick<
@@ -109,19 +115,38 @@ function formatLabel(value?: string | null) {
     .replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
-async function postManage(body: unknown) {
-  const res = await fetch("/api/admin/businesses/manage", {
+async function postManage(
+  body: unknown,
+  signal?: AbortSignal
+): Promise<Record<string, unknown>> {
+  const response = await fetch("/api/admin/businesses/manage", {
     method: "POST",
     headers: {
+      Accept: "application/json",
       "Content-Type": "application/json",
     },
+    credentials: "same-origin",
+    cache: "no-store",
+    signal,
     body: JSON.stringify(body),
   });
 
-  const json = await res.json().catch(() => ({}));
+  const contentType = response.headers.get("content-type") ?? "";
+  const json =
+    contentType.toLowerCase().includes("application/json")
+      ? ((await response.json().catch(() => ({}))) as Record<string, unknown>)
+      : {
+          error:
+            (await response.text().catch(() => "")).trim().slice(0, 180) ||
+            "The admin endpoint returned an unexpected response.",
+        };
 
-  if (!res.ok || !json.ok) {
-    throw new Error(json.error ?? "Business update failed.");
+  if (!response.ok || json.ok !== true) {
+    throw new Error(
+      typeof json.error === "string" && json.error.trim()
+        ? json.error.trim()
+        : "Business update failed."
+    );
   }
 
   return json;
@@ -139,7 +164,10 @@ export default function AdminBusinessesClient({
   const [filterCity, setFilterCity] = useState("");
   const [filterFeatured, setFilterFeatured] = useState("");
   const [filterLive, setFilterLive] = useState("");
+  const requestControllerRef = useRef<AbortController | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [ranksSaving, setRanksSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -207,13 +235,45 @@ export default function AdminBusinessesClient({
     };
   }, [rows]);
 
+  const runManagedRequest = useCallback(async (body: unknown) => {
+    requestControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const timeoutId = window.setTimeout(
+      () => controller.abort(),
+      REQUEST_TIMEOUT_MS
+    );
+
+    try {
+      return await postManage(body, controller.signal);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new Error("The admin request timed out. Please try again.");
+      }
+
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+      }
+    }
+  }, []);
+
   async function updateBusiness(id: string, patch: Patch) {
+    if (!UUID_REGEX.test(id)) {
+      setErrorMessage("A valid business is required.");
+      return;
+    }
+
     try {
       setSavingId(id);
       setMessage("");
       setErrorMessage("");
 
-      await postManage({
+      await runManagedRequest({
         business_id: id,
         patch,
       });
@@ -238,13 +298,19 @@ export default function AdminBusinessesClient({
       return;
     }
 
+    const ids = Array.from(selected);
+
+    if (ids.length > MAX_BULK_SELECTION) {
+      setErrorMessage(`Select no more than ${MAX_BULK_SELECTION} businesses at once.`);
+      return;
+    }
+
     try {
+      setBulkSaving(true);
       setMessage("");
       setErrorMessage("");
 
-      const ids = Array.from(selected);
-
-      await postManage({
+      await runManagedRequest({
         bulk: true,
         business_ids: ids,
         patch,
@@ -260,17 +326,20 @@ export default function AdminBusinessesClient({
       setErrorMessage(
         error instanceof Error ? error.message : "Bulk update failed."
       );
+    } finally {
+      setBulkSaving(false);
     }
   }
 
   async function saveRanks() {
     try {
+      setRanksSaving(true);
       setMessage("");
       setErrorMessage("");
 
       const orderedIds = featured.map((item) => item.id);
 
-      await postManage({
+      await runManagedRequest({
         reorder_featured: true,
         ordered_ids: orderedIds,
       });
@@ -280,7 +349,13 @@ export default function AdminBusinessesClient({
       setErrorMessage(
         error instanceof Error ? error.message : "Could not save ranks."
       );
+    } finally {
+      setRanksSaving(false);
     }
+  }
+
+  function selectAllFiltered() {
+    setSelected(new Set(filtered.map((business) => business.id)));
   }
 
   function toggleSelected(id: string) {
@@ -338,7 +413,17 @@ export default function AdminBusinessesClient({
           </div>
 
           <button
+            type="button"
+            onClick={selectAllFiltered}
+            disabled={bulkSaving || filtered.length === 0}
+            className="rounded-xl border border-white/10 bg-black px-3 py-2 text-xs font-semibold text-white/70 disabled:opacity-50"
+          >
+            Select all filtered
+          </button>
+
+          <button
             onClick={() => bulkUpdate({ is_live: true })}
+            disabled={bulkSaving}
             className="rounded-xl bg-green-500 px-3 py-2 text-xs font-semibold text-black"
             type="button"
           >
@@ -347,6 +432,7 @@ export default function AdminBusinessesClient({
 
           <button
             onClick={() => bulkUpdate({ is_live: false })}
+            disabled={bulkSaving}
             className="rounded-xl bg-red-500 px-3 py-2 text-xs font-semibold text-white"
             type="button"
           >
@@ -355,6 +441,7 @@ export default function AdminBusinessesClient({
 
           <button
             onClick={() => bulkUpdate({ featured: true })}
+            disabled={bulkSaving}
             className="rounded-xl bg-yellow-500 px-3 py-2 text-xs font-semibold text-black"
             type="button"
           >
@@ -372,7 +459,8 @@ export default function AdminBusinessesClient({
                 sponsor_mosque_id: null,
               })
             }
-            className="rounded-xl border border-white/10 bg-black px-3 py-2 text-xs font-semibold text-white"
+            disabled={bulkSaving}
+            className="rounded-xl border border-white/10 bg-black px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
             type="button"
           >
             Remove sponsor
@@ -380,13 +468,35 @@ export default function AdminBusinessesClient({
 
           <button
             onClick={() => setSelected(new Set())}
-            className="rounded-xl border border-white/10 bg-black px-3 py-2 text-xs text-white/70"
+            disabled={bulkSaving}
+            className="rounded-xl border border-white/10 bg-black px-3 py-2 text-xs text-white/70 disabled:opacity-50"
             type="button"
           >
             Clear
           </button>
         </section>
       )}
+
+      <section className="rounded-3xl border border-white/10 bg-black/20 p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm text-white/55">
+            Showing {filtered.length.toLocaleString("en-GB")} of{" "}
+            {rows.length.toLocaleString("en-GB")} businesses
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setQ("");
+              setFilterCity("");
+              setFilterFeatured("");
+              setFilterLive("");
+            }}
+            className="rounded-xl border border-white/10 px-3 py-2 text-xs font-bold text-white/60 transition hover:border-yellow-500/30 hover:text-yellow-300"
+          >
+            Clear filters
+          </button>
+        </div>
 
       <section className="grid gap-3 md:grid-cols-4">
         <input
@@ -429,6 +539,7 @@ export default function AdminBusinessesClient({
           <option value="hidden">Hidden</option>
         </select>
       </section>
+      </section>
 
       <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-5">
         <div className="flex items-center justify-between gap-4">
@@ -444,9 +555,10 @@ export default function AdminBusinessesClient({
           <button
             type="button"
             onClick={saveRanks}
+            disabled={ranksSaving || featured.length === 0}
             className="rounded-xl border border-yellow-500/30 bg-black px-4 py-2 text-sm font-semibold text-yellow-400 hover:bg-yellow-500/10"
           >
-            Save ranks
+            {ranksSaving ? "Saving ranks…" : "Save ranks"}
           </button>
         </div>
 
@@ -797,4 +909,3 @@ function Badge({
     </span>
   );
 }
-

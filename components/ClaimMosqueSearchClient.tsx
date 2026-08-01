@@ -43,6 +43,7 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const MIN_QUERY_LENGTH = 2;
 const MAX_QUERY_LENGTH = 160;
 const MAX_CITY_LENGTH = 120;
+const MAX_RESULTS = 50;
 
 function cleanText(
   value: string | null | undefined
@@ -188,11 +189,19 @@ export default function ClaimMosqueSearchClient({
         return;
       }
 
-      setResults(
-        Array.isArray(data.results)
-          ? data.results
-          : []
-      );
+      const safeResults = Array.isArray(data.results)
+        ? data.results
+            .filter(
+              (row) =>
+                typeof row.id === "string" &&
+                row.id.length > 0 &&
+                typeof row.name === "string" &&
+                typeof row.slug === "string"
+            )
+            .slice(0, MAX_RESULTS)
+        : [];
+
+      setResults(safeResults);
 
       setSearchState("success");
     } catch (error) {
@@ -367,7 +376,15 @@ export default function ClaimMosqueSearchClient({
             role="alert"
             className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200"
           >
-            {errorMessage}
+            <p>{errorMessage}</p>
+
+            <button
+              type="button"
+              onClick={() => void runSearch()}
+              className="mt-3 rounded-xl border border-red-400/30 px-3 py-2 text-xs font-bold text-red-200 transition hover:bg-red-500/10"
+            >
+              Try again
+            </button>
           </div>
         ) : null}
 

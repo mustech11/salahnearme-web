@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type DayKey =
@@ -39,6 +39,9 @@ const DAYS: DayDefinition[] = [
   { key: "saturday", label: "Saturday" },
   { key: "sunday", label: "Sunday" },
 ];
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_NOTE_LENGTH = 500;
@@ -150,6 +153,7 @@ export default function BusinessOpeningHoursEditor({
   const router = useRouter();
   const initialHoursRef = useRef<OpeningHours>(normaliseInitialHours(initialHours));
   const initialNoteRef = useRef(initialNote?.trim() ?? "");
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const [hours, setHours] = useState<OpeningHours>(initialHoursRef.current);
   const [note, setNote] = useState(initialNoteRef.current);
@@ -164,6 +168,26 @@ export default function BusinessOpeningHoursEditor({
       note !== initialNoteRef.current,
     [hours, note]
   );
+
+  const openDays = useMemo(
+    () => DAYS.filter(({ key }) => !hours[key].closed).length,
+    [hours]
+  );
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isDirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      abortControllerRef.current?.abort();
+    };
+  }, [isDirty]);
 
   function clearMessages() {
     setMessage("");
@@ -198,6 +222,19 @@ export default function BusinessOpeningHoursEditor({
     clearMessages();
   }
 
+  function copyMondayToAllDays() {
+    const monday = hours.monday;
+    const next = {} as OpeningHours;
+
+    for (const { key } of DAYS) {
+      next[key] = { ...monday };
+    }
+
+    setHours(next);
+    setDayErrors({});
+    clearMessages();
+  }
+
   function resetHours() {
     setHours(initialHoursRef.current);
     setNote(initialNoteRef.current);
@@ -218,7 +255,15 @@ export default function BusinessOpeningHoursEditor({
       return;
     }
 
+    if (!UUID_REGEX.test(businessId)) {
+      setErrorMessage("A valid business is required before opening hours can be saved.");
+      return;
+    }
+
+    abortControllerRef.current?.abort();
+
     const controller = new AbortController();
+    abortControllerRef.current = controller;
     const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
@@ -265,6 +310,11 @@ export default function BusinessOpeningHoursEditor({
       }
     } finally {
       window.clearTimeout(timeoutId);
+
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+
       setSaving(false);
     }
   }
@@ -290,6 +340,11 @@ export default function BusinessOpeningHoursEditor({
           </p>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-fit rounded-full border border-cyan-500/25 bg-cyan-500/10 px-3 py-1 text-xs font-bold text-cyan-200">
+            {openDays} open day{openDays === 1 ? "" : "s"}
+          </span>
+
         <span
           className={`w-fit rounded-full border px-3 py-1 text-xs font-bold ${
             isDirty
@@ -299,6 +354,7 @@ export default function BusinessOpeningHoursEditor({
         >
           {isDirty ? "Unsaved changes" : "Saved"}
         </span>
+        </div>
       </div>
 
       <div className="mt-5 flex flex-wrap gap-3">
@@ -309,6 +365,15 @@ export default function BusinessOpeningHoursEditor({
           className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-2 text-sm font-bold text-yellow-300 transition hover:bg-yellow-500/20 disabled:opacity-50"
         >
           Copy Monday to weekdays
+        </button>
+
+        <button
+          type="button"
+          onClick={copyMondayToAllDays}
+          disabled={saving}
+          className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-sm font-bold text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-50"
+        >
+          Copy Monday to all days
         </button>
 
         <button

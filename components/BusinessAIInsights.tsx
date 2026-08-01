@@ -248,16 +248,19 @@ export default function BusinessAIInsights({
     useState<LoadState>("idle");
   const [errorMessage, setErrorMessage] =
     useState("");
+  const [selectedDays, setSelectedDays] = useState(() => normaliseDays(days));
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
 
   const cleanBusinessId = useMemo(
     () => cleanString(businessId),
     [businessId]
   );
 
-  const periodDays = useMemo(
-    () => normaliseDays(days),
-    [days]
-  );
+  useEffect(() => {
+    setSelectedDays(normaliseDays(days));
+  }, [days]);
+
+  const periodDays = selectedDays;
 
   const validationError = useMemo(() => {
     if (!UUID_REGEX.test(cleanBusinessId)) {
@@ -332,6 +335,7 @@ export default function BusinessAIInsights({
           periodDays
         )
       );
+      setLastUpdatedAt(new Date());
       setLoadState("success");
     } catch (error) {
       setInsights(null);
@@ -378,8 +382,8 @@ export default function BusinessAIInsights({
   }, [insights]);
 
   if (
-    loadState === "idle" ||
-    loadState === "loading"
+    (loadState === "idle" || loadState === "loading") &&
+    !insights
   ) {
     return <InsightsSkeleton />;
   }
@@ -456,6 +460,17 @@ export default function BusinessAIInsights({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          <select
+            value={selectedDays}
+            onChange={(event) => setSelectedDays(normaliseDays(Number(event.target.value)))}
+            disabled={loadState === "loading"}
+            className="min-h-11 rounded-xl border border-white/10 bg-black/30 px-4 py-2.5 text-sm font-semibold text-white outline-none focus:border-yellow-400 disabled:cursor-wait disabled:opacity-60"
+          >
+            <option value={7}>Last 7 days</option>
+            <option value={30}>Last 30 days</option>
+            <option value={90}>Last 90 days</option>
+            <option value={365}>Last 365 days</option>
+          </select>
           <div
             className={`rounded-2xl border px-5 py-3 ${performanceTone(
               engagementRate
@@ -475,12 +490,23 @@ export default function BusinessAIInsights({
             onClick={() => {
               void loadInsights();
             }}
-            className="rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm font-bold text-white/70 transition hover:border-yellow-500/30 hover:text-yellow-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300"
+            disabled={loadState === "loading"}
+            className="rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm font-bold text-white/70 transition hover:border-yellow-500/30 hover:text-yellow-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 disabled:cursor-wait disabled:opacity-50"
           >
-            Refresh insights
+            {loadState === "loading" ? "Refreshing…" : "Refresh insights"}
           </button>
         </div>
       </div>
+
+      {lastUpdatedAt ? (
+        <p className="mt-4 text-xs text-white/35">
+          Updated{" "}
+          {lastUpdatedAt.toLocaleTimeString("en-GB", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </p>
+      ) : null}
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <InsightMetric

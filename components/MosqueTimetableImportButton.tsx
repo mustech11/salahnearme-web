@@ -543,7 +543,7 @@ export default function MosqueTimetableImportButton({
           validationError ||
           undefined
         }
-        className="inline-flex min-h-10 items-center justify-center rounded-xl bg-yellow-500 px-4 py-2 text-xs font-bold text-black transition hover:bg-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+        className="group inline-flex min-h-11 items-center justify-center rounded-xl border border-yellow-300/30 bg-gradient-to-b from-yellow-400 to-yellow-500 px-4 py-2.5 text-xs font-black text-black shadow-[0_12px_30px_rgba(234,179,8,0.12)] transition hover:-translate-y-0.5 hover:from-yellow-300 hover:to-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
       >
         {isSubmitting ? (
           <>
@@ -583,7 +583,7 @@ export default function MosqueTimetableImportButton({
           <div
             id={successId}
             role="status"
-            className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs leading-5 text-emerald-300"
+            className="mt-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-4 text-xs leading-5 text-emerald-100 shadow-[0_10px_30px_rgba(16,185,129,0.05)]"
           >
             <p>
               {successMessage}
@@ -602,7 +602,7 @@ export default function MosqueTimetableImportButton({
           <div
             id={errorId}
             role="alert"
-            className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs leading-5 text-red-300"
+            className="mt-3 rounded-2xl border border-red-500/25 bg-red-500/[0.08] p-4 text-xs leading-5 text-red-100"
           >
             {errorMessage}
           </div>

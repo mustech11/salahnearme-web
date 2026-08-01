@@ -59,17 +59,42 @@ function getStoredLength(
 async function readSaveResponse(
   response: Response
 ): Promise<SaveResponse> {
-  try {
-    const value: unknown = await response.json();
+  const contentType = response.headers.get("content-type") ?? "";
 
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (contentType.toLowerCase().includes("application/json")) {
+    try {
+      const value: unknown = await response.json();
+
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return {};
+      }
+
+      return value as SaveResponse;
+    } catch {
       return {};
     }
+  }
 
-    return value as SaveResponse;
+  try {
+    const text = cleanString(await response.text());
+    return text ? { message: text } : {};
   } catch {
     return {};
   }
+}
+
+function getSaveError(data: SaveResponse, status: number): string {
+  const supplied = cleanString(data.error) || cleanString(data.message);
+  if (supplied) return supplied;
+  if (status === 400) return "The raw timetable text is invalid.";
+  if (status === 401) return "Your session has expired. Please sign in again.";
+  if (status === 403) return "You do not have permission to edit this import.";
+  if (status === 404) return "The timetable import could not be found.";
+  if (status === 409) return "This import changed before the text could be saved. Refresh and try again.";
+  if (status === 413) return "The raw timetable text is too large.";
+  if (status === 429) return "Too many save requests were submitted. Please wait and try again.";
+  if (status >= 500) return "The timetable text service is temporarily unavailable.";
+  return DEFAULT_ERROR_MESSAGE;
 }
 
 export default function MosqueTimetableManualRawTextEditor({
@@ -247,9 +272,7 @@ export default function MosqueTimetableManualRawTextEditor({
       if (!response.ok || data.ok !== true) {
         setSaveState("error");
         setErrorMessage(
-          cleanString(data.error) ||
-            cleanString(data.message) ||
-            DEFAULT_ERROR_MESSAGE
+          getSaveError(data, response.status)
         );
         return;
       }
@@ -338,7 +361,7 @@ export default function MosqueTimetableManualRawTextEditor({
         onClick={togglePanel}
         aria-expanded={open}
         aria-controls={panelId}
-        className="inline-flex min-h-10 items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-xs font-bold text-white transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
+        className="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/15 bg-white/[0.06] px-4 py-2.5 text-xs font-black text-white shadow-[0_10px_30px_rgba(0,0,0,0.12)] transition hover:border-yellow-500/30 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
       >
         {open
           ? "Hide manual paste"
@@ -349,7 +372,7 @@ export default function MosqueTimetableManualRawTextEditor({
         <section
           id={panelId}
           aria-labelledby={`${panelId}-heading`}
-          className="mt-4 rounded-2xl border border-white/10 bg-black/40 p-4"
+          className="mt-4 overflow-hidden rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(234,179,8,0.08),transparent_30%),rgba(0,0,0,0.45)] p-4 sm:p-5"
         >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -434,7 +457,7 @@ export default function MosqueTimetableManualRawTextEditor({
               disabled={isSaveDisabled}
               aria-busy={isSaving}
               aria-disabled={isSaveDisabled}
-              className="inline-flex min-h-10 items-center justify-center rounded-xl bg-yellow-500 px-4 py-2 text-xs font-bold text-black transition hover:bg-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-yellow-300/30 bg-gradient-to-b from-yellow-400 to-yellow-500 px-4 py-2.5 text-xs font-black text-black shadow-[0_12px_30px_rgba(234,179,8,0.12)] transition hover:-translate-y-0.5 hover:from-yellow-300 hover:to-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSaving ? (
                 <>

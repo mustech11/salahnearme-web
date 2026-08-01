@@ -1,10 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Papa from "papaparse";
 
 type ImportType = "mosques" | "businesses";
+
+const REQUEST_TIMEOUT_MS = 60_000;
+const MAX_CSV_FILE_SIZE_MB = 8;
+const MAX_IMPORT_ROWS = 5_000;
 type ImportMode = "dry-run" | "confirm";
 
 type ImportSummary = {
@@ -24,6 +28,9 @@ type ImportSummary = {
 };
 
 export default function ImportAdminClient() {
+  const feedbackId = useId();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [type, setType] = useState<ImportType>("mosques");
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [fileName, setFileName] = useState("");
@@ -35,6 +42,13 @@ export default function ImportAdminClient() {
 
   const hasRows = rows.length > 0;
   const largeBatch = rows.length > 500;
+  const exceedsMaximumRows = rows.length > MAX_IMPORT_ROWS;
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   const sampleColumns = useMemo(() => {
     if (type === "mosques") {
@@ -73,16 +87,31 @@ export default function ImportAdminClient() {
   }, [type]);
 
   function resetImportState() {
+    abortControllerRef.current?.abort();
     setRows([]);
     setSummary(null);
     setFileName("");
     setErrorMessage("");
     setDryRunPassed(false);
     setLastMode(null);
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   }
 
   function handleFileChange(file: File | null) {
     if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setErrorMessage("Please upload a CSV file.");
+      return;
+    }
+
+    if (file.size > MAX_CSV_FILE_SIZE_MB * 1024 * 1024) {
+      setErrorMessage(`CSV file must be ${MAX_CSV_FILE_SIZE_MB}MB or smaller.`);
+      return;
+    }
 
     setErrorMessage("");
     setSummary(null);
@@ -95,7 +124,21 @@ export default function ImportAdminClient() {
       skipEmptyLines: true,
       complete: (results) => {
         const parsedRows = (results.data ?? []) as Record<string, unknown>[];
-        setRows(parsedRows);
+        const safeRows = parsedRows
+          .filter((row) => row && typeof row === "object")
+          .slice(0, MAX_IMPORT_ROWS + 1);
+
+        setRows(safeRows);
+
+        if (safeRows.length > MAX_IMPORT_ROWS) {
+          setErrorMessage(
+            `This file exceeds the ${MAX_IMPORT_ROWS.toLocaleString("en-GB")} row safety limit.`
+          );
+        } else if (results.errors.length > 0) {
+          setErrorMessage(
+            `CSV parsed with ${results.errors.length.toLocaleString("en-GB")} parser warning(s).`
+          );
+        }
       },
       error: () => {
         setErrorMessage("Could not parse CSV file.");
@@ -106,6 +149,13 @@ export default function ImportAdminClient() {
   async function runImport(mode: ImportMode) {
     if (!hasRows) {
       setErrorMessage("Please upload a CSV file first.");
+      return;
+    }
+
+    if (exceedsMaximumRows) {
+      setErrorMessage(
+        `Reduce the file to ${MAX_IMPORT_ROWS.toLocaleString("en-GB")} rows or fewer.`
+      );
       return;
     }
 
@@ -122,6 +172,17 @@ export default function ImportAdminClient() {
       if (!confirmed) return;
     }
 
+    abortControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
+
     try {
       setLoading(true);
       setErrorMessage("");
@@ -130,8 +191,12 @@ export default function ImportAdminClient() {
       const res = await fetch("/api/admin/import", {
         method: "POST",
         headers: {
+          Accept: "application/json",
           "Content-Type": "application/json",
         },
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
         body: JSON.stringify({
           type,
           mode,
@@ -157,9 +222,21 @@ export default function ImportAdminClient() {
       if (mode === "confirm") {
         setDryRunPassed(false);
       }
-    } catch {
-      setErrorMessage("Something went wrong during import.");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof DOMException && error.name === "AbortError"
+          ? timedOut
+            ? "The import request timed out."
+            : "The import request was cancelled."
+          : "Something went wrong during import."
+      );
     } finally {
+      window.clearTimeout(timeoutId);
+
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+
       setLoading(false);
     }
   }
@@ -212,6 +289,7 @@ export default function ImportAdminClient() {
             </label>
 
             <input
+              ref={fileInputRef}
               type="file"
               accept=".csv,text/csv"
               onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
@@ -256,7 +334,7 @@ export default function ImportAdminClient() {
           <button
             type="button"
             onClick={() => runImport("dry-run")}
-            disabled={!hasRows || loading}
+            disabled={!hasRows || loading || exceedsMaximumRows}
             className="luxe-button text-sm disabled:opacity-50"
           >
             {loading && lastMode === "dry-run" ? "Processing..." : "Run dry run"}
@@ -265,7 +343,7 @@ export default function ImportAdminClient() {
           <button
             type="button"
             onClick={() => runImport("confirm")}
-            disabled={!hasRows || loading || !dryRunPassed}
+            disabled={!hasRows || loading || !dryRunPassed || exceedsMaximumRows}
             className="rounded-xl border border-green-500/30 bg-green-500/10 px-5 py-3 text-sm font-semibold text-green-300 hover:bg-green-500/20 disabled:opacity-50"
           >
             {loading && lastMode === "confirm"
@@ -290,11 +368,16 @@ export default function ImportAdminClient() {
           </div>
         )}
 
-        {errorMessage && (
-          <div className="mt-4 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
-            {errorMessage}
-          </div>
-        )}
+        <div id={feedbackId} aria-live="polite">
+          {errorMessage ? (
+            <div
+              role="alert"
+              className="mt-4 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200"
+            >
+              {errorMessage}
+            </div>
+          ) : null}
+        </div>
       </section>
 
       {summary && (
@@ -454,4 +537,3 @@ function StatCard({ title, value }: { title: string; value: number }) {
     </div>
   );
 }
-

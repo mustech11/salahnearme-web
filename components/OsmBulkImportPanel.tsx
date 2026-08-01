@@ -1,8 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type EntityType = "mosques" | "businesses";
+
+const REQUEST_TIMEOUT_MS = 60_000;
+const MAX_RADIUS_METRES = 50_000;
+const MAX_DELAY_MS = 10_000;
+const MAX_CITY_LIMIT = 500;
 
 type City = {
   slug: string;
@@ -26,11 +31,36 @@ type ImportResult = {
   error?: string;
 };
 
-function wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function wait(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timeoutId = window.setTimeout(resolve, ms);
+
+    signal.addEventListener(
+      "abort",
+      () => {
+        window.clearTimeout(timeoutId);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true }
+    );
+  });
+}
+
+function safeInteger(
+  value: string,
+  fallback: number,
+  minimum: number,
+  maximum: number
+): number {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) return fallback;
+
+  return Math.min(maximum, Math.max(minimum, Math.trunc(parsed)));
 }
 
 export default function OsmBulkImportPanel({ entity, cities }: Props) {
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedCountry, setSelectedCountry] = useState("all");
   const [selectedCities, setSelectedCities] = useState<string[]>([]);
   const [radius, setRadius] = useState(entity === "mosques" ? "15000" : "7000");
@@ -40,6 +70,8 @@ export default function OsmBulkImportPanel({ entity, cities }: Props) {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<ImportResult[]>([]);
   const [errorText, setErrorText] = useState("");
+  const [progress, setProgress] = useState({ completed: 0, total: 0 });
+  const [lastCompletedAt, setLastCompletedAt] = useState<Date | null>(null);
 
   const title =
     entity === "mosques"
@@ -53,6 +85,12 @@ export default function OsmBulkImportPanel({ entity, cities }: Props) {
 
   const endpoint =
     entity === "mosques" ? "/api/import-mosques" : "/api/import-businesses";
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   const countries = useMemo(() => {
     return Array.from(
@@ -105,18 +143,26 @@ export default function OsmBulkImportPanel({ entity, cities }: Props) {
   }
 
   function selectFilteredCities() {
-    setSelectedCities(filteredCities.map((city) => city.slug));
+    setSelectedCities((current) =>
+      Array.from(
+        new Set([...current, ...filteredCities.map((city) => city.slug)])
+      )
+    );
   }
 
   function clearSelectedCities() {
     setSelectedCities([]);
   }
 
-  async function importOneCity(citySlug: string): Promise<ImportResult> {
+  async function importOneCity(
+    citySlug: string,
+    signal: AbortSignal,
+    safeRadius: number
+  ): Promise<ImportResult> {
     const params = new URLSearchParams();
 
     params.set("city", citySlug);
-    params.set("radius", radius);
+    params.set("radius", String(safeRadius));
 
     if (entity === "businesses") {
       params.set("min_confidence", minConfidence);
@@ -124,6 +170,10 @@ export default function OsmBulkImportPanel({ entity, cities }: Props) {
 
     const response = await fetch(`${endpoint}?${params.toString()}`, {
       method: "GET",
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+      signal,
     });
 
     const data = await response.json().catch(() => ({}));
@@ -153,51 +203,89 @@ export default function OsmBulkImportPanel({ entity, cities }: Props) {
   }
 
   async function handleImport(mode: "selected" | "filtered") {
+    const safeRadius = safeInteger(
+      radius,
+      entity === "mosques" ? 15_000 : 7_000,
+      1_000,
+      MAX_RADIUS_METRES
+    );
+    const safeDelay = safeInteger(delayMs, 1_500, 0, MAX_DELAY_MS);
+    const safeLimit = limit.trim()
+      ? safeInteger(limit, 1, 1, MAX_CITY_LIMIT)
+      : null;
+
+    let targetCities =
+      mode === "selected"
+        ? selectedCities
+        : filteredCities.map((city) => city.slug);
+
+    targetCities = Array.from(new Set(targetCities));
+
+    if (safeLimit !== null) {
+      targetCities = targetCities.slice(0, safeLimit);
+    }
+
+    if (targetCities.length === 0) {
+      setErrorText("Choose at least one city first.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Start ${entity} import?\n\nCities: ${targetCities.length}\nRadius: ${safeRadius}m\nDelay: ${safeDelay}ms\n\nContinue?`
+    );
+
+    if (!confirmed) return;
+
+    abortControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       setLoading(true);
       setErrorText("");
       setResults([]);
-
-      let targetCities =
-        mode === "selected"
-          ? selectedCities
-          : filteredCities.map((city) => city.slug);
-
-      if (targetCities.length === 0) {
-        setErrorText("Choose at least one city first.");
-        return;
-      }
-
-      if (limit.trim()) {
-        const safeLimit = Math.max(1, Number(limit));
-        targetCities = targetCities.slice(0, safeLimit);
-      }
-
-      const confirmed = window.confirm(
-        `Start ${entity} import?\n\nCities: ${targetCities.length}\nRadius: ${radius}m\nDelay: ${delayMs}ms\n\nContinue?`
-      );
-
-      if (!confirmed) return;
+      setProgress({ completed: 0, total: targetCities.length });
 
       const nextResults: ImportResult[] = [];
 
-      for (let i = 0; i < targetCities.length; i++) {
-        const citySlug = targetCities[i];
+      for (let index = 0; index < targetCities.length; index += 1) {
+        if (controller.signal.aborted) {
+          throw new DOMException("Aborted", "AbortError");
+        }
 
-        const result = await importOneCity(citySlug);
+        const result = await importOneCity(
+          targetCities[index],
+          controller.signal,
+          safeRadius
+        );
 
         nextResults.push(result);
         setResults([...nextResults]);
+        setProgress({
+          completed: index + 1,
+          total: targetCities.length,
+        });
 
-        if (i < targetCities.length - 1) {
-          await wait(Math.max(0, Number(delayMs)));
+        if (index < targetCities.length - 1 && safeDelay > 0) {
+          await wait(safeDelay, controller.signal);
         }
       }
+
+      setLastCompletedAt(new Date());
     } catch (error) {
       setErrorText(
-        error instanceof Error ? error.message : "Unexpected bulk import error."
+        error instanceof DOMException && error.name === "AbortError"
+          ? "The bulk import was cancelled."
+          : error instanceof Error
+            ? error.message
+            : "Unexpected bulk import error."
       );
     } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+
       setLoading(false);
     }
   }
@@ -242,6 +330,10 @@ export default function OsmBulkImportPanel({ entity, cities }: Props) {
           </label>
 
           <input
+            type="number"
+            min="1000"
+            max={MAX_RADIUS_METRES}
+            step="1000"
             value={radius}
             onChange={(e) => setRadius(e.target.value)}
             className="w-full rounded-2xl border border-yellow-500/30 bg-[#020826]/80 px-4 py-4 text-white outline-none focus:border-yellow-400"
@@ -254,6 +346,10 @@ export default function OsmBulkImportPanel({ entity, cities }: Props) {
           </label>
 
           <input
+            type="number"
+            min="0"
+            max={MAX_DELAY_MS}
+            step="250"
             value={delayMs}
             onChange={(e) => setDelayMs(e.target.value)}
             className="w-full rounded-2xl border border-yellow-500/30 bg-[#020826]/80 px-4 py-4 text-white outline-none focus:border-yellow-400"
@@ -266,6 +362,10 @@ export default function OsmBulkImportPanel({ entity, cities }: Props) {
           </label>
 
           <input
+            type="number"
+            min="1"
+            max={MAX_CITY_LIMIT}
+            step="1"
             value={limit}
             onChange={(e) => setLimit(e.target.value)}
             placeholder="Optional"
@@ -330,7 +430,45 @@ export default function OsmBulkImportPanel({ entity, cities }: Props) {
         >
           {loading ? "Importing..." : "Import all visible/worldwide"}
         </button>
+
+        {loading ? (
+          <button
+            type="button"
+            onClick={() => abortControllerRef.current?.abort()}
+            className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm font-bold text-red-200"
+          >
+            Cancel import
+          </button>
+        ) : null}
       </div>
+
+      {progress.total > 0 ? (
+        <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+          <div className="flex items-center justify-between gap-3 text-xs text-white/50">
+            <span>Progress</span>
+            <span>
+              {progress.completed}/{progress.total} cities
+            </span>
+          </div>
+
+          <div className="mt-2 overflow-hidden rounded-full bg-white/10">
+            <div
+              className="h-2 rounded-full bg-yellow-500 transition-[width]"
+              style={{
+                width: `${Math.round(
+                  (progress.completed / progress.total) * 100
+                )}%`,
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {lastCompletedAt ? (
+        <p className="mt-3 text-xs text-white/35">
+          Last completed {lastCompletedAt.toLocaleString("en-GB")}
+        </p>
+      ) : null}
 
       <p className="mt-4 text-sm text-white/50">
         Start with a limit of 3–5 cities for testing. Then increase gradually.
@@ -484,4 +622,3 @@ function Pill({
     </span>
   );
 }
-

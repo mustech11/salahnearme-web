@@ -1,6 +1,55 @@
 "use client";
 
-import { useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i;
+const REQUEST_TIMEOUT_MS = 20_000;
+
+const LIMITS = {
+  name: 200,
+  category: 120,
+  country: 100,
+  city: 120,
+  area: 120,
+  address: 500,
+  postcode: 20,
+  website: 800,
+  phone: 40,
+  email: 254,
+  description: 2_000,
+  submittedByName: 140,
+  submittedByEmail: 254,
+  notes: 1_000,
+} as const;
+
+function cleanText(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function normaliseEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalisePostcode(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+function normaliseUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
+function isValidHttpUrl(value: string): boolean {
+  if (!value) return true;
+
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 export default function AddBusinessForm({
   initialAdvertisingType = "",
@@ -26,20 +75,69 @@ export default function AddBusinessForm({
   const [advertisingType, setAdvertisingType] = useState(initialAdvertisingType);
   const [notes, setNotes] = useState("");
 
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  const completion = useMemo(() => {
+    const requiredValues = [name, submittedByName, submittedByEmail];
+    const optionalValues = [category, city, address, postcode, website, phone, email, description];
+    const complete =
+      requiredValues.filter((value) => value.trim()).length * 2 +
+      optionalValues.filter((value) => value.trim()).length;
+
+    return Math.round((complete / (requiredValues.length * 2 + optionalValues.length)) * 100);
+  }, [address, category, city, description, email, name, phone, postcode, submittedByEmail, submittedByName, website]);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (loading) return;
 
     setErrorMessage("");
     setSuccessMessage("");
 
-    if (!name.trim() || !submittedByName.trim() || !submittedByEmail.trim()) {
+    const cleanSubmitterEmail = normaliseEmail(submittedByEmail);
+    const cleanBusinessEmail = normaliseEmail(email);
+    const cleanWebsite = normaliseUrl(website);
+
+    if (!cleanText(name) || !cleanText(submittedByName) || !cleanSubmitterEmail) {
       setErrorMessage("Please complete the required fields.");
       return;
     }
+
+    if (!EMAIL_REGEX.test(cleanSubmitterEmail)) {
+      setErrorMessage("Enter a valid contact email address.");
+      return;
+    }
+
+    if (cleanBusinessEmail && !EMAIL_REGEX.test(cleanBusinessEmail)) {
+      setErrorMessage("Enter a valid business email address.");
+      return;
+    }
+
+    if (!isValidHttpUrl(cleanWebsite)) {
+      setErrorMessage("Enter a valid business website.");
+      return;
+    }
+
+    abortControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
 
     try {
       setLoading(true);
@@ -47,25 +145,29 @@ export default function AddBusinessForm({
       const res = await fetch("/api/add-business", {
         method: "POST",
         headers: {
+          Accept: "application/json",
           "Content-Type": "application/json",
         },
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
         body: JSON.stringify({
-          name,
-          category,
-          country,
-          city,
-          area,
-          address,
-          postcode,
-          website,
-          phone,
-          email,
-          description,
-          submitted_by_name: submittedByName,
-          submitted_by_email: submittedByEmail,
+          name: cleanText(name),
+          category: cleanText(category),
+          country: cleanText(country),
+          city: cleanText(city),
+          area: cleanText(area),
+          address: cleanText(address),
+          postcode: normalisePostcode(postcode),
+          website: cleanWebsite,
+          phone: cleanText(phone),
+          email: cleanBusinessEmail,
+          description: description.trim(),
+          submitted_by_name: cleanText(submittedByName),
+          submitted_by_email: cleanSubmitterEmail,
           advertising_interest: advertisingInterest,
-          advertising_type: advertisingType,
-          notes,
+          advertising_type: advertisingInterest ? advertisingType : "",
+          notes: advertisingInterest ? notes.trim() : "",
         }),
       });
 
@@ -96,15 +198,39 @@ export default function AddBusinessForm({
       setAdvertisingInterest(Boolean(initialAdvertisingType));
       setAdvertisingType(initialAdvertisingType);
       setNotes("");
-    } catch {
-      setErrorMessage("Something went wrong. Please try again.");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof DOMException && error.name === "AbortError"
+          ? timedOut
+            ? "The submission timed out. Please try again."
+            : "The submission was cancelled."
+          : "Something went wrong. Please try again."
+      );
     } finally {
+      window.clearTimeout(timeoutId);
+
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+
       setLoading(false);
     }
   }
 
   return (
     <form onSubmit={handleSubmit} className="mt-6 grid gap-5 md:grid-cols-2">
+      <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 p-4">
+        <div>
+          <div className="font-bold text-white">Business submission</div>
+          <p className="mt-1 text-xs text-white/45">
+            More complete submissions are easier to review and publish.
+          </p>
+        </div>
+
+        <span className="rounded-full border border-cyan-500/25 bg-cyan-500/10 px-3 py-1 text-xs font-bold text-cyan-200">
+          {completion}% complete
+        </span>
+      </div>
       <div className="md:col-span-1">
         <label
           htmlFor="business-name"
@@ -114,6 +240,9 @@ export default function AddBusinessForm({
         </label>
         <input
           id="business-name"
+          required
+          maxLength={LIMITS.name}
+          autoComplete="organization"
           value={name}
           onChange={(e) => setName(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -130,6 +259,7 @@ export default function AddBusinessForm({
         </label>
         <input
           id="business-category"
+          maxLength={LIMITS.category}
           value={category}
           onChange={(e) => setCategory(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -146,6 +276,8 @@ export default function AddBusinessForm({
         </label>
         <input
           id="business-country"
+          maxLength={LIMITS.country}
+          autoComplete="country-name"
           value={country}
           onChange={(e) => setCountry(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -162,6 +294,8 @@ export default function AddBusinessForm({
         </label>
         <input
           id="business-city"
+          maxLength={LIMITS.city}
+          autoComplete="address-level2"
           value={city}
           onChange={(e) => setCity(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -178,6 +312,8 @@ export default function AddBusinessForm({
         </label>
         <input
           id="business-area"
+          maxLength={LIMITS.area}
+          autoComplete="address-level3"
           value={area}
           onChange={(e) => setArea(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -194,6 +330,8 @@ export default function AddBusinessForm({
         </label>
         <input
           id="business-postcode"
+          maxLength={LIMITS.postcode}
+          autoComplete="postal-code"
           value={postcode}
           onChange={(e) => setPostcode(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -210,6 +348,8 @@ export default function AddBusinessForm({
         </label>
         <input
           id="business-address"
+          maxLength={LIMITS.address}
+          autoComplete="street-address"
           value={address}
           onChange={(e) => setAddress(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -227,6 +367,8 @@ export default function AddBusinessForm({
         <input
           id="business-website"
           type="url"
+          maxLength={LIMITS.website}
+          autoComplete="url"
           value={website}
           onChange={(e) => setWebsite(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -243,6 +385,9 @@ export default function AddBusinessForm({
         </label>
         <input
           id="business-phone"
+          type="tel"
+          maxLength={LIMITS.phone}
+          autoComplete="tel"
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -260,6 +405,8 @@ export default function AddBusinessForm({
         <input
           id="business-email"
           type="email"
+          maxLength={LIMITS.email}
+          autoComplete="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -276,6 +423,9 @@ export default function AddBusinessForm({
         </label>
         <input
           id="submitted-by-name"
+          required
+          maxLength={LIMITS.submittedByName}
+          autoComplete="name"
           value={submittedByName}
           onChange={(e) => setSubmittedByName(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -293,6 +443,9 @@ export default function AddBusinessForm({
         <input
           id="submitted-by-email"
           type="email"
+          required
+          maxLength={LIMITS.submittedByEmail}
+          autoComplete="email"
           value={submittedByEmail}
           onChange={(e) => setSubmittedByEmail(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -310,6 +463,7 @@ export default function AddBusinessForm({
         <textarea
           id="business-description"
           rows={5}
+          maxLength={LIMITS.description}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -365,6 +519,7 @@ export default function AddBusinessForm({
               </label>
               <input
                 id="advertising-notes"
+                maxLength={LIMITS.notes}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
@@ -400,4 +555,3 @@ export default function AddBusinessForm({
     </form>
   );
 }
-

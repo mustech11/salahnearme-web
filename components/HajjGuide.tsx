@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+
 import HajjAudioPlayer from "@/components/HajjAudioPlayer";
 import HajjImageFrame from "@/components/HajjImageFrame";
 
@@ -15,7 +16,7 @@ type Props = {
   steps: HajjStep[];
 };
 
-const stepAudioMap: Record<string, { src: string; label: string }> = {
+const STEP_AUDIO_MAP: Record<string, { src: string; label: string }> = {
   "Entering Ihram": { src: "/audio/hajj/talbiyah.mp3", label: "Talbiyah" },
   "At the Miqat": { src: "/audio/hajj/talbiyah.mp3", label: "Talbiyah" },
   Talbiyah: { src: "/audio/hajj/talbiyah.mp3", label: "Talbiyah" },
@@ -26,75 +27,105 @@ const stepAudioMap: Record<string, { src: string; label: string }> = {
   "Farewell Tawaf": { src: "/audio/hajj/general-dhikr.mp3", label: "Dhikr" },
 };
 
-function getStepFromUrl(totalSteps: number) {
-  const params = new URLSearchParams(window.location.search);
-  const raw = params.get("step");
-  const parsed = raw ? Number(raw) : null;
-
-  if (!parsed || !Number.isFinite(parsed)) return null;
-
-  const index = parsed - 1;
-
-  if (index < 0 || index >= totalSteps) return null;
-
-  return index;
+function clean(value: unknown, max = 8000): string {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
-function updateStepUrl(index: number) {
-  const url = new URL(window.location.href);
-  url.searchParams.set("step", String(index + 1));
+function normaliseSteps(steps: HajjStep[]) {
+  return (steps ?? [])
+    .map((step) => ({
+      day: clean(step.day, 120),
+      title: clean(step.title, 240),
+      image: clean(step.image, 1000),
+      details: clean(step.details),
+    }))
+    .filter(
+      (step) =>
+        step.title &&
+        step.image &&
+        step.details &&
+        (step.image.startsWith("/") || /^https?:\/\//i.test(step.image))
+    );
+}
 
-  window.history.replaceState({}, "", url.toString());
+function writeStorage(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage is optional.
+  }
+}
+
+function stepFromUrl(total: number): number | null {
+  const raw = new URLSearchParams(location.search).get("step");
+  const parsed = raw ? Number(raw) - 1 : Number.NaN;
+
+  return Number.isInteger(parsed) && parsed >= 0 && parsed < total
+    ? parsed
+    : null;
+}
+
+function updateUrl(index: number) {
+  const url = new URL(location.href);
+  url.searchParams.set("step", String(index + 1));
+  history.replaceState({}, "", url.toString());
 }
 
 export default function HajjGuide({ steps }: Props) {
-  const [currentStep, setCurrentStep] = useState(0);
+  const headingId = useId();
+  const safeSteps = useMemo(() => normaliseSteps(steps), [steps]);
+
+  const [current, setCurrent] = useState(0);
   const [autoPlay, setAutoPlay] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [copyMessage, setCopyMessage] = useState("");
 
   useEffect(() => {
-    const urlStep = getStepFromUrl(steps.length);
-
-    if (urlStep !== null) {
-      setCurrentStep(urlStep);
-    } else {
-      const savedStep = window.localStorage.getItem("snm_hajj_step");
-      const parsedStep = savedStep ? Number(savedStep) : 0;
-
-      if (
-        Number.isFinite(parsedStep) &&
-        parsedStep >= 0 &&
-        parsedStep < steps.length
-      ) {
-        setCurrentStep(parsedStep);
-      }
+    if (!safeSteps.length) {
+      setLoaded(true);
+      return;
     }
 
-    const savedAutoPlay = window.localStorage.getItem("snm_hajj_autoplay");
-    setAutoPlay(savedAutoPlay === "true");
+    const fromUrl = stepFromUrl(safeSteps.length);
+
+    try {
+      const saved = Number(localStorage.getItem("snm_hajj_step"));
+
+      if (fromUrl !== null) {
+        setCurrent(fromUrl);
+      } else if (
+        Number.isInteger(saved) &&
+        saved >= 0 &&
+        saved < safeSteps.length
+      ) {
+        setCurrent(saved);
+      }
+
+      setAutoPlay(localStorage.getItem("snm_hajj_autoplay") === "true");
+    } catch {
+      // Storage is optional.
+    }
 
     setLoaded(true);
-  }, [steps.length]);
+  }, [safeSteps.length]);
 
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || !safeSteps.length) return;
 
-    window.localStorage.setItem("snm_hajj_step", String(currentStep));
-    updateStepUrl(currentStep);
+    writeStorage("snm_hajj_step", String(current));
+    updateUrl(current);
 
-    window.dispatchEvent(
-      new CustomEvent("hajj-step-change", { detail: currentStep })
+    dispatchEvent(
+      new CustomEvent("hajj-step-change", { detail: current })
     );
-
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [currentStep, loaded]);
+  }, [current, loaded, safeSteps.length]);
 
   useEffect(() => {
     if (!loaded) return;
 
-    window.localStorage.setItem("snm_hajj_autoplay", String(autoPlay));
+    writeStorage("snm_hajj_autoplay", String(autoPlay));
 
-    window.dispatchEvent(
+    dispatchEvent(
       new CustomEvent("hajj-audio-toggle", { detail: autoPlay })
     );
   }, [autoPlay, loaded]);
@@ -103,80 +134,76 @@ export default function HajjGuide({ steps }: Props) {
     if (!loaded || !autoPlay) return;
 
     const timer = window.setTimeout(() => {
-      const audio = document.querySelector<HTMLAudioElement>(
-        "[data-hajj-audio='true']"
-      );
-
-      audio?.play().catch(() => {});
-    }, 600);
+      document
+        .querySelector<HTMLAudioElement>("[data-hajj-audio='true']")
+        ?.play()
+        .catch(() => undefined);
+    }, 700);
 
     return () => window.clearTimeout(timer);
-  }, [currentStep, autoPlay, loaded]);
+  }, [autoPlay, current, loaded]);
 
   useEffect(() => {
-    const handler = (event: Event) => {
-      const customEvent = event as CustomEvent<number>;
-      const nextStep = customEvent.detail;
+    const floatingHandler = (event: Event) => {
+      const next = (event as CustomEvent<number>).detail;
 
       if (
-        Number.isFinite(nextStep) &&
-        nextStep >= 0 &&
-        nextStep < steps.length
+        Number.isInteger(next) &&
+        next >= 0 &&
+        next < safeSteps.length
       ) {
-        setCurrentStep(nextStep);
+        setCurrent(next);
       }
     };
 
-    window.addEventListener("hajj-floating-step-change", handler);
+    const popHandler = () => {
+      const next = stepFromUrl(safeSteps.length);
+      if (next !== null) setCurrent(next);
+    };
+
+    addEventListener("hajj-floating-step-change", floatingHandler);
+    addEventListener("popstate", popHandler);
 
     return () => {
-      window.removeEventListener("hajj-floating-step-change", handler);
+      removeEventListener("hajj-floating-step-change", floatingHandler);
+      removeEventListener("popstate", popHandler);
     };
-  }, [steps.length]);
+  }, [safeSteps.length]);
 
-  useEffect(() => {
-    const handler = () => {
-      const urlStep = getStepFromUrl(steps.length);
-      if (urlStep !== null) setCurrentStep(urlStep);
-    };
-
-    window.addEventListener("popstate", handler);
-
-    return () => {
-      window.removeEventListener("popstate", handler);
-    };
-  }, [steps.length]);
-
-  const safeStepIndex =
-    currentStep >= 0 && currentStep < steps.length ? currentStep : 0;
-
-  const step = steps[safeStepIndex];
-  const audio = stepAudioMap[step.title] ?? null;
-
-  const progress = useMemo(() => {
-    return Math.round(((safeStepIndex + 1) / steps.length) * 100);
-  }, [safeStepIndex, steps.length]);
-
-  function goPrevious() {
-    setCurrentStep((stepIndex) => Math.max(0, stepIndex - 1));
+  if (!safeSteps.length) {
+    return (
+      <section className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6 text-sm text-white/55">
+        Guided Hajj steps are not currently available.
+      </section>
+    );
   }
 
-  function goNext() {
-    setCurrentStep((stepIndex) => Math.min(steps.length - 1, stepIndex + 1));
-  }
+  const safeCurrent =
+    current >= 0 && current < safeSteps.length ? current : 0;
 
-  function restart() {
-    setCurrentStep(0);
-  }
+  const step = safeSteps[safeCurrent];
+  const audio = STEP_AUDIO_MAP[step.title] ?? null;
+  const progress = Math.round(
+    ((safeCurrent + 1) / safeSteps.length) * 100
+  );
 
-  function copyStepLink() {
-    updateStepUrl(safeStepIndex);
-    navigator.clipboard?.writeText(window.location.href).catch(() => {});
+  async function copyStepLink() {
+    updateUrl(safeCurrent);
+
+    try {
+      await navigator.clipboard.writeText(location.href);
+      setCopyMessage("Step link copied.");
+    } catch {
+      setCopyMessage("Copy is unavailable.");
+    }
+
+    window.setTimeout(() => setCopyMessage(""), 2500);
   }
 
   return (
     <section
       id="guided-mode"
+      aria-labelledby={headingId}
       className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8"
     >
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -185,32 +212,34 @@ export default function HajjGuide({ steps }: Props) {
             Guided Hajj Mode
           </div>
 
-          <h2 className="mt-3 text-3xl font-bold text-white">
+          <h2 id={headingId} className="mt-3 text-3xl font-black text-white">
             Continue your Hajj journey
           </h2>
 
-          <p className="mt-2 max-w-3xl text-white/60">
-            Step {safeStepIndex + 1} of {steps.length}. Shareable link:
-            <span className="text-yellow-400"> /hajj?step={safeStepIndex + 1}</span>
+          <p className="mt-2 max-w-3xl text-sm leading-7 text-white/60">
+            Step {safeCurrent + 1} of {safeSteps.length}. This guide supports
+            your journey but does not replace your scholar, group leader or
+            official Hajj instructions.
           </p>
         </div>
 
         <div className="flex flex-wrap gap-3">
           <button
             type="button"
-            onClick={copyStepLink}
-            className="rounded-xl border border-white/10 bg-black px-4 py-3 text-sm font-semibold text-white/70 hover:border-yellow-500/30 hover:text-yellow-400"
+            onClick={() => void copyStepLink()}
+            className="rounded-xl border border-white/10 bg-black px-4 py-3 text-sm font-bold text-white/70 hover:border-yellow-500/30 hover:text-yellow-400"
           >
             Copy step link
           </button>
 
           <button
             type="button"
+            aria-pressed={autoPlay}
             onClick={() => setAutoPlay((value) => !value)}
             className={
               autoPlay
-                ? "rounded-xl border border-yellow-500/30 bg-yellow-500 px-4 py-3 text-sm font-semibold text-black"
-                : "rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm font-semibold text-yellow-400 hover:bg-yellow-500/10"
+                ? "rounded-xl border border-yellow-500/30 bg-yellow-500 px-4 py-3 text-sm font-black text-black"
+                : "rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm font-black text-yellow-400 hover:bg-yellow-500/10"
             }
           >
             {autoPlay ? "Auto audio: ON" : "Auto audio: OFF"}
@@ -218,8 +247,9 @@ export default function HajjGuide({ steps }: Props) {
 
           <button
             type="button"
-            onClick={restart}
-            className="rounded-xl border border-white/10 bg-black px-4 py-3 text-sm font-semibold text-white/70 hover:border-yellow-500/30 hover:text-yellow-400"
+            disabled={safeCurrent === 0}
+            onClick={() => setCurrent(0)}
+            className="rounded-xl border border-white/10 bg-black px-4 py-3 text-sm font-bold text-white/70 hover:border-yellow-500/30 hover:text-yellow-400 disabled:opacity-40"
           >
             Restart
           </button>
@@ -228,7 +258,7 @@ export default function HajjGuide({ steps }: Props) {
 
       <div className="mt-6 h-2 overflow-hidden rounded-full bg-white/10">
         <div
-          className="h-full rounded-full bg-yellow-500 transition-all duration-500"
+          className="h-full rounded-full bg-yellow-500 transition-[width] duration-500"
           style={{ width: `${progress}%` }}
         />
       </div>
@@ -237,27 +267,36 @@ export default function HajjGuide({ steps }: Props) {
         <HajjImageFrame
           src={step.image}
           alt={step.title}
-          priority={safeStepIndex === 0}
+          priority={safeCurrent === 0}
         />
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <span className="rounded-full bg-yellow-500 px-3 py-1 text-sm font-bold text-black">
-            {safeStepIndex + 1}
+          <span className="rounded-full bg-yellow-500 px-3 py-1 text-sm font-black text-black">
+            {safeCurrent + 1}
           </span>
 
-          <span className="text-sm font-semibold text-yellow-400">
-            {step.day}
-          </span>
+          {step.day ? (
+            <span className="text-sm font-black text-yellow-400">
+              {step.day}
+            </span>
+          ) : null}
         </div>
 
-        <h3 className="mt-3 text-3xl font-bold text-white">{step.title}</h3>
+        <h3 className="mt-3 text-3xl font-black text-white">
+          {step.title}
+        </h3>
 
-        <p className="mt-3 max-w-4xl text-white/70">{step.details}</p>
+        <p
+          dir="auto"
+          className="mt-3 max-w-4xl whitespace-pre-wrap text-sm leading-7 text-white/70"
+        >
+          {step.details}
+        </p>
 
         <div className="mt-5">
           <HajjAudioPlayer
             src={audio?.src ?? null}
-            label={audio?.label ?? "Du‘a"}
+            label={audio?.label ?? "Hajj audio guidance"}
           />
         </div>
       </div>
@@ -265,23 +304,30 @@ export default function HajjGuide({ steps }: Props) {
       <div className="mt-6 grid gap-3 sm:grid-cols-2">
         <button
           type="button"
-          disabled={safeStepIndex === 0}
-          onClick={goPrevious}
-          className="rounded-2xl border border-yellow-500/30 bg-black px-5 py-4 font-semibold text-yellow-400 hover:bg-yellow-500/10 disabled:cursor-not-allowed disabled:opacity-30"
+          disabled={safeCurrent === 0}
+          onClick={() => setCurrent((value) => Math.max(0, value - 1))}
+          className="rounded-2xl border border-yellow-500/30 bg-black px-5 py-4 font-black text-yellow-400 hover:bg-yellow-500/10 disabled:opacity-30"
         >
           Previous
         </button>
 
         <button
           type="button"
-          disabled={safeStepIndex === steps.length - 1}
-          onClick={goNext}
-          className="rounded-2xl bg-yellow-500 px-5 py-4 font-semibold text-black hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-30"
+          disabled={safeCurrent === safeSteps.length - 1}
+          onClick={() =>
+            setCurrent((value) =>
+              Math.min(safeSteps.length - 1, value + 1)
+            )
+          }
+          className="rounded-2xl bg-yellow-500 px-5 py-4 font-black text-black hover:bg-yellow-400 disabled:opacity-30"
         >
           Next
         </button>
       </div>
+
+      <div aria-live="polite" className="sr-only">
+        {copyMessage}
+      </div>
     </section>
   );
 }
-

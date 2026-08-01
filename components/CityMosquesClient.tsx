@@ -1,7 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type Mosque = {
   id: string;
@@ -20,317 +27,609 @@ type Props = {
   initialMosques: Mosque[];
 };
 
-function getCurrentPrayer() {
-  const now = new Date(
-    new Date().toLocaleString("en-GB", { timeZone: "Europe/London" })
-  );
+type SortMode = "default" | "near" | "name" | "verified";
+type Confidence = "none" | "low" | "medium" | "strong";
+type LiveStatus = "none" | "started" | "delayed" | "full" | "parking_full";
 
-  const total = now.getHours() * 60 + now.getMinutes();
+type LiveItem = {
+  status: LiveStatus;
+  total: number;
+  confidence: Confidence;
+};
 
-  if (total >= 300 && total < 720) return "fajr";
-  if (total >= 720 && total < 900) return "dhuhr";
-  if (total >= 900 && total < 1080) return "asr";
-  if (total >= 1080 && total < 1260) return "maghrib";
+type LiveResponse = {
+  ok?: boolean;
+  error?: string;
+  map?: Record<string, unknown>;
+};
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const LIVE_REFRESH_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 12_000;
+
+function cleanText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getCurrentPrayer(): string {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+  const total = hour * 60 + minute;
+
+  if (total < 720) return "fajr";
+  if (total < 900) return "dhuhr";
+  if (total < 1080) return "asr";
+  if (total < 1260) return "maghrib";
   return "isha";
 }
 
-function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 3959;
+function haversineMiles(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const radius = 3959;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
 
-  const a =
+  const value =
     Math.sin(dLat / 2) ** 2 +
     Math.cos((lat1 * Math.PI) / 180) *
       Math.cos((lat2 * Math.PI) / 180) *
       Math.sin(dLon / 2) ** 2;
 
-  return 2 * R * Math.asin(Math.sqrt(a));
+  return 2 * radius * Math.asin(Math.sqrt(value));
+}
+
+function normaliseLiveItem(value: unknown): LiveItem {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { status: "none", total: 0, confidence: "none" };
+  }
+
+  const item = value as Partial<LiveItem>;
+  const statuses: LiveStatus[] = [
+    "none",
+    "started",
+    "delayed",
+    "full",
+    "parking_full",
+  ];
+  const confidences: Confidence[] = ["none", "low", "medium", "strong"];
+
+  const total =
+    typeof item.total === "number" && Number.isFinite(item.total)
+      ? Math.max(0, Math.trunc(item.total))
+      : 0;
+
+  return {
+    status: statuses.includes(item.status as LiveStatus)
+      ? (item.status as LiveStatus)
+      : "none",
+    total,
+    confidence: confidences.includes(item.confidence as Confidence)
+      ? (item.confidence as Confidence)
+      : total >= 5
+        ? "strong"
+        : total >= 3
+          ? "medium"
+          : total >= 1
+            ? "low"
+            : "none",
+  };
+}
+
+function verificationLabel(value: string | null | undefined): string | null {
+  const cleaned = cleanText(value);
+  if (!cleaned) return null;
+
+  return cleaned
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function isVerified(value: string | null | undefined): boolean {
+  const status = cleanText(value).toLowerCase();
+  return status === "verified" || status === "approved" || status === "active";
 }
 
 export default function CityMosquesClient({
   cityName,
   initialMosques,
 }: Props) {
-  const [search, setSearch] = useState("");
-  const [userLoc, setUserLoc] = useState<{ lat: number; lon: number } | null>(null);
-  const [locError, setLocError] = useState<string | null>(null);
-  const [sortMode, setSortMode] = useState<"default" | "near">("default");
+  const searchId = useId();
+  const statusId = useId();
+  const liveAbortRef = useRef<AbortController | null>(null);
 
-  const [liveMap, setLiveMap] = useState<
-    Record<
-      string,
-      {
-        status: string;
-        total: number;
-        confidence?: "none" | "low" | "medium" | "strong";
+  const [search, setSearch] = useState("");
+  const [userLoc, setUserLoc] = useState<{ lat: number; lon: number } | null>(
+    null
+  );
+  const [locError, setLocError] = useState("");
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [sortMode, setSortMode] = useState<SortMode>("default");
+  const [liveMap, setLiveMap] = useState<Record<string, LiveItem>>({});
+  const [liveError, setLiveError] = useState("");
+  const [liveUpdatedAt, setLiveUpdatedAt] = useState<Date | null>(null);
+
+  const mosques = useMemo(
+    () =>
+      (initialMosques ?? []).filter(
+        (mosque) => UUID_REGEX.test(cleanText(mosque.id))
+      ),
+    [initialMosques]
+  );
+
+  const loadLive = useCallback(async () => {
+    if (mosques.length === 0) return;
+
+    liveAbortRef.current?.abort();
+    const controller = new AbortController();
+    liveAbortRef.current = controller;
+
+    const timeoutId = window.setTimeout(
+      () => controller.abort(),
+      REQUEST_TIMEOUT_MS
+    );
+
+    try {
+      const params = new URLSearchParams({
+        mosque_ids: mosques.map((mosque) => mosque.id).join(","),
+        prayer: getCurrentPrayer(),
+      });
+
+      const response = await fetch(`/api/iqamah/live?${params.toString()}`, {
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+
+      const data = (await response.json().catch(() => ({}))) as LiveResponse;
+
+      if (!response.ok || data.ok === false) {
+        setLiveError(cleanText(data.error) || "Live signals are unavailable.");
+        return;
       }
-    >
-  >({});
+
+      const nextMap: Record<string, LiveItem> = {};
+
+      for (const mosque of mosques) {
+        nextMap[mosque.id] = normaliseLiveItem(data.map?.[mosque.id]);
+      }
+
+      setLiveMap(nextMap);
+      setLiveUpdatedAt(new Date());
+      setLiveError("");
+    } catch (error) {
+      if (
+        !(error instanceof DOMException && error.name === "AbortError")
+      ) {
+        setLiveError("Live signals are temporarily unavailable.");
+      }
+    } finally {
+      window.clearTimeout(timeoutId);
+
+      if (liveAbortRef.current === controller) {
+        liveAbortRef.current = null;
+      }
+    }
+  }, [mosques]);
 
   useEffect(() => {
-    const ids = (initialMosques ?? []).map((m) => m.id).filter(Boolean);
-    if (!ids.length) return;
+    void loadLive();
 
-    const qs = ids.join(",");
-
-    async function loadLive() {
-      const prayer = getCurrentPrayer();
-
-      try {
-        const r = await fetch(
-          `/api/iqamah/live?mosque_ids=${encodeURIComponent(qs)}&prayer=${prayer}`
-        );
-        const d = await r.json();
-        setLiveMap(d?.map ?? {});
-      } catch {
-        setLiveMap({});
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadLive();
       }
-    }
+    }, LIVE_REFRESH_MS);
 
-    loadLive();
-    const interval = setInterval(loadLive, 60000);
+    return () => {
+      window.clearInterval(intervalId);
+      liveAbortRef.current?.abort();
+    };
+  }, [loadLive]);
 
-    return () => clearInterval(interval);
-  }, [initialMosques]);
-
-  function LiveBadge({ mosqueId }: { mosqueId: string }) {
-    const item = liveMap[mosqueId];
-    const s = item?.status ?? "none";
-    const total = item?.total ?? 0;
-    const conf =
-      item?.confidence ??
-      (total >= 5 ? "strong" : total >= 3 ? "medium" : total >= 1 ? "low" : "none");
-
-    if (s === "started") {
-  return (
-    <span className="rounded-full bg-green-500 px-2 py-1 text-[10px] font-semibold text-black">
-      🟢 Iqamah started
-    </span>
-  );
-}
-
-if (conf === "strong") {
-  return (
-    <span className="rounded-full border border-green-500/30 bg-green-500/20 px-2 py-1 text-[10px] font-semibold text-green-300">
-      Live • {total}
-    </span>
-  );
-}
-
-    if (s === "delayed") {
-      return (
-        <span className="rounded-full bg-amber-300 px-2 py-1 text-[10px] font-semibold text-neutral-950">
-          🟡 Delayed
-        </span>
-      );
-    }
-
-    if (s === "full") {
-      return (
-        <span className="rounded-full bg-fuchsia-300 px-2 py-1 text-[10px] font-semibold text-neutral-950">
-          🟣 Hall full
-        </span>
-      );
-    }
-
-    if (s === "parking_full") {
-      return (
-        <span className="rounded-full bg-sky-300 px-2 py-1 text-[10px] font-semibold text-neutral-950">
-          🔵 Parking full
-        </span>
-      );
-    }
-
-    if (conf === "medium") {
-      return (
-        <span className="rounded-full border border-amber-300/30 bg-amber-300/20 px-2 py-1 text-[10px] font-semibold text-amber-200">
-          Medium signal • {total}
-        </span>
-      );
-    }
-
-    if (conf === "low") {
-      return (
-        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-white/70">
-          Low signal • {total} report{total === 1 ? "" : "s"}
-        </span>
-      );
-    }
-
-    return (
-      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-white/60">
-        No recent reports
-      </span>
-    );
-  }
-
-  async function useMyLocation() {
-    setLocError(null);
+  const useMyLocation = useCallback(() => {
+    setLocError("");
 
     if (!navigator.geolocation) {
-      setLocError("Your browser does not support location.");
+      setLocError("Your browser does not support location access.");
       return;
     }
 
+    setLocationLoading(true);
+
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setUserLoc({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+      (position) => {
+        setUserLoc({
+          lat: position.coords.latitude,
+          lon: position.coords.longitude,
+        });
         setSortMode("near");
+        setLocationLoading(false);
       },
-      (err) => {
+      (error) => {
+        setLocationLoading(false);
         setLocError(
-          err.code === 1 ? "Location permission denied." : "Could not get your location."
+          error.code === error.PERMISSION_DENIED
+            ? "Location permission was denied."
+            : error.code === error.TIMEOUT
+              ? "Location detection timed out."
+              : "Your location could not be detected."
         );
       },
-      { enableHighAccuracy: true, timeout: 10000 }
+      {
+        enableHighAccuracy: true,
+        timeout: 12_000,
+        maximumAge: 60_000,
+      }
     );
-  }
+  }, []);
 
-  const filtered = useMemo(() => {
-    const term = search.toLowerCase().trim();
+  const results = useMemo(() => {
+    const term = search.trim().toLowerCase();
 
-    const base = (initialMosques ?? []).filter((m) => {
+    const filtered = mosques.filter((mosque) => {
       if (!term) return true;
 
-      return (
-        m.name?.toLowerCase().includes(term) ||
-        m.postcode?.toLowerCase().includes(term) ||
-        m.area?.toLowerCase().includes(term) ||
-        m.address?.toLowerCase().includes(term)
-      );
+      return [
+        mosque.name,
+        mosque.postcode,
+        mosque.area,
+        mosque.address,
+      ].some((value) => cleanText(value).toLowerCase().includes(term));
     });
 
-    if (sortMode !== "near" || !userLoc) return base;
+    return [...filtered].sort((first, second) => {
+      if (sortMode === "name") {
+        return cleanText(first.name).localeCompare(cleanText(second.name));
+      }
 
-    return [...base].sort((a, b) => {
-      const aOk = typeof a.latitude === "number" && typeof a.longitude === "number";
-      const bOk = typeof b.latitude === "number" && typeof b.longitude === "number";
+      if (sortMode === "verified") {
+        return Number(isVerified(second.verified_status)) -
+          Number(isVerified(first.verified_status));
+      }
 
-      if (!aOk && bOk) return 1;
-      if (aOk && !bOk) return -1;
-      if (!aOk && !bOk) return 0;
+      if (sortMode === "near" && userLoc) {
+        const firstHasCoords =
+          typeof first.latitude === "number" &&
+          typeof first.longitude === "number";
+        const secondHasCoords =
+          typeof second.latitude === "number" &&
+          typeof second.longitude === "number";
 
-      const da = haversineMiles(userLoc.lat, userLoc.lon, a.latitude!, a.longitude!);
-      const db = haversineMiles(userLoc.lat, userLoc.lon, b.latitude!, b.longitude!);
+        if (!firstHasCoords && secondHasCoords) return 1;
+        if (firstHasCoords && !secondHasCoords) return -1;
+        if (!firstHasCoords || !secondHasCoords) return 0;
 
-      return da - db;
+        return (
+          haversineMiles(
+            userLoc.lat,
+            userLoc.lon,
+            first.latitude as number,
+            first.longitude as number
+          ) -
+          haversineMiles(
+            userLoc.lat,
+            userLoc.lon,
+            second.latitude as number,
+            second.longitude as number
+          )
+        );
+      }
+
+      return 0;
     });
-  }, [initialMosques, search, sortMode, userLoc]);
+  }, [mosques, search, sortMode, userLoc]);
+
+  const liveCount = useMemo(
+    () =>
+      Object.values(liveMap).filter(
+        (item) => item.status !== "none" || item.confidence !== "none"
+      ).length,
+    [liveMap]
+  );
 
   return (
     <div className="space-y-6">
-      <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
-        <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
-          City Mosques
+      <section className="premium-panel overflow-hidden rounded-[2rem] p-5 sm:p-7">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="section-kicker">City mosques</div>
+            <h1 className="mt-3 text-3xl font-black tracking-tight text-white sm:text-4xl">
+              Mosques in {cleanText(cityName) || "this city"}
+            </h1>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-white/60">
+              Search local mosques, view current community signals and sort
+              nearby listings using your location.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <SummaryBadge label={`${results.length} shown`} />
+            <SummaryBadge label={`${liveCount} live`} tone="live" />
+          </div>
         </div>
 
-        <h1 className="mt-3 text-3xl font-bold text-white">
-          Mosques in {cityName}
-        </h1>
-
-        <p className="mt-2 text-white/70">
-          Browse local mosques in {cityName}, see live signals, and sort by what is near you.
-        </p>
-
-        <div className="mt-6 grid gap-3 md:grid-cols-3">
+        <div className="mt-6 grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_auto]">
+          <label htmlFor={searchId} className="sr-only">
+            Search mosques
+          </label>
           <input
-            type="text"
-            placeholder="Search by name, postcode, area or address..."
+            id={searchId}
+            type="search"
+            placeholder="Search by name, postcode, area or address"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="md:col-span-2 w-full rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
+            onChange={(event) => setSearch(event.target.value)}
+            className="min-h-12 w-full rounded-xl border border-yellow-500/25 bg-black px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-yellow-400 focus:ring-2 focus:ring-yellow-400/15"
           />
+
+          <select
+            value={sortMode}
+            onChange={(event) => setSortMode(event.target.value as SortMode)}
+            className="min-h-12 rounded-xl border border-white/10 bg-black px-4 py-3 text-sm font-semibold text-white outline-none focus:border-yellow-400"
+          >
+            <option value="default">Recommended</option>
+            <option value="near">Nearest first</option>
+            <option value="name">Name A–Z</option>
+            <option value="verified">Verified first</option>
+          </select>
 
           <div className="flex gap-2">
             <button
+              type="button"
               onClick={useMyLocation}
-              className="flex-1 rounded-xl bg-yellow-500 px-4 py-3 text-sm font-semibold text-black hover:bg-yellow-400"
+              disabled={locationLoading}
+              className="premium-button min-h-12 flex-1 px-4 py-3 text-sm disabled:cursor-wait disabled:opacity-60"
             >
-              📍 Near me
+              {locationLoading ? "Locating…" : "Near me"}
             </button>
 
             <button
+              type="button"
               onClick={() => {
                 setSortMode("default");
                 setUserLoc(null);
-                setLocError(null);
+                setLocError("");
+                setSearch("");
               }}
-              className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white hover:bg-white/10"
-              title="Reset sorting"
+              className="premium-button-outline min-h-12 px-4 py-3 text-sm"
             >
               Reset
             </button>
           </div>
         </div>
 
-        {locError && (
-          <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
-            {locError}
-          </div>
-        )}
+        <div id={statusId} aria-live="polite">
+          {locError ? (
+            <Feedback tone="error">{locError}</Feedback>
+          ) : null}
+
+          {liveError ? (
+            <Feedback tone="warning">{liveError}</Feedback>
+          ) : null}
+
+          {liveUpdatedAt ? (
+            <p className="mt-3 text-xs text-white/35">
+              Live signals refreshed{" "}
+              {liveUpdatedAt.toLocaleTimeString("en-GB", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </p>
+          ) : null}
+        </div>
       </section>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {filtered.map((m) => {
-          let distMi: number | null = null;
-          const hasCoords =
-            userLoc && typeof m.latitude === "number" && typeof m.longitude === "number";
+      {results.length > 0 ? (
+        <section
+          aria-label={`Mosques in ${cityName}`}
+          className="grid gap-4 md:grid-cols-2 xl:grid-cols-3"
+        >
+          {results.map((mosque) => {
+            const hasCoordinates =
+              userLoc &&
+              typeof mosque.latitude === "number" &&
+              typeof mosque.longitude === "number";
 
-          if (hasCoords) {
-            distMi = haversineMiles(
-              userLoc!.lat,
-              userLoc!.lon,
-              m.latitude!,
-              m.longitude!
+            const distance =
+              hasCoordinates && userLoc
+                ? haversineMiles(
+                    userLoc.lat,
+                    userLoc.lon,
+                    mosque.latitude as number,
+                    mosque.longitude as number
+                  )
+                : null;
+
+            return (
+              <MosqueCard
+                key={mosque.id}
+                mosque={mosque}
+                live={liveMap[mosque.id] ?? null}
+                distance={distance}
+              />
             );
-          }
-
-          return (
-            <Link
-              key={m.id}
-              href={m.slug ? `/mosque/${m.slug}` : "#"}
-              className="rounded-2xl border border-yellow-500/20 bg-[rgb(var(--card))] p-5 transition hover:border-yellow-400/40 hover:bg-yellow-500/[0.03]"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="font-medium text-white">{m.name}</div>
-
-                  <div className="mt-1 text-sm text-white/60">
-                    {[m.area, m.postcode].filter(Boolean).join(" • ")}
-                    {distMi !== null && (
-                      <span className="ml-2 text-xs text-white/50">
-                        • {distMi.toFixed(1)} mi
-                      </span>
-                    )}
-                  </div>
-
-                  {m.address && (
-                    <div className="mt-2 text-xs text-white/50">{m.address}</div>
-                  )}
-                </div>
-
-                <div className="flex flex-col items-end gap-2">
-                  {m.verified_status && (
-                    <span className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-1 text-[10px] font-semibold text-yellow-400 whitespace-nowrap">
-                      {m.verified_status}
-                    </span>
-                  )}
-
-                  <LiveBadge mosqueId={m.id} />
-                </div>
-              </div>
-            </Link>
-          );
-        })}
-      </div>
-
-      {!filtered.length && (
-        <div className="rounded-2xl border border-white/10 bg-[rgb(var(--card))] p-6 text-sm text-white/60">
-          No mosques match your search.
-        </div>
+          })}
+        </section>
+      ) : (
+        <section className="rounded-2xl border border-white/10 bg-[rgb(var(--card))] p-6 text-sm text-white/60">
+          No mosques match your current search and filters.
+        </section>
       )}
     </div>
   );
 }
 
+function MosqueCard({
+  mosque,
+  live,
+  distance,
+}: {
+  mosque: Mosque;
+  live: LiveItem | null;
+  distance: number | null;
+}) {
+  const name = cleanText(mosque.name) || "Mosque";
+  const slug = cleanText(mosque.slug);
+  const href = slug ? `/mosque/${slug}` : null;
+  const status = verificationLabel(mosque.verified_status);
+
+  return (
+    <article className="group rounded-2xl border border-yellow-500/20 bg-[rgb(var(--card))] p-5 transition hover:-translate-y-0.5 hover:border-yellow-400/40">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          {href ? (
+            <Link
+              href={href}
+              className="block truncate text-lg font-black text-white transition group-hover:text-yellow-300"
+            >
+              {name}
+            </Link>
+          ) : (
+            <h2 className="truncate text-lg font-black text-white">{name}</h2>
+          )}
+
+          <p className="mt-1 text-sm text-white/55">
+            {[mosque.area, mosque.postcode].map(cleanText).filter(Boolean).join(" • ") ||
+              "Location details pending"}
+          </p>
+        </div>
+
+        {distance !== null ? (
+          <span className="shrink-0 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-300">
+            {distance.toFixed(1)} mi
+          </span>
+        ) : null}
+      </div>
+
+      {mosque.address ? (
+        <p className="mt-3 line-clamp-2 text-xs leading-5 text-white/45">
+          {mosque.address}
+        </p>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {status ? <Pill>{status}</Pill> : null}
+        <LiveBadge item={live} />
+      </div>
+
+      {href ? (
+        <Link
+          href={href}
+          className="mt-5 inline-flex text-sm font-bold text-yellow-300 transition hover:text-yellow-100"
+        >
+          View mosque →
+        </Link>
+      ) : null}
+    </article>
+  );
+}
+
+function LiveBadge({ item }: { item: LiveItem | null }) {
+  if (!item || (item.status === "none" && item.confidence === "none")) {
+    return <Pill muted>No recent reports</Pill>;
+  }
+
+  const label =
+    item.status === "started"
+      ? "Iqamah started"
+      : item.status === "delayed"
+        ? "Delayed"
+        : item.status === "full"
+          ? "Hall full"
+          : item.status === "parking_full"
+            ? "Parking full"
+            : `${item.confidence} signal`;
+
+  const tone =
+    item.status === "started"
+      ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+      : item.status === "delayed"
+        ? "border-amber-500/25 bg-amber-500/10 text-amber-300"
+        : item.status === "full"
+          ? "border-red-500/25 bg-red-500/10 text-red-300"
+          : item.status === "parking_full"
+            ? "border-sky-500/25 bg-sky-500/10 text-sky-300"
+            : "border-yellow-500/25 bg-yellow-500/10 text-yellow-300";
+
+  return (
+    <span className={`rounded-full border px-3 py-1 text-[11px] font-bold ${tone}`}>
+      {label}
+      {item.total > 0 ? ` • ${item.total}` : ""}
+    </span>
+  );
+}
+
+function Pill({
+  children,
+  muted = false,
+}: {
+  children: React.ReactNode;
+  muted?: boolean;
+}) {
+  return (
+    <span
+      className={`rounded-full border px-3 py-1 text-[11px] font-bold ${
+        muted
+          ? "border-white/10 bg-white/5 text-white/45"
+          : "border-yellow-500/25 bg-yellow-500/10 text-yellow-300"
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
+
+function SummaryBadge({
+  label,
+  tone = "default",
+}: {
+  label: string;
+  tone?: "default" | "live";
+}) {
+  return (
+    <span
+      className={`rounded-full border px-3 py-1.5 text-xs font-bold ${
+        tone === "live"
+          ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+          : "border-white/10 bg-white/5 text-white/60"
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function Feedback({
+  children,
+  tone,
+}: {
+  children: React.ReactNode;
+  tone: "error" | "warning";
+}) {
+  return (
+    <div
+      role={tone === "error" ? "alert" : "status"}
+      className={`mt-4 rounded-xl border p-4 text-sm ${
+        tone === "error"
+          ? "border-red-500/25 bg-red-500/10 text-red-200"
+          : "border-amber-500/25 bg-amber-500/10 text-amber-100"
+      }`}
+    >
+      {children}
+    </div>
+  );
+}

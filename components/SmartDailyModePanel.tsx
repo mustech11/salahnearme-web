@@ -1,7 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type CityPayload = {
   id?: number | string;
@@ -57,6 +64,7 @@ type HadithPayload = {
 
 type DailyModeResponse = {
   ok?: boolean;
+  error?: string;
   city?: CityPayload | null;
   daily_context?: DailyContext | null;
   prayer?: PrayerPayload | null;
@@ -73,106 +81,150 @@ type Props = {
   className?: string;
 };
 
-function buildApiUrl(citySlug?: string | null) {
-  const params = new URLSearchParams();
+const REQUEST_TIMEOUT_MS = 20_000;
+const REFRESH_INTERVAL_MS = 60_000;
 
-  if (citySlug) {
-    params.set("city", citySlug);
+function cleanText(value: unknown, maxLength = 500): string {
+  return typeof value === "string"
+    ? value.trim().replace(/\s+/g, " ").slice(0, maxLength)
+    : "";
+}
+
+function isSafeSlug(value: string): boolean {
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/i.test(value);
+}
+
+function buildApiUrl(citySlug?: string | null): string {
+  const params = new URLSearchParams();
+  const cleanSlug = cleanText(citySlug, 160).toLowerCase();
+
+  if (cleanSlug && isSafeSlug(cleanSlug)) {
+    params.set("city", cleanSlug);
   }
 
   const query = params.toString();
-
   return query ? `/api/daily-mode?${query}` : "/api/daily-mode";
 }
 
-function formatPrayer(value?: string | null) {
-  if (!value) {
-    return "Prayer";
-  }
+function formatPrayer(value?: string | null): string {
+  const cleaned = cleanText(value, 100);
 
-  return value
+  if (!cleaned) return "Prayer";
+
+  return cleaned
     .replace(/_/g, " ")
     .split(" ")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 }
 
-function formatDistance(value?: number | null) {
-  if (typeof value !== "number" || Number.isNaN(value)) {
+function formatDistance(value?: number | null): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return null;
   }
 
   return `${value.toFixed(value < 10 ? 1 : 0)} km`;
 }
 
-function firstUsefulBusiness(items?: BusinessPayload[] | null) {
-  if (!items || items.length === 0) {
-    return null;
-  }
+function firstUsefulBusiness(
+  items?: BusinessPayload[] | null
+): BusinessPayload | null {
+  if (!Array.isArray(items) || items.length === 0) return null;
 
   return (
     items.find((item) => item.is_featured) ??
-    items.find((item) => item.slug) ??
+    items.find((item) => cleanText(item.slug)) ??
     items[0]
   );
 }
 
-export default function SmartDailyModePanel({ citySlug, className = "" }: Props) {
+export default function SmartDailyModePanel({
+  citySlug,
+  className = "",
+}: Props) {
+  const headingId = useId();
+  const statusId = useId();
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const [data, setData] = useState<DailyModeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
 
   const apiUrl = useMemo(() => buildApiUrl(citySlug), [citySlug]);
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadDailyMode = useCallback(async () => {
+    abortControllerRef.current?.abort();
 
-    async function loadDailyMode() {
-      try {
-        setLoading(true);
-        setErrorText(null);
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    let timedOut = false;
 
-        const response = await fetch(apiUrl, {
-          method: "GET",
-          cache: "no-store",
-        });
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
 
-        const json = (await response.json().catch(() => null)) as
-          | DailyModeResponse
-          | null;
+    try {
+      setLoading(true);
+      setErrorText(null);
 
-        if (cancelled) {
-          return;
-        }
+      const response = await fetch(apiUrl, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
 
-        if (!response.ok || !json?.ok) {
-          setData(null);
-          setErrorText("Smart Daily Mode is warming up.");
-          return;
-        }
+      const json = (await response.json().catch(() => null)) as
+        | DailyModeResponse
+        | null;
 
-        setData(json);
-      } catch {
-        if (!cancelled) {
-          setData(null);
-          setErrorText("Smart Daily Mode is temporarily unavailable.");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+      if (!response.ok || json?.ok !== true) {
+        setData(null);
+        setErrorText(
+          cleanText(json?.error, 300) || "Smart Daily Mode is warming up."
+        );
+        return;
       }
+
+      setData(json);
+      setLastUpdatedAt(new Date());
+    } catch (error) {
+      setData(null);
+      setErrorText(
+        error instanceof DOMException && error.name === "AbortError"
+          ? timedOut
+            ? "Smart Daily Mode took too long to load."
+            : "Smart Daily Mode request was cancelled."
+          : "Smart Daily Mode is temporarily unavailable."
+      );
+    } finally {
+      window.clearTimeout(timeoutId);
+
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+
+      setLoading(false);
     }
+  }, [apiUrl]);
 
-    loadDailyMode();
+  useEffect(() => {
+    void loadDailyMode();
 
-    const interval = window.setInterval(loadDailyMode, 60_000);
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadDailyMode();
+      }
+    }, REFRESH_INTERVAL_MS);
 
     return () => {
-      cancelled = true;
-      window.clearInterval(interval);
+      window.clearInterval(intervalId);
+      abortControllerRef.current?.abort();
     };
-  }, [apiUrl]);
+  }, [loadDailyMode]);
 
   const city = data?.city;
   const dailyContext = data?.daily_context;
@@ -181,24 +233,40 @@ export default function SmartDailyModePanel({ citySlug, className = "" }: Props)
   const business =
     data?.featured_business ?? firstUsefulBusiness(data?.recommended_businesses);
 
-  const cityName = city?.name ?? "your area";
-  const cityHref = city?.slug ? `/${city.slug}` : "/near-me/pray";
-  const mosqueHref = mosque?.slug ? `/mosque/${mosque.slug}` : "/near-me/pray";
-  const businessHref = business?.slug
-    ? `/businesses/${business.slug}`
-    : "/businesses";
+  const cityName = cleanText(city?.name, 160) || "your area";
+  const citySlugSafe = cleanText(city?.slug, 160);
+  const mosqueSlugSafe = cleanText(mosque?.slug, 200);
+  const businessSlugSafe = cleanText(business?.slug, 200);
+
+  const cityHref =
+    citySlugSafe && isSafeSlug(citySlugSafe)
+      ? `/${encodeURIComponent(citySlugSafe)}`
+      : "/near-me/pray";
+
+  const mosqueHref =
+    mosqueSlugSafe && isSafeSlug(mosqueSlugSafe)
+      ? `/mosque/${encodeURIComponent(mosqueSlugSafe)}`
+      : "/near-me/pray";
+
+  const businessHref =
+    businessSlugSafe && isSafeSlug(businessSlugSafe)
+      ? `/business/${encodeURIComponent(businessSlugSafe)}`
+      : "/businesses";
 
   const currentPrayer =
-    prayer?.current_prayer_label ?? formatPrayer(prayer?.current_prayer);
+    cleanText(prayer?.current_prayer_label, 100) ||
+    formatPrayer(prayer?.current_prayer);
 
   const nextPrayer =
-    prayer?.next_prayer_label ?? formatPrayer(prayer?.next_prayer);
+    cleanText(prayer?.next_prayer_label, 100) ||
+    formatPrayer(prayer?.next_prayer);
 
   const mosqueDistance = formatDistance(mosque?.distance_km);
   const businessDistance = formatDistance(business?.distance_km);
 
   return (
     <section
+      aria-labelledby={headingId}
       className={`rounded-[2rem] border border-yellow-500/20 bg-[#020617]/80 p-6 shadow-2xl shadow-black/30 md:p-8 ${className}`}
     >
       <div className="flex flex-col gap-6 lg:flex-row lg:items-stretch lg:justify-between">
@@ -207,14 +275,16 @@ export default function SmartDailyModePanel({ citySlug, className = "" }: Props)
             Smart Daily Mode
           </div>
 
-          <h2 className="mt-4 text-3xl font-black tracking-tight text-white md:text-5xl">
+          <h2
+            id={headingId}
+            className="mt-4 text-3xl font-black tracking-tight text-white md:text-5xl"
+          >
             Your Muslim day, intelligently organised
           </h2>
 
           <p className="mt-4 max-w-2xl text-base leading-8 text-white/70 md:text-lg">
             SalahNearMe checks prayer context, city signals, nearby mosques,
-            halal businesses, Friday guidance, and daily reminders to help users
-            return every day.
+            halal businesses, Friday guidance and daily reminders.
           </p>
 
           <div className="mt-6 flex flex-wrap gap-3">
@@ -246,49 +316,65 @@ export default function SmartDailyModePanel({ citySlug, className = "" }: Props)
             Today&apos;s signal
           </div>
 
-          {loading ? (
-            <div className="mt-4 space-y-3">
-              <div className="h-4 w-3/4 animate-pulse rounded bg-white/10" />
-              <div className="h-4 w-1/2 animate-pulse rounded bg-white/10" />
-              <div className="h-4 w-2/3 animate-pulse rounded bg-white/10" />
-            </div>
-          ) : errorText ? (
-            <p className="mt-4 text-sm leading-7 text-white/60">{errorText}</p>
-          ) : (
-            <div className="mt-4 space-y-4">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                <div className="text-xs uppercase tracking-[0.25em] text-white/40">
-                  Area
+          <div id={statusId} aria-live="polite">
+            {loading ? (
+              <div className="mt-4 space-y-3" aria-busy="true">
+                <div className="h-4 w-3/4 animate-pulse rounded bg-white/10" />
+                <div className="h-4 w-1/2 animate-pulse rounded bg-white/10" />
+                <div className="h-4 w-2/3 animate-pulse rounded bg-white/10" />
+              </div>
+            ) : errorText ? (
+              <p className="mt-4 text-sm leading-7 text-white/60">
+                {errorText}
+              </p>
+            ) : (
+              <div className="mt-4 space-y-4">
+                <SignalCard label="Area" value={cityName} />
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="text-xs uppercase tracking-[0.25em] text-white/40">
+                    Prayer context
+                  </div>
+                  <div className="mt-1 text-lg font-black text-white">
+                    {currentPrayer}
+                  </div>
+                  <div className="mt-1 text-sm text-white/60">
+                    Next: {nextPrayer}
+                    {prayer?.next_prayer_time
+                      ? ` at ${cleanText(prayer.next_prayer_time, 40)}`
+                      : ""}
+                  </div>
                 </div>
-                <div className="mt-1 text-lg font-black text-white">
-                  {cityName}
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="text-xs uppercase tracking-[0.25em] text-white/40">
+                    Daily mode
+                  </div>
+                  <div className="mt-1 text-sm leading-7 text-white/70">
+                    {cleanText(dailyContext?.message, 1_000) ||
+                      "Prepare for your next salah and discover what is nearby."}
+                  </div>
                 </div>
               </div>
+            )}
+          </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                <div className="text-xs uppercase tracking-[0.25em] text-white/40">
-                  Prayer context
-                </div>
-                <div className="mt-1 text-lg font-black text-white">
-                  {currentPrayer}
-                </div>
-                <div className="mt-1 text-sm text-white/60">
-                  Next: {nextPrayer}
-                  {prayer?.next_prayer_time ? ` at ${prayer.next_prayer_time}` : ""}
-                </div>
-              </div>
+          {lastUpdatedAt ? (
+            <p className="mt-4 text-xs text-white/35">
+              Updated{" "}
+              {lastUpdatedAt.toLocaleTimeString("en-GB", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </p>
+          ) : null}
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                <div className="text-xs uppercase tracking-[0.25em] text-white/40">
-                  Daily mode
-                </div>
-                <div className="mt-1 text-sm leading-7 text-white/70">
-                  {dailyContext?.message ??
-                    "Prepare for your next salah and discover what is nearby."}
-                </div>
-              </div>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => void loadDailyMode()}
+            disabled={loading}
+            className="mt-4 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-white/65 transition hover:border-yellow-500/30 hover:text-yellow-300 disabled:opacity-50"
+          >
+            {loading ? "Refreshing…" : "Refresh daily mode"}
+          </button>
         </div>
       </div>
 
@@ -301,13 +387,13 @@ export default function SmartDailyModePanel({ citySlug, className = "" }: Props)
             <div className="text-xs font-black uppercase tracking-[0.3em] text-yellow-400">
               Recommended mosque
             </div>
-
             <div className="mt-3 text-xl font-black text-white">
-              {mosque?.name ?? "Find a mosque near you"}
+              {cleanText(mosque?.name, 200) || "Find a mosque near you"}
             </div>
-
             <div className="mt-2 text-sm text-white/60">
-              {mosque?.area || mosque?.city || cityName}
+              {cleanText(mosque?.area, 120) ||
+                cleanText(mosque?.city, 120) ||
+                cityName}
               {mosqueDistance ? ` • ${mosqueDistance}` : ""}
             </div>
           </Link>
@@ -319,13 +405,11 @@ export default function SmartDailyModePanel({ citySlug, className = "" }: Props)
             <div className="text-xs font-black uppercase tracking-[0.3em] text-yellow-400">
               Halal nearby
             </div>
-
             <div className="mt-3 text-xl font-black text-white">
-              {business?.name ?? "Discover halal places"}
+              {cleanText(business?.name, 200) || "Discover halal places"}
             </div>
-
             <div className="mt-2 text-sm text-white/60">
-              {business?.category ?? "Halal business"}
+              {cleanText(business?.category, 120) || "Halal business"}
               {businessDistance ? ` • ${businessDistance}` : ""}
             </div>
           </Link>
@@ -334,21 +418,29 @@ export default function SmartDailyModePanel({ citySlug, className = "" }: Props)
             <div className="text-xs font-black uppercase tracking-[0.3em] text-yellow-400">
               Daily reminder
             </div>
-
             <div className="mt-3 text-sm leading-7 text-white/70">
-              {data?.daily_hadith?.text
-                ? data.daily_hadith.text
-                : "Return daily for prayer-aware guidance, local halal discovery, and community signals."}
+              {cleanText(data?.daily_hadith?.text, 2_000) ||
+                "Return daily for prayer-aware guidance, local halal discovery and community signals."}
             </div>
-
             {data?.daily_hadith?.source ? (
               <div className="mt-3 text-xs font-bold text-white/40">
-                {data.daily_hadith.source}
+                {cleanText(data.daily_hadith.source, 300)}
               </div>
             ) : null}
           </div>
         </div>
       ) : null}
     </section>
+  );
+}
+
+function SignalCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+      <div className="text-xs uppercase tracking-[0.25em] text-white/40">
+        {label}
+      </div>
+      <div className="mt-1 text-lg font-black text-white">{value}</div>
+    </div>
   );
 }

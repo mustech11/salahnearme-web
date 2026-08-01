@@ -48,7 +48,8 @@ type HomeMosqueRow = {
 };
 
 const DEFAULT_LIMIT = 6;
-const MAX_QUERY_ROWS = 30;
+const MAX_QUERY_ROWS = 48;
+const MAX_LIVE_REPORT_ROWS = 500;
 
 function cleanText(
   value: string | null | undefined
@@ -300,7 +301,7 @@ export default async function HomeFeaturedMosques({
     .order("created_at", {
       ascending: false,
     })
-    .limit(300);
+    .limit(MAX_LIVE_REPORT_ROWS);
 
   if (reportError) {
     console.warn(
@@ -411,7 +412,7 @@ export default async function HomeFeaturedMosques({
   return (
     <section
       aria-labelledby="featured-mosques-heading"
-      className="premium-panel relative overflow-hidden rounded-[2rem] p-5 sm:p-7"
+      className="premium-panel relative isolate overflow-hidden rounded-[2rem] p-5 sm:p-7"
     >
       <div
         aria-hidden="true"
@@ -507,12 +508,12 @@ export default async function HomeFeaturedMosques({
             return (
               <article
                 key={mosque.id}
-                className="group relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-[#030a1d] shadow-[0_20px_55px_rgba(0,0,0,0.24)] transition duration-300 hover:-translate-y-1 hover:border-yellow-400/35"
+                className="group relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-[#030a1d] shadow-[0_20px_55px_rgba(0,0,0,0.24)] transition duration-300 hover:-translate-y-1 hover:border-yellow-400/35 focus-within:border-yellow-400/45"
               >
                 <div className="relative h-44 overflow-hidden">
                   <Image
                     src="/images/homepage-mosque-night.webp"
-                    alt=""
+                    alt={`${name} mosque exterior`}
                     fill
                     sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
                     className={[

@@ -1,6 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+const REQUEST_TIMEOUT_MS = 15 * 60_000;
+const MAX_RADIUS = 50_000;
+const MAX_DELAY_MS = 10_000;
+const MAX_CITY_LIMIT = 500;
 
 type BulkResult = {
   city: string;
@@ -28,7 +33,21 @@ type BulkResponse = {
   error?: string;
 };
 
+function safeInteger(
+  value: string,
+  fallback: number,
+  minimum: number,
+  maximum: number
+): number {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) return fallback;
+
+  return Math.min(maximum, Math.max(minimum, Math.trunc(parsed)));
+}
+
 export default function BulkImportBusinessesPanel() {
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [radius, setRadius] = useState("7000");
   const [delayMs, setDelayMs] = useState("1500");
   const [limit, setLimit] = useState("");
@@ -36,24 +55,68 @@ export default function BulkImportBusinessesPanel() {
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<BulkResponse | null>(null);
   const [errorText, setErrorText] = useState("");
+  const [lastCompletedAt, setLastCompletedAt] = useState<Date | null>(null);
 
-  async function handleBulkImport() {
+  const estimatedLimit = useMemo(
+    () =>
+      limit.trim()
+        ? safeInteger(limit, 1, 1, MAX_CITY_LIMIT)
+        : null,
+    [limit]
+  );
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  const handleBulkImport = useCallback(async () => {
+    const safeRadius = safeInteger(radius, 7000, 1000, MAX_RADIUS);
+    const safeDelay = safeInteger(delayMs, 1500, 0, MAX_DELAY_MS);
+    const safeLimit = limit.trim()
+      ? safeInteger(limit, 1, 1, MAX_CITY_LIMIT)
+      : null;
+
+    const confirmed = window.confirm(
+      safeLimit
+        ? `Import halal businesses for up to ${safeLimit} UK cities?`
+        : "Start the full UK halal business import?"
+    );
+
+    if (!confirmed) return;
+
+    abortControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
+
     try {
       setLoading(true);
       setErrorText("");
       setResponse(null);
 
       const params = new URLSearchParams();
-      params.set("radius", radius);
-      params.set("delay_ms", delayMs);
+      params.set("radius", String(safeRadius));
+      params.set("delay_ms", String(safeDelay));
       params.set("min_confidence", minConfidence);
 
-      if (limit.trim()) {
-        params.set("limit", limit.trim());
+      if (safeLimit !== null) {
+        params.set("limit", String(safeLimit));
       }
 
       const res = await fetch(`/api/import-businesses-bulk?${params.toString()}`, {
         method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
       });
 
       const data = (await res.json().catch(() => ({}))) as BulkResponse;
@@ -64,14 +127,27 @@ export default function BulkImportBusinessesPanel() {
       }
 
       setResponse(data);
+      setLastCompletedAt(new Date());
     } catch (error) {
       setErrorText(
-        error instanceof Error ? error.message : "Unexpected bulk import error."
+        error instanceof DOMException && error.name === "AbortError"
+          ? timedOut
+            ? "The bulk business import exceeded the allowed time."
+            : "The bulk business import was cancelled."
+          : error instanceof Error
+            ? error.message
+            : "Unexpected bulk import error."
       );
     } finally {
+      window.clearTimeout(timeoutId);
+
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+
       setLoading(false);
     }
-  }
+  }, [delayMs, limit, minConfidence, radius])
 
   return (
     <section className="rounded-3xl border border-green-500/20 bg-[rgb(var(--card))] p-8">
@@ -94,6 +170,10 @@ export default function BulkImportBusinessesPanel() {
             Radius (meters)
           </label>
           <input
+            type="number"
+            min="1000"
+            max={MAX_RADIUS}
+            step="1000"
             value={radius}
             onChange={(e) => setRadius(e.target.value)}
             className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-4 text-white outline-none focus:border-yellow-400"
@@ -105,6 +185,10 @@ export default function BulkImportBusinessesPanel() {
             Delay per city (ms)
           </label>
           <input
+            type="number"
+            min="0"
+            max={MAX_DELAY_MS}
+            step="250"
             value={delayMs}
             onChange={(e) => setDelayMs(e.target.value)}
             className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-4 text-white outline-none focus:border-yellow-400"
@@ -116,6 +200,10 @@ export default function BulkImportBusinessesPanel() {
             Limit cities
           </label>
           <input
+            type="number"
+            min="1"
+            max={MAX_CITY_LIMIT}
+            step="1"
             value={limit}
             onChange={(e) => setLimit(e.target.value)}
             placeholder="Optional"
@@ -150,8 +238,16 @@ export default function BulkImportBusinessesPanel() {
       </div>
 
       <p className="mt-6 text-white/60">
-        Start with limit 3 to 5 for testing, then remove the limit for full UK import.
+        Start with limit 3 to 5 for testing, then remove the limit for full UK
+        import.
+        {estimatedLimit ? ` Current limit: ${estimatedLimit}.` : ""}
       </p>
+
+      {lastCompletedAt ? (
+        <p className="mt-3 text-xs text-white/35">
+          Last completed {lastCompletedAt.toLocaleString("en-GB")}
+        </p>
+      ) : null}
 
       {errorText && (
         <div className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
@@ -284,4 +380,3 @@ export default function BulkImportBusinessesPanel() {
     </section>
   );
 }
-

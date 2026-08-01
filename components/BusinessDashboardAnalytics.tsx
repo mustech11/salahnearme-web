@@ -182,10 +182,13 @@ export default function BusinessDashboardAnalytics({
     [businessId]
   );
 
-  const periodDays = useMemo(
-    () => normaliseDays(days),
-    [days]
-  );
+  const [selectedDays, setSelectedDays] = useState(() => normaliseDays(days));
+
+  useEffect(() => {
+    setSelectedDays(normaliseDays(days));
+  }, [days]);
+
+  const periodDays = selectedDays;
 
   const validationError = useMemo(() => {
     if (!UUID_REGEX.test(cleanBusinessId)) {
@@ -406,16 +409,29 @@ export default function BusinessDashboardAnalytics({
           ) : null}
         </div>
 
-        <button
-        type="button"
-        onClick={() => {
-          void loadAnalytics();
-        }}
-        className="w-fit rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-5 py-3 text-sm font-bold text-yellow-300 transition hover:bg-yellow-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300"
-      >
-        Refresh analytics
-      </button>
-            </div>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <select
+            value={selectedDays}
+            onChange={(event) => setSelectedDays(normaliseDays(Number(event.target.value)))}
+            className="min-h-11 rounded-xl border border-white/10 bg-black px-4 py-2.5 text-sm font-semibold text-white outline-none focus:border-yellow-400"
+          >
+            <option value={7}>Last 7 days</option>
+            <option value={30}>Last 30 days</option>
+            <option value={90}>Last 90 days</option>
+            <option value={365}>Last 365 days</option>
+          </select>
+
+          <button
+            type="button"
+            onClick={() => {
+              void loadAnalytics();
+            }}
+            className="w-fit rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-5 py-3 text-sm font-bold text-yellow-300 transition hover:bg-yellow-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300"
+          >
+            Refresh analytics
+          </button>
+        </div>
+      </div>
 
       <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <StatCard

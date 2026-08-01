@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type JumuahTime = {
   id?: string | null;
@@ -38,6 +39,8 @@ type Props = {
 const MAX_SESSIONS = 8;
 const MAX_LABEL_LENGTH = 80;
 const MAX_NOTES_LENGTH = 500;
+const REQUEST_TIMEOUT_MS = 30_000;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function toInputTime(value: string | null | undefined) {
   if (!value) {
@@ -154,18 +157,41 @@ export default function MosqueJumuahTimesEditor({
   mosqueName,
   initialJumuahTimes,
 }: Props) {
+  const router = useRouter();
+  const abortControllerRef = useRef<AbortController | null>(null);
   const initialRows = useMemo(
     () => buildInitialRows(initialJumuahTimes),
     [initialJumuahTimes]
   );
 
   const [sessions, setSessions] = useState<JumuahForm[]>(initialRows);
+  const [savedSnapshot, setSavedSnapshot] = useState(() => JSON.stringify(initialRows));
   const [savingIndex, setSavingIndex] = useState<number | null>(null);
   const [savingAll, setSavingAll] = useState(false);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
   const activeCount = getActiveCount(sessions);
+  const hasUnsavedChanges = JSON.stringify(sessions) !== savedSnapshot;
+
+  useEffect(() => {
+    setSessions(initialRows);
+    setSavedSnapshot(JSON.stringify(initialRows));
+    setMessage("");
+    setErrorMessage("");
+  }, [initialRows]);
+
+  useEffect(() => () => abortControllerRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasUnsavedChanges]);
   const completeCount = getCompleteCount(sessions);
 
   function updateSession(
@@ -255,11 +281,25 @@ export default function MosqueJumuahTimesEditor({
   }
 
   async function submitSession(session: JumuahForm) {
-    const res = await fetch("/api/mosque/jumuah-times", {
+    if (!UUID_REGEX.test(mosqueId)) {
+      throw new Error("A valid mosque is required before Jumu’ah sessions can be saved.");
+    }
+
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const res = await fetch("/api/mosque/jumuah-times", {
       method: "POST",
       headers: {
+        Accept: "application/json",
         "Content-Type": "application/json",
       },
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: controller.signal,
       body: JSON.stringify({
         id: session.id || null,
         mosque_id: mosqueId,
@@ -277,7 +317,11 @@ export default function MosqueJumuahTimesEditor({
       throw new Error(data.error ?? "Could not save Jumu’ah session.");
     }
 
-    return data.jumuah_time;
+      return data.jumuah_time;
+    } finally {
+      window.clearTimeout(timeoutId);
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
+    }
   }
 
   async function saveSession(index: number) {
@@ -303,13 +347,16 @@ export default function MosqueJumuahTimesEditor({
 
       const saved = await submitSession(session);
 
-      setSessions((current) =>
-        current.map((item, itemIndex) =>
+      setSessions((current) => {
+        const next = current.map((item, itemIndex) =>
           itemIndex === index ? normaliseSavedSession(item, saved) : item
-        )
-      );
+        );
+        setSavedSnapshot(JSON.stringify(next));
+        return next;
+      });
 
       setMessage(`${session.label || "Jumu’ah"} saved successfully.`);
+      router.refresh();
     } catch (error) {
       setErrorMessage(
         error instanceof Error
@@ -356,7 +403,9 @@ export default function MosqueJumuahTimesEditor({
       }
 
       setSessions(savedRows);
+      setSavedSnapshot(JSON.stringify(savedRows));
       setMessage("All Jumu’ah sessions saved successfully.");
+      router.refresh();
     } catch (error) {
       setErrorMessage(
         error instanceof Error
@@ -369,7 +418,7 @@ export default function MosqueJumuahTimesEditor({
   }
 
   return (
-    <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8">
+    <section className="relative overflow-hidden rounded-[2rem] border border-yellow-500/20 bg-[radial-gradient(circle_at_top_right,rgba(234,179,8,0.08),transparent_30%),rgb(var(--card))] p-5 sm:p-6 md:p-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
@@ -551,10 +600,10 @@ export default function MosqueJumuahTimesEditor({
         <button
           type="button"
           onClick={saveAllSessions}
-          disabled={savingAll || savingIndex !== null}
+          disabled={savingAll || savingIndex !== null || !hasUnsavedChanges}
           className="rounded-2xl bg-yellow-500 px-5 py-3 text-sm font-bold text-black hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {savingAll ? "Saving all..." : "Save all sessions"}
+          {savingAll ? "Saving all..." : hasUnsavedChanges ? "Save all sessions" : "All sessions saved"}
         </button>
       </div>
 

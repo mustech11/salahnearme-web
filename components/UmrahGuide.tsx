@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+
 import HajjAudioPlayer from "@/components/HajjAudioPlayer";
 import HajjImageFrame from "@/components/HajjImageFrame";
 
@@ -14,103 +15,115 @@ type Props = {
   steps: UmrahStep[];
 };
 
-const stepAudioMap: Record<string, { src: string; label: string }> = {
-  "Enter Ihram": {
-    src: "/audio/hajj/talbiyah.mp3",
-    label: "Talbiyah",
-  },
-  "Enter Masjid al-Haram": {
-    src: "/audio/hajj/general-dhikr.mp3",
-    label: "Dhikr",
-  },
-  Tawaf: {
-    src: "/audio/hajj/general-dhikr.mp3",
-    label: "Dhikr during Tawaf",
-  },
-  "Two Rak‘ahs After Tawaf": {
-    src: "/audio/hajj/general-dhikr.mp3",
-    label: "Dhikr",
-  },
-  "Drink Zamzam": {
-    src: "/audio/hajj/general-dhikr.mp3",
-    label: "Du‘a",
-  },
-  "Sa’i": {
-    src: "/audio/hajj/general-dhikr.mp3",
-    label: "Dhikr during Sa’i",
-  },
-  "Shaving or Trimming": {
-    src: "/audio/hajj/general-dhikr.mp3",
-    label: "Dhikr",
-  },
+const STEP_AUDIO_MAP: Record<string, { src: string; label: string }> = {
+  "Entering Ihram": { src: "/audio/hajj/talbiyah.mp3", label: "Talbiyah" },
+  "At the Miqat": { src: "/audio/hajj/talbiyah.mp3", label: "Talbiyah" },
+  Talbiyah: { src: "/audio/hajj/talbiyah.mp3", label: "Talbiyah" },
+  Mina: { src: "/audio/hajj/general-dhikr.mp3", label: "Dhikr" },
+  Arafah: { src: "/audio/hajj/arafah-dua.mp3", label: "Du‘a of Arafah" },
+  Muzdalifah: { src: "/audio/hajj/general-dhikr.mp3", label: "Dhikr" },
+  Jamarat: { src: "/audio/hajj/general-dhikr.mp3", label: "Takbeer" },
+  "Farewell Tawaf": { src: "/audio/hajj/general-dhikr.mp3", label: "Dhikr" },
 };
 
-function getStepFromUrl(totalSteps: number) {
-  const params = new URLSearchParams(window.location.search);
-  const raw = params.get("step");
-  const parsed = raw ? Number(raw) : null;
-
-  if (!parsed || !Number.isFinite(parsed)) return null;
-
-  const index = parsed - 1;
-
-  if (index < 0 || index >= totalSteps) return null;
-
-  return index;
+function clean(value: unknown, max = 8000): string {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
-function updateStepUrl(index: number) {
-  const url = new URL(window.location.href);
+function normaliseSteps(steps: UmrahStep[]) {
+  return (steps ?? [])
+    .map((step) => ({
+      title: clean(step.title, 240),
+      image: clean(step.image, 1000),
+      details: clean(step.details),
+    }))
+    .filter(
+      (step) =>
+        step.title &&
+        step.image &&
+        step.details &&
+        (step.image.startsWith("/") || /^https?:\/\//i.test(step.image))
+    );
+}
+
+function writeStorage(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage is optional.
+  }
+}
+
+function stepFromUrl(total: number): number | null {
+  const raw = new URLSearchParams(location.search).get("step");
+  const parsed = raw ? Number(raw) - 1 : Number.NaN;
+
+  return Number.isInteger(parsed) && parsed >= 0 && parsed < total
+    ? parsed
+    : null;
+}
+
+function updateUrl(index: number) {
+  const url = new URL(location.href);
   url.searchParams.set("step", String(index + 1));
-  window.history.replaceState({}, "", url.toString());
+  history.replaceState({}, "", url.toString());
 }
 
 export default function UmrahGuide({ steps }: Props) {
-  const [currentStep, setCurrentStep] = useState(0);
+  const headingId = useId();
+  const safeSteps = useMemo(() => normaliseSteps(steps), [steps]);
+
+  const [current, setCurrent] = useState(0);
   const [autoPlay, setAutoPlay] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [copyMessage, setCopyMessage] = useState("");
 
   useEffect(() => {
-    const urlStep = getStepFromUrl(steps.length);
-
-    if (urlStep !== null) {
-      setCurrentStep(urlStep);
-    } else {
-      const savedStep = window.localStorage.getItem("snm_umrah_step");
-      const parsedStep = savedStep ? Number(savedStep) : 0;
-
-      if (
-        Number.isFinite(parsedStep) &&
-        parsedStep >= 0 &&
-        parsedStep < steps.length
-      ) {
-        setCurrentStep(parsedStep);
-      }
+    if (!safeSteps.length) {
+      setLoaded(true);
+      return;
     }
 
-    setAutoPlay(window.localStorage.getItem("snm_umrah_autoplay") === "true");
+    const fromUrl = stepFromUrl(safeSteps.length);
+
+    try {
+      const saved = Number(localStorage.getItem("snm_umrah_step"));
+
+      if (fromUrl !== null) {
+        setCurrent(fromUrl);
+      } else if (
+        Number.isInteger(saved) &&
+        saved >= 0 &&
+        saved < safeSteps.length
+      ) {
+        setCurrent(saved);
+      }
+
+      setAutoPlay(localStorage.getItem("snm_umrah_autoplay") === "true");
+    } catch {
+      // Storage is optional.
+    }
+
     setLoaded(true);
-  }, [steps.length]);
+  }, [safeSteps.length]);
 
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || !safeSteps.length) return;
 
-    window.localStorage.setItem("snm_umrah_step", String(currentStep));
-    updateStepUrl(currentStep);
+    writeStorage("snm_umrah_step", String(current));
+    updateUrl(current);
 
-    window.dispatchEvent(
-      new CustomEvent("umrah-step-change", { detail: currentStep })
+    dispatchEvent(
+      new CustomEvent("umrah-step-change", { detail: current })
     );
-
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [currentStep, loaded]);
+  }, [current, loaded, safeSteps.length]);
 
   useEffect(() => {
     if (!loaded) return;
 
-    window.localStorage.setItem("snm_umrah_autoplay", String(autoPlay));
+    writeStorage("snm_umrah_autoplay", String(autoPlay));
 
-    window.dispatchEvent(
+    dispatchEvent(
       new CustomEvent("umrah-audio-toggle", { detail: autoPlay })
     );
   }, [autoPlay, loaded]);
@@ -119,50 +132,76 @@ export default function UmrahGuide({ steps }: Props) {
     if (!loaded || !autoPlay) return;
 
     const timer = window.setTimeout(() => {
-      const audio = document.querySelector<HTMLAudioElement>(
-        "[data-hajj-audio='true']"
-      );
-
-      audio?.play().catch(() => {});
-    }, 600);
+      document
+        .querySelector<HTMLAudioElement>("[data-hajj-audio='true']")
+        ?.play()
+        .catch(() => undefined);
+    }, 700);
 
     return () => window.clearTimeout(timer);
-  }, [currentStep, autoPlay, loaded]);
+  }, [autoPlay, current, loaded]);
 
   useEffect(() => {
-    const handler = (event: Event) => {
-      const customEvent = event as CustomEvent<number>;
-      const nextStep = customEvent.detail;
+    const floatingHandler = (event: Event) => {
+      const next = (event as CustomEvent<number>).detail;
 
       if (
-        Number.isFinite(nextStep) &&
-        nextStep >= 0 &&
-        nextStep < steps.length
+        Number.isInteger(next) &&
+        next >= 0 &&
+        next < safeSteps.length
       ) {
-        setCurrentStep(nextStep);
+        setCurrent(next);
       }
     };
 
-    window.addEventListener("umrah-floating-step-change", handler);
+    const popHandler = () => {
+      const next = stepFromUrl(safeSteps.length);
+      if (next !== null) setCurrent(next);
+    };
+
+    addEventListener("umrah-floating-step-change", floatingHandler);
+    addEventListener("popstate", popHandler);
 
     return () => {
-      window.removeEventListener("umrah-floating-step-change", handler);
+      removeEventListener("umrah-floating-step-change", floatingHandler);
+      removeEventListener("popstate", popHandler);
     };
-  }, [steps.length]);
+  }, [safeSteps.length]);
 
-  const safeStepIndex =
-    currentStep >= 0 && currentStep < steps.length ? currentStep : 0;
+  if (!safeSteps.length) {
+    return (
+      <section className="rounded-3xl border border-white/10 bg-[rgb(var(--card))] p-6 text-sm text-white/55">
+        Guided Umrah steps are not currently available.
+      </section>
+    );
+  }
 
-  const step = steps[safeStepIndex];
-  const audio = stepAudioMap[step.title] ?? null;
+  const safeCurrent =
+    current >= 0 && current < safeSteps.length ? current : 0;
 
-  const progress = useMemo(() => {
-    return Math.round(((safeStepIndex + 1) / steps.length) * 100);
-  }, [safeStepIndex, steps.length]);
+  const step = safeSteps[safeCurrent];
+  const audio = STEP_AUDIO_MAP[step.title] ?? null;
+  const progress = Math.round(
+    ((safeCurrent + 1) / safeSteps.length) * 100
+  );
+
+  async function copyStepLink() {
+    updateUrl(safeCurrent);
+
+    try {
+      await navigator.clipboard.writeText(location.href);
+      setCopyMessage("Step link copied.");
+    } catch {
+      setCopyMessage("Copy is unavailable.");
+    }
+
+    window.setTimeout(() => setCopyMessage(""), 2500);
+  }
 
   return (
     <section
       id="guided-umrah"
+      aria-labelledby={headingId}
       className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8"
     >
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -171,38 +210,33 @@ export default function UmrahGuide({ steps }: Props) {
             Guided Umrah Mode
           </div>
 
-          <h2 className="mt-3 text-3xl font-bold text-white">
+          <h2 id={headingId} className="mt-3 text-3xl font-black text-white">
             Follow Umrah step by step
           </h2>
 
-          <p className="mt-2 max-w-3xl text-white/60">
-            Step {safeStepIndex + 1} of {steps.length}. Shareable link:
-            <span className="text-yellow-400">
-              {" "}
-              /umrah?step={safeStepIndex + 1}
-            </span>
+          <p className="mt-2 max-w-3xl text-sm leading-7 text-white/60">
+            Step {safeCurrent + 1} of {safeSteps.length}. This guide supports
+            your journey but does not replace qualified scholarly or official guidance.
           </p>
         </div>
 
         <div className="flex flex-wrap gap-3">
           <button
             type="button"
-            onClick={() => {
-              updateStepUrl(safeStepIndex);
-              navigator.clipboard?.writeText(window.location.href).catch(() => {});
-            }}
-            className="rounded-xl border border-white/10 bg-black px-4 py-3 text-sm font-semibold text-white/70 hover:border-yellow-500/30 hover:text-yellow-400"
+            onClick={() => void copyStepLink()}
+            className="rounded-xl border border-white/10 bg-black px-4 py-3 text-sm font-bold text-white/70 hover:border-yellow-500/30 hover:text-yellow-400"
           >
             Copy step link
           </button>
 
           <button
             type="button"
+            aria-pressed={autoPlay}
             onClick={() => setAutoPlay((value) => !value)}
             className={
               autoPlay
-                ? "rounded-xl border border-yellow-500/30 bg-yellow-500 px-4 py-3 text-sm font-semibold text-black"
-                : "rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm font-semibold text-yellow-400 hover:bg-yellow-500/10"
+                ? "rounded-xl border border-yellow-500/30 bg-yellow-500 px-4 py-3 text-sm font-black text-black"
+                : "rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm font-black text-yellow-400 hover:bg-yellow-500/10"
             }
           >
             {autoPlay ? "Auto audio: ON" : "Auto audio: OFF"}
@@ -210,8 +244,9 @@ export default function UmrahGuide({ steps }: Props) {
 
           <button
             type="button"
-            onClick={() => setCurrentStep(0)}
-            className="rounded-xl border border-white/10 bg-black px-4 py-3 text-sm font-semibold text-white/70 hover:border-yellow-500/30 hover:text-yellow-400"
+            disabled={safeCurrent === 0}
+            onClick={() => setCurrent(0)}
+            className="rounded-xl border border-white/10 bg-black px-4 py-3 text-sm font-bold text-white/70 hover:border-yellow-500/30 hover:text-yellow-400 disabled:opacity-40"
           >
             Restart
           </button>
@@ -220,7 +255,7 @@ export default function UmrahGuide({ steps }: Props) {
 
       <div className="mt-6 h-2 overflow-hidden rounded-full bg-white/10">
         <div
-          className="h-full rounded-full bg-yellow-500 transition-all duration-500"
+          className="h-full rounded-full bg-yellow-500 transition-[width] duration-500"
           style={{ width: `${progress}%` }}
         />
       </div>
@@ -229,27 +264,34 @@ export default function UmrahGuide({ steps }: Props) {
         <HajjImageFrame
           src={step.image}
           alt={step.title}
-          priority={safeStepIndex === 0}
+          priority={safeCurrent === 0}
         />
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <span className="rounded-full bg-yellow-500 px-3 py-1 text-sm font-bold text-black">
-            {safeStepIndex + 1}
+          <span className="rounded-full bg-yellow-500 px-3 py-1 text-sm font-black text-black">
+            {safeCurrent + 1}
           </span>
 
-          <span className="text-sm font-semibold text-yellow-400">
-            Umrah Step
+          <span className="text-sm font-black text-yellow-400">
+            Umrah step
           </span>
         </div>
 
-        <h3 className="mt-3 text-3xl font-bold text-white">{step.title}</h3>
+        <h3 className="mt-3 text-3xl font-black text-white">
+          {step.title}
+        </h3>
 
-        <p className="mt-3 max-w-4xl text-white/70">{step.details}</p>
+        <p
+          dir="auto"
+          className="mt-3 max-w-4xl whitespace-pre-wrap text-sm leading-7 text-white/70"
+        >
+          {step.details}
+        </p>
 
         <div className="mt-5">
           <HajjAudioPlayer
             src={audio?.src ?? null}
-            label={audio?.label ?? "Dhikr"}
+            label={audio?.label ?? "Umrah audio guidance"}
           />
         </div>
       </div>
@@ -257,25 +299,30 @@ export default function UmrahGuide({ steps }: Props) {
       <div className="mt-6 grid gap-3 sm:grid-cols-2">
         <button
           type="button"
-          disabled={safeStepIndex === 0}
-          onClick={() => setCurrentStep((s) => Math.max(0, s - 1))}
-          className="rounded-2xl border border-yellow-500/30 bg-black px-5 py-4 font-semibold text-yellow-400 hover:bg-yellow-500/10 disabled:cursor-not-allowed disabled:opacity-30"
+          disabled={safeCurrent === 0}
+          onClick={() => setCurrent((value) => Math.max(0, value - 1))}
+          className="rounded-2xl border border-yellow-500/30 bg-black px-5 py-4 font-black text-yellow-400 hover:bg-yellow-500/10 disabled:opacity-30"
         >
           Previous
         </button>
 
         <button
           type="button"
-          disabled={safeStepIndex === steps.length - 1}
+          disabled={safeCurrent === safeSteps.length - 1}
           onClick={() =>
-            setCurrentStep((s) => Math.min(steps.length - 1, s + 1))
+            setCurrent((value) =>
+              Math.min(safeSteps.length - 1, value + 1)
+            )
           }
-          className="rounded-2xl bg-yellow-500 px-5 py-4 font-semibold text-black hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-30"
+          className="rounded-2xl bg-yellow-500 px-5 py-4 font-black text-black hover:bg-yellow-400 disabled:opacity-30"
         >
           Next
         </button>
       </div>
+
+      <div aria-live="polite" className="sr-only">
+        {copyMessage}
+      </div>
     </section>
   );
 }
-

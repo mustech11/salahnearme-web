@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type PrayerKey = "fajr" | "sunrise" | "dhuhr" | "asr" | "maghrib" | "isha";
 
@@ -78,6 +79,8 @@ type SaveResponse = {
 };
 
 const MAX_NOTES_LENGTH = 800;
+const REQUEST_TIMEOUT_MS = 30_000;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
@@ -258,18 +261,43 @@ export default function MosquePrayerTimesEditor({
   mosqueName,
   initialPrayerTime,
 }: Props) {
+  const router = useRouter();
+  const abortControllerRef = useRef<AbortController | null>(null);
   const initialForm = useMemo(
     () => buildInitialForm(initialPrayerTime),
     [initialPrayerTime]
   );
 
   const [form, setForm] = useState<FormState>(initialForm);
+  const [savedSnapshot, setSavedSnapshot] = useState(() => JSON.stringify(initialForm));
   const [saving, setSaving] = useState(false);
   const [loadingDate, setLoadingDate] = useState(false);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
   const stats = getCompletionStats(form);
+  const hasUnsavedChanges = JSON.stringify(form) !== savedSnapshot;
+
+  useEffect(() => {
+    setForm(initialForm);
+    setSavedSnapshot(JSON.stringify(initialForm));
+    setMessage("");
+    setErrorMessage("");
+  }, [initialForm]);
+
+  useEffect(() => {
+    return () => abortControllerRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasUnsavedChanges]);
 
   function updateField(field: keyof FormState, value: string) {
     setMessage("");
@@ -282,11 +310,22 @@ export default function MosquePrayerTimesEditor({
   }
 
   async function loadDate(date: string) {
+    if (!UUID_REGEX.test(mosqueId)) {
+      setMessage("");
+      setErrorMessage("A valid mosque is required before prayer times can be loaded.");
+      return;
+    }
+
     if (!isValidDate(date)) {
       setMessage("");
       setErrorMessage("Choose a valid date first.");
       return;
     }
+
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
       setLoadingDate(true);
@@ -299,6 +338,9 @@ export default function MosquePrayerTimesEditor({
         )}&date=${encodeURIComponent(date)}`,
         {
           cache: "no-store",
+          credentials: "same-origin",
+          signal: controller.signal,
+          headers: { Accept: "application/json" },
         }
       );
 
@@ -321,14 +363,26 @@ export default function MosquePrayerTimesEditor({
       } else {
         setMessage("No timetable found for this date. You can create one now.");
       }
-    } catch {
-      setErrorMessage("Could not load prayer times.");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "The prayer-time request timed out or was cancelled."
+          : "Could not load prayer times."
+      );
     } finally {
+      window.clearTimeout(timeoutId);
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
       setLoadingDate(false);
     }
   }
 
   async function save() {
+    if (!UUID_REGEX.test(mosqueId)) {
+      setMessage("");
+      setErrorMessage("A valid mosque is required before prayer times can be saved.");
+      return;
+    }
+
     const validationError = validateForm(form);
 
     if (validationError) {
@@ -336,6 +390,11 @@ export default function MosquePrayerTimesEditor({
       setErrorMessage(validationError);
       return;
     }
+
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
       setSaving(true);
@@ -345,8 +404,12 @@ export default function MosquePrayerTimesEditor({
       const res = await fetch("/api/mosque/prayer-times", {
         method: "POST",
         headers: {
+          Accept: "application/json",
           "Content-Type": "application/json",
         },
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
         body: JSON.stringify({
           mosque_id: mosqueId,
           prayer_date: form.prayer_date,
@@ -381,17 +444,26 @@ export default function MosquePrayerTimesEditor({
         return;
       }
 
-      setForm((current) => normaliseSavedForm(current, data.prayer_time));
+      const nextForm = normaliseSavedForm(form, data.prayer_time);
+      setForm(nextForm);
+      setSavedSnapshot(JSON.stringify(nextForm));
       setMessage("Mosque prayer times saved successfully.");
-    } catch {
-      setErrorMessage("Could not save prayer times.");
+      router.refresh();
+    } catch (error) {
+      setErrorMessage(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "The save request timed out or was cancelled."
+          : "Could not save prayer times."
+      );
     } finally {
+      window.clearTimeout(timeoutId);
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
       setSaving(false);
     }
   }
 
   return (
-    <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8">
+    <section className="relative overflow-hidden rounded-[2rem] border border-yellow-500/20 bg-[radial-gradient(circle_at_top_right,rgba(234,179,8,0.08),transparent_30%),rgb(var(--card))] p-5 sm:p-6 md:p-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
@@ -579,10 +651,10 @@ export default function MosquePrayerTimesEditor({
         <button
           type="button"
           onClick={save}
-          disabled={saving || loadingDate}
+          disabled={saving || loadingDate || !hasUnsavedChanges}
           className="rounded-2xl bg-yellow-500 px-6 py-3 text-sm font-bold text-black transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {saving ? "Saving..." : "Save prayer times"}
+          {saving ? "Saving..." : hasUnsavedChanges ? "Save prayer times" : "Prayer times saved"}
         </button>
 
         <button

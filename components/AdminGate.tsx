@@ -1,5 +1,3 @@
-"use client";
-
 import type { ReactNode } from "react";
 
 type Props = {
@@ -7,21 +5,12 @@ type Props = {
 };
 
 /**
- * Phase 9.3 AdminGate
- * -------------------
- * This component is now intentionally a pass-through wrapper.
+ * Presentation-only wrapper.
  *
- * Why?
- * - Admin security is now handled server-side by app/admin/layout.tsx
- * - The server layout uses requireAdmin()
- * - requireAdmin() checks the signed-in Supabase user against public.admin_users
- * - This avoids the old client-side “Checking access...” problem
- *
- * Important:
- * Do not add password checks, sessionStorage checks, or client-side access checks here.
- * Client-side gates are not strong security. Server-side role checks are.
+ * Administrative authorisation must remain in app/admin/layout.tsx through
+ * requireAdmin(). Never add client-side passwords, sessionStorage checks or
+ * browser-only role checks here.
  */
 export default function AdminGate({ children }: Props) {
   return <>{children}</>;
 }
-

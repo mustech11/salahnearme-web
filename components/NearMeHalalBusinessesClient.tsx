@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import BusinessTrackedLink from "@/components/BusinessTrackedLink";
 
@@ -121,12 +121,22 @@ function categoryMatches(category: string | null, filter: string) {
   return true;
 }
 
+const REQUEST_TIMEOUT_MS = 20_000;
+
 export default function NearMeHalalBusinessesClient() {
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const lastPositionRef = useRef<{ lat: number; lng: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [radius, setRadius] = useState("5000");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   function getPosition(): Promise<GeolocationPosition> {
     return new Promise((resolve, reject) => {
@@ -143,23 +153,33 @@ export default function NearMeHalalBusinessesClient() {
     });
   }
 
-  async function findBusinesses() {
+  const runSearch = useCallback(async (lat: number, lng: number) => {
+    abortControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    const timeoutId = window.setTimeout(
+      () => controller.abort(),
+      REQUEST_TIMEOUT_MS
+    );
+
     try {
       setLoading(true);
       setErrorMessage("");
-      setBusinesses([]);
-
-      const position = await getPosition();
 
       const params = new URLSearchParams({
-        lat: String(position.coords.latitude),
-        lng: String(position.coords.longitude),
+        lat: String(lat),
+        lng: String(lng),
         radius,
         limit: "60",
       });
 
       const res = await fetch(`/api/businesses/near?${params.toString()}`, {
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
         cache: "no-store",
+        signal: controller.signal,
       });
 
       const data = (await res.json().catch(() => ({}))) as ApiResponse;
@@ -172,12 +192,43 @@ export default function NearMeHalalBusinessesClient() {
       setBusinesses(data.businesses ?? []);
     } catch (error) {
       setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Location access failed. Please try again."
+        error instanceof DOMException && error.name === "AbortError"
+          ? "The nearby business search timed out. Please try again."
+          : error instanceof Error
+            ? error.message
+            : "Location access failed. Please try again."
       );
     } finally {
+      window.clearTimeout(timeoutId);
+
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+
       setLoading(false);
+    }
+  }, [radius]);
+
+  async function findBusinesses() {
+    try {
+      setLoading(true);
+      setErrorMessage("");
+
+      const position = await getPosition();
+      const coordinates = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+      };
+
+      lastPositionRef.current = coordinates;
+      await runSearch(coordinates.lat, coordinates.lng);
+    } catch (error) {
+      setLoading(false);
+      setErrorMessage(
+        error instanceof Error
+            ? error.message
+            : "Location access failed. Please try again."
+      );
     }
   }
 
@@ -194,7 +245,7 @@ export default function NearMeHalalBusinessesClient() {
   }, [filteredBusinesses]);
 
   return (
-    <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-8">
+    <section className="premium-panel rounded-[2rem] p-5 sm:p-7">
       <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
         Halal Businesses Near Me
       </div>
@@ -518,4 +569,3 @@ function Badge({
     </span>
   );
 }
-

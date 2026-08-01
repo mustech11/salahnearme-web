@@ -1,6 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type CityResult = {
   city: string;
@@ -28,244 +35,391 @@ type BulkResponse = {
   error?: string;
 };
 
+type RunState = "idle" | "running" | "success" | "error";
+
+const REQUEST_TIMEOUT_MS = 15 * 60_000;
+const MIN_RADIUS = 1_000;
+const MAX_RADIUS = 50_000;
+const MIN_DELAY_MS = 0;
+const MAX_DELAY_MS = 10_000;
+const MAX_CITY_LIMIT = 500;
+
+function clampInteger(
+  value: string,
+  fallback: number,
+  minimum: number,
+  maximum: number
+): number {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) return fallback;
+
+  return Math.min(maximum, Math.max(minimum, Math.trunc(parsed)));
+}
+
+async function readJson(response: Response): Promise<BulkResponse | null> {
+  try {
+    const value: unknown = await response.json();
+
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+
+    return value as BulkResponse;
+  } catch {
+    return null;
+  }
+}
+
 export default function BulkUkImportPanel() {
+  const statusId = useId();
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const [radius, setRadius] = useState("5000");
   const [delayMs, setDelayMs] = useState("1500");
   const [limit, setLimit] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [runState, setRunState] = useState<RunState>("idle");
   const [errorText, setErrorText] = useState("");
   const [result, setResult] = useState<BulkResponse | null>(null);
+  const [lastCompletedAt, setLastCompletedAt] = useState<Date | null>(null);
 
-  async function handleBulkImport() {
-    setLoading(true);
+  const loading = runState === "running";
+
+  const estimatedCities = useMemo(
+    () =>
+      limit.trim()
+        ? clampInteger(limit, 1, 1, MAX_CITY_LIMIT)
+        : null,
+    [limit]
+  );
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  const handleBulkImport = useCallback(async () => {
+    const safeRadius = clampInteger(radius, 5_000, MIN_RADIUS, MAX_RADIUS);
+    const safeDelay = clampInteger(
+      delayMs,
+      1_500,
+      MIN_DELAY_MS,
+      MAX_DELAY_MS
+    );
+    const safeLimit = limit.trim()
+      ? clampInteger(limit, 1, 1, MAX_CITY_LIMIT)
+      : null;
+
+    const confirmed = window.confirm(
+      safeLimit
+        ? `Import mosques for up to ${safeLimit} UK cities?`
+        : "Start the full UK mosque import for every active city?"
+    );
+
+    if (!confirmed) return;
+
+    abortControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
+
+    setRunState("running");
     setErrorText("");
     setResult(null);
 
     try {
       const query = new URLSearchParams({
-        radius,
-        delayMs,
+        radius: String(safeRadius),
+        delayMs: String(safeDelay),
       });
 
-      if (limit.trim()) {
-        query.set("limit", limit.trim());
+      if (safeLimit !== null) {
+        query.set("limit", String(safeLimit));
       }
 
-      const response = await fetch(`/api/admin/import-all-uk?${query.toString()}`, {
-        method: "GET",
-        cache: "no-store",
-      });
+      const response = await fetch(
+        `/api/admin/import-all-uk?${query.toString()}`,
+        {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          credentials: "same-origin",
+          cache: "no-store",
+          signal: controller.signal,
+        }
+      );
 
-      const data = (await response.json()) as BulkResponse;
+      const data = await readJson(response);
 
-      if (!response.ok) {
-        setErrorText(data.error ?? "Bulk import failed.");
+      if (!response.ok || !data || data.success === false) {
+        setRunState("error");
+        setErrorText(data?.error ?? "Bulk mosque import failed.");
         return;
       }
 
       setResult(data);
+      setRunState("success");
+      setLastCompletedAt(new Date());
     } catch (error) {
+      setRunState("error");
       setErrorText(
-        error instanceof Error ? error.message : "Unexpected bulk import error."
+        error instanceof DOMException && error.name === "AbortError"
+          ? timedOut
+            ? "The bulk mosque import exceeded the allowed time."
+            : "The bulk mosque import was cancelled."
+          : error instanceof Error
+            ? error.message
+            : "Unexpected bulk mosque import error."
       );
     } finally {
-      setLoading(false);
+      window.clearTimeout(timeoutId);
+
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
     }
-  }
+  }, [delayMs, limit, radius]);
 
   return (
-    <section className="rounded-3xl border border-green-500/20 bg-[rgb(var(--card))] p-8">
-      <div className="text-sm uppercase tracking-[0.2em] text-green-300">
-        Phase 5.2
+    <section
+      aria-labelledby="bulk-uk-mosque-import-heading"
+      className="rounded-3xl border border-emerald-500/20 bg-[rgb(var(--card))] p-6 md:p-8"
+    >
+      <div className="text-sm uppercase tracking-[0.22em] text-emerald-300">
+        UK bulk operations
       </div>
 
-      <h2 className="mt-3 text-3xl font-bold text-white">
+      <h2
+        id="bulk-uk-mosque-import-heading"
+        className="mt-3 text-3xl font-black text-white"
+      >
         Bulk UK mosque importer
       </h2>
 
-      <p className="mt-3 max-w-3xl text-white/70">
-        Import mosques for all active UK cities using your existing OpenStreetMap
-        importer, with a delay between cities to reduce overload.
+      <p className="mt-3 max-w-3xl text-sm leading-7 text-white/65">
+        Import mosques for active UK cities using the existing OpenStreetMap
+        importer, with a configurable delay to reduce API and database load.
       </p>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-4">
-        <div>
-          <label className="mb-2 block text-sm font-medium text-yellow-400">
-            Radius (meters)
-          </label>
-          <input
-            type="number"
-            min="1000"
-            step="1000"
-            value={radius}
-            onChange={(e) => setRadius(e.target.value)}
-            className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
-          />
-        </div>
+      <div className="mt-6 grid gap-4 lg:grid-cols-4">
+        <NumberField
+          label="Radius (metres)"
+          value={radius}
+          min={MIN_RADIUS}
+          max={MAX_RADIUS}
+          step={1000}
+          disabled={loading}
+          onChange={setRadius}
+        />
 
-        <div>
-          <label className="mb-2 block text-sm font-medium text-yellow-400">
-            Delay per city (ms)
-          </label>
-          <input
-            type="number"
-            min="0"
-            step="250"
-            value={delayMs}
-            onChange={(e) => setDelayMs(e.target.value)}
-            className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
-          />
-        </div>
+        <NumberField
+          label="Delay per city (ms)"
+          value={delayMs}
+          min={MIN_DELAY_MS}
+          max={MAX_DELAY_MS}
+          step={250}
+          disabled={loading}
+          onChange={setDelayMs}
+        />
 
-        <div>
-          <label className="mb-2 block text-sm font-medium text-yellow-400">
-            Limit cities
-          </label>
-          <input
-            type="number"
-            min="1"
-            step="1"
-            value={limit}
-            onChange={(e) => setLimit(e.target.value)}
-            placeholder="Optional"
-            className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
-          />
-        </div>
+        <NumberField
+          label="Limit cities"
+          value={limit}
+          min={1}
+          max={MAX_CITY_LIMIT}
+          step={1}
+          disabled={loading}
+          placeholder="Optional"
+          onChange={setLimit}
+        />
 
         <div className="flex items-end">
           <button
-            onClick={handleBulkImport}
+            type="button"
+            onClick={() => void handleBulkImport()}
             disabled={loading}
-            className="w-full rounded-2xl bg-green-500/90 px-4 py-3 font-semibold text-black transition hover:bg-green-400 disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-h-12 w-full rounded-2xl bg-emerald-500 px-5 py-3 font-black text-black transition hover:bg-emerald-400 disabled:cursor-wait disabled:opacity-50"
           >
-            {loading ? "Importing UK cities..." : "Import all UK mosques"}
+            {loading ? "Importing UK cities…" : "Start bulk mosque import"}
           </button>
         </div>
       </div>
 
-      <div className="mt-4 text-sm text-white/60">
-        Start with limit 3 to 5 for testing, then remove the limit for full UK import.
+      <div className="mt-5 rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-4 text-sm leading-6 text-yellow-100">
+        Test with a limit of 3–5 cities before running the full UK import.
+        {estimatedCities ? ` Current test limit: ${estimatedCities}.` : ""}
       </div>
 
-      {errorText && (
-        <div className="mt-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
-          {errorText}
-        </div>
-      )}
-
-      {result && (
-        <div className="mt-6 space-y-6">
-          <div className="rounded-2xl border border-white/10 bg-black/30 p-5">
-            <div className="text-lg font-semibold text-yellow-400">
-              Bulk import summary
-            </div>
-
-            <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-              <div className="rounded-xl border border-white/10 bg-[rgb(var(--card))] p-4">
-                <div className="text-xs uppercase tracking-[0.2em] text-white/50">
-                  Cities
-                </div>
-                <div className="mt-2 text-2xl font-bold text-white">
-                  {result.totals.citiesProcessed}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-[rgb(var(--card))] p-4">
-                <div className="text-xs uppercase tracking-[0.2em] text-white/50">
-                  Found
-                </div>
-                <div className="mt-2 text-2xl font-bold text-white">
-                  {result.totals.found}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-[rgb(var(--card))] p-4">
-                <div className="text-xs uppercase tracking-[0.2em] text-white/50">
-                  Inserted
-                </div>
-                <div className="mt-2 text-2xl font-bold text-green-300">
-                  {result.totals.inserted}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-[rgb(var(--card))] p-4">
-                <div className="text-xs uppercase tracking-[0.2em] text-white/50">
-                  Skipped
-                </div>
-                <div className="mt-2 text-2xl font-bold text-yellow-400">
-                  {result.totals.skipped}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-[rgb(var(--card))] p-4">
-                <div className="text-xs uppercase tracking-[0.2em] text-white/50">
-                  Invalid
-                </div>
-                <div className="mt-2 text-2xl font-bold text-white">
-                  {result.totals.invalid}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-[rgb(var(--card))] p-4">
-                <div className="text-xs uppercase tracking-[0.2em] text-white/50">
-                  Failed
-                </div>
-                <div className="mt-2 text-2xl font-bold text-red-300">
-                  {result.totals.failed}
-                </div>
-              </div>
-            </div>
+      <div id={statusId} aria-live="polite">
+        {errorText ? (
+          <div
+            role="alert"
+            className="mt-5 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200"
+          >
+            {errorText}
           </div>
+        ) : null}
 
-          <div className="rounded-2xl border border-white/10 bg-black/30 p-5">
-            <div className="text-lg font-semibold text-yellow-400">
-              Per-city results
-            </div>
+        {lastCompletedAt ? (
+          <p className="mt-3 text-xs text-white/35">
+            Last completed{" "}
+            {lastCompletedAt.toLocaleString("en-GB")}
+          </p>
+        ) : null}
+      </div>
 
-            <div className="mt-4 space-y-3">
-              {result.results.map((row) => (
-                <div
-                  key={row.city}
-                  className="rounded-xl border border-white/10 bg-[rgb(var(--card))] p-4"
-                >
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="font-semibold text-white">{row.city}</div>
-
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      <span className="rounded-full border border-white/10 px-3 py-1 text-white/70">
-                        Found: {row.found}
-                      </span>
-                      <span className="rounded-full border border-green-500/20 bg-green-500/10 px-3 py-1 text-green-300">
-                        Inserted: {row.inserted}
-                      </span>
-                      <span className="rounded-full border border-yellow-500/20 bg-yellow-500/10 px-3 py-1 text-yellow-400">
-                        Skipped: {row.skipped}
-                      </span>
-                      <span className="rounded-full border border-white/10 px-3 py-1 text-white/70">
-                        Invalid: {row.invalid}
-                      </span>
-                      <span
-                        className={`rounded-full px-3 py-1 ${
-                          row.success
-                            ? "border border-green-500/20 bg-green-500/10 text-green-300"
-                            : "border border-red-500/20 bg-red-500/10 text-red-300"
-                        }`}
-                      >
-                        {row.success ? "Success" : "Failed"}
-                      </span>
-                    </div>
-                  </div>
-
-                  {row.error && (
-                    <div className="mt-3 text-sm text-red-300">{row.error}</div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      {result ? <BulkMosqueResult result={result} /> : null}
     </section>
   );
 }
 
+function NumberField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  disabled,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  min: number;
+  max: number;
+  step: number;
+  disabled: boolean;
+  placeholder?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label>
+      <span className="mb-2 block text-sm font-bold text-yellow-300">
+        {label}
+      </span>
+
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className="min-h-12 w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400 disabled:opacity-60"
+      />
+    </label>
+  );
+}
+
+function BulkMosqueResult({ result }: { result: BulkResponse }) {
+  return (
+    <div className="mt-6 space-y-6">
+      <div className="rounded-2xl border border-white/10 bg-black/30 p-5">
+        <div className="text-lg font-black text-yellow-300">
+          Bulk import summary
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
+          <Metric label="Cities" value={result.totals.citiesProcessed} />
+          <Metric label="Found" value={result.totals.found} />
+          <Metric label="Inserted" value={result.totals.inserted} tone="good" />
+          <Metric label="Skipped" value={result.totals.skipped} tone="warning" />
+          <Metric label="Invalid" value={result.totals.invalid} />
+          <Metric label="Failed" value={result.totals.failed} tone="danger" />
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-white/10 bg-black/30 p-5">
+        <div className="text-lg font-black text-yellow-300">
+          Per-city results
+        </div>
+
+        <div className="mt-4 space-y-3">
+          {(result.results ?? []).map((row, index) => (
+            <article
+              key={`${row.city}-${index}`}
+              className="rounded-xl border border-white/10 bg-[rgb(var(--card))] p-4"
+            >
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="font-bold text-white">{row.city}</div>
+
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <Pill>Found: {row.found}</Pill>
+                  <Pill tone="good">Inserted: {row.inserted}</Pill>
+                  <Pill tone="warning">Skipped: {row.skipped}</Pill>
+                  <Pill>Invalid: {row.invalid}</Pill>
+                  <Pill tone={row.success ? "good" : "danger"}>
+                    {row.success ? "Success" : "Failed"}
+                  </Pill>
+                </div>
+              </div>
+
+              {row.error ? (
+                <p className="mt-3 text-sm text-red-300">{row.error}</p>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: number;
+  tone?: "default" | "good" | "warning" | "danger";
+}) {
+  const toneClass =
+    tone === "good"
+      ? "text-emerald-300"
+      : tone === "warning"
+        ? "text-yellow-300"
+        : tone === "danger"
+          ? "text-red-300"
+          : "text-white";
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-[rgb(var(--card))] p-4">
+      <div className="text-xs uppercase tracking-[0.18em] text-white/45">
+        {label}
+      </div>
+      <div className={`mt-2 text-2xl font-black ${toneClass}`}>{value}</div>
+    </div>
+  );
+}
+
+function Pill({
+  children,
+  tone = "default",
+}: {
+  children: React.ReactNode;
+  tone?: "default" | "good" | "warning" | "danger";
+}) {
+  const toneClass =
+    tone === "good"
+      ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+      : tone === "warning"
+        ? "border-yellow-500/20 bg-yellow-500/10 text-yellow-300"
+        : tone === "danger"
+          ? "border-red-500/20 bg-red-500/10 text-red-300"
+          : "border-white/10 text-white/65";
+
+  return (
+    <span className={`rounded-full border px-3 py-1 ${toneClass}`}>
+      {children}
+    </span>
+  );
+}

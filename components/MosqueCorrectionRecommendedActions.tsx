@@ -13,6 +13,8 @@ type ActionTone =
   | "red"
   | "purple";
 
+type ActionPriority = "critical" | "high" | "standard";
+
 type ActionItem = {
   id: string;
   label: string;
@@ -21,6 +23,8 @@ type ActionItem = {
   tone: ActionTone;
   actionLabel?: string;
   external?: boolean;
+  priority?: ActionPriority;
+  evidenceHint?: string;
 };
 
 type ReportType =
@@ -159,6 +163,8 @@ function getActionItems({
         actionLabel:
           "Open editor",
         tone: "gold",
+        priority: "high",
+        evidenceHint: "Check the official timetable or direct mosque confirmation.",
       },
       {
         id: "check-data-quality",
@@ -172,6 +178,8 @@ function getActionItems({
         actionLabel:
           "Review quality",
         tone: "cyan",
+        priority: "standard",
+        evidenceHint: "Review missing rows, coverage and confidence indicators.",
       },
       ...(publicTimetablePage
         ? [
@@ -428,6 +436,34 @@ function getActionItems({
   ];
 }
 
+function getPriorityLabel(
+  priority: ActionPriority | undefined
+): string {
+  if (priority === "critical") {
+    return "Critical";
+  }
+
+  if (priority === "high") {
+    return "High priority";
+  }
+
+  return "Recommended";
+}
+
+function getPriorityClass(
+  priority: ActionPriority | undefined
+): string {
+  if (priority === "critical") {
+    return "border-red-400/30 bg-red-400/10 text-red-200";
+  }
+
+  if (priority === "high") {
+    return "border-yellow-400/30 bg-yellow-400/10 text-yellow-100";
+  }
+
+  return "border-white/10 bg-black/20 text-white/55";
+}
+
 function toneClass(
   tone: ActionTone
 ): string {
@@ -487,10 +523,16 @@ export default function MosqueCorrectionRecommendedActions({
   return (
     <section
       aria-labelledby="recommended-correction-actions-heading"
-      className="rounded-2xl border border-yellow-500/20 bg-yellow-500/5 p-4"
+      className="overflow-hidden rounded-3xl border border-yellow-500/20 bg-gradient-to-br from-yellow-500/10 via-black/35 to-black/20 p-5 shadow-[0_24px_80px_-42px_rgba(234,179,8,0.65)]"
     >
-      <div className="text-xs uppercase tracking-[0.18em] text-yellow-400">
-        Recommended fix
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-xs font-black uppercase tracking-[0.2em] text-yellow-300">
+          Recommended resolution plan
+        </div>
+
+        <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] text-white/55">
+          {actions.length} {actions.length === 1 ? "action" : "actions"}
+        </div>
       </div>
 
       <h4
@@ -503,28 +545,48 @@ export default function MosqueCorrectionRecommendedActions({
         )}
       </h4>
 
-      <p className="mt-2 text-sm leading-6 text-white/55">
-        Verify the report and record
-        the supporting evidence before
-        changing public mosque
-        information.
+      <p className="mt-2 max-w-3xl text-sm leading-6 text-white/55">
+        Verify the report, compare it with a reliable source and record the evidence before changing public mosque information.
       </p>
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-3">
+        <WorkflowStep number="1" label="Review the report" />
+        <WorkflowStep number="2" label="Verify the evidence" />
+        <WorkflowStep number="3" label="Record the outcome" />
+      </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {actions.map((action) => (
           <article
             key={action.id}
-            className={`flex h-full flex-col rounded-2xl border p-4 ${toneClass(
+            className={`group flex h-full flex-col rounded-2xl border p-4 transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_45px_-30px_rgba(255,255,255,0.35)] ${toneClass(
               action.tone
             )}`}
           >
-            <div className="font-bold">
-              {action.label}
+            <div className="flex items-start justify-between gap-3">
+              <div className="font-black">
+                {action.label}
+              </div>
+
+              <span
+                className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${getPriorityClass(
+                  action.priority
+                )}`}
+              >
+                {getPriorityLabel(action.priority)}
+              </span>
             </div>
 
             <p className="mt-2 flex-1 text-sm leading-6 opacity-80">
               {action.description}
             </p>
+
+            {action.evidenceHint ? (
+              <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3 text-xs leading-5 text-white/60">
+                <span className="font-black text-white/75">Evidence:</span>{" "}
+                {action.evidenceHint}
+              </div>
+            ) : null}
 
             {action.href ? (
               <Link
@@ -539,7 +601,7 @@ export default function MosqueCorrectionRecommendedActions({
                     ? "noopener noreferrer"
                     : undefined
                 }
-                className={`mt-4 inline-flex min-h-10 w-fit items-center justify-center rounded-xl border px-4 py-2 text-xs font-black transition focus-visible:outline-none focus-visible:ring-2 ${buttonClass(
+                className={`mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-xl border bg-black/20 px-4 py-2 text-xs font-black transition group-hover:bg-black/30 focus-visible:outline-none focus-visible:ring-2 sm:w-fit ${buttonClass(
                   action.tone
                 )}`}
               >
@@ -554,6 +616,29 @@ export default function MosqueCorrectionRecommendedActions({
           </article>
         ))}
       </div>
+
+      <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-4 text-xs leading-5 text-white/50">
+        Recommended actions are guidance only. Mosque data should be changed only after the report has been checked against reliable evidence and the decision has been documented.
+      </div>
     </section>
+  );
+}
+
+function WorkflowStep({
+  number,
+  label,
+}: {
+  number: string;
+  label: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/25 px-3 py-2.5">
+      <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-yellow-400/30 bg-yellow-400/10 text-xs font-black text-yellow-200">
+        {number}
+      </span>
+      <span className="text-xs font-bold text-white/70">
+        {label}
+      </span>
+    </div>
   );
 }

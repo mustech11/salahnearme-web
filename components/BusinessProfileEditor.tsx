@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type Business = {
@@ -31,6 +31,9 @@ type ApiResponse = {
 };
 
 type FieldErrors = Partial<Record<keyof FormState, string>>;
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_PHONE_LENGTH = 40;
@@ -146,6 +149,7 @@ function createInitialForm(business: Business): FormState {
 export default function BusinessProfileEditor({ business }: { business: Business }) {
   const router = useRouter();
   const initialFormRef = useRef<FormState>(createInitialForm(business));
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const [form, setForm] = useState<FormState>(initialFormRef.current);
   const [saving, setSaving] = useState(false);
@@ -161,6 +165,36 @@ export default function BusinessProfileEditor({ business }: { business: Business
     () => JSON.stringify(form) !== JSON.stringify(initialFormRef.current),
     [form]
   );
+
+  const profileCompletion = useMemo(() => {
+    const values = [
+      form.phone,
+      form.website,
+      form.maps_url,
+      form.address,
+      form.postcode,
+      form.area,
+      form.description,
+    ];
+
+    const completed = values.filter((value) => value.trim().length > 0).length;
+    return Math.round((completed / values.length) * 100);
+  }, [form]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isDirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      abortControllerRef.current?.abort();
+    };
+  }, [isDirty]);
 
   function updateField(field: keyof FormState, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -189,7 +223,15 @@ export default function BusinessProfileEditor({ business }: { business: Business
       return;
     }
 
+    if (!UUID_REGEX.test(business.id)) {
+      setErrorMessage("A valid business is required before this profile can be saved.");
+      return;
+    }
+
+    abortControllerRef.current?.abort();
+
     const controller = new AbortController();
+    abortControllerRef.current = controller;
     const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
@@ -251,6 +293,11 @@ export default function BusinessProfileEditor({ business }: { business: Business
       }
     } finally {
       window.clearTimeout(timeoutId);
+
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+
       setSaving(false);
     }
   }
@@ -276,6 +323,11 @@ export default function BusinessProfileEditor({ business }: { business: Business
           </p>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-fit rounded-full border border-cyan-500/25 bg-cyan-500/10 px-3 py-1 text-xs font-bold text-cyan-200">
+            {profileCompletion}% complete
+          </span>
+
         <span
           className={`w-fit rounded-full border px-3 py-1 text-xs font-bold ${
             isDirty
@@ -285,6 +337,7 @@ export default function BusinessProfileEditor({ business }: { business: Business
         >
           {isDirty ? "Unsaved changes" : "Saved"}
         </span>
+        </div>
       </div>
 
       <div aria-live="polite">

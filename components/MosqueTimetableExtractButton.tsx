@@ -457,7 +457,7 @@ export default function MosqueTimetableExtractButton({
           validationError ||
           undefined
         }
-        className="inline-flex min-h-10 items-center justify-center rounded-xl border border-yellow-500/30 bg-black px-4 py-2 text-xs font-bold text-yellow-400 transition hover:bg-yellow-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+        className="group inline-flex min-h-11 items-center justify-center rounded-xl border border-yellow-500/30 bg-yellow-500/[0.06] px-4 py-2.5 text-xs font-black text-yellow-300 shadow-[0_10px_30px_rgba(234,179,8,0.05)] transition hover:border-yellow-400/50 hover:bg-yellow-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {isSubmitting ? (
           <>
@@ -497,7 +497,7 @@ export default function MosqueTimetableExtractButton({
           <div
             id={successId}
             role="status"
-            className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs leading-5 text-emerald-300"
+            className="mt-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-4 text-xs leading-5 text-emerald-100"
           >
             <p>
               {successMessage}
@@ -526,7 +526,7 @@ export default function MosqueTimetableExtractButton({
           <div
             id={errorId}
             role="alert"
-            className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs leading-5 text-red-300"
+            className="mt-3 rounded-2xl border border-red-500/25 bg-red-500/[0.08] p-4 text-xs leading-5 text-red-100"
           >
             {errorMessage}
           </div>

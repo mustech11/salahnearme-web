@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 
-const umrahOfflineFiles = [
+const CACHE_NAME = "salahnearme-umrah-guide-v2";
+
+const OFFLINE_FILES = [
   "/umrah",
   "/images/kaaba-bg.png",
   "/images/umrah/umrah-1-ihram-panel.png",
@@ -12,66 +14,114 @@ const umrahOfflineFiles = [
   "/images/umrah/umrah-5-zamzam-panel.png",
   "/images/umrah/umrah-6-sai-panel.png",
   "/images/umrah/umrah-7-hair-panel.png",
-];
+] as const;
+
+type Status = "idle" | "saving" | "saved" | "partial" | "error";
 
 export default function UmrahOfflineDownload() {
-  const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">(
-    "idle"
-  );
+  const [status, setStatus] = useState<Status>("idle");
+  const [message, setMessage] = useState("");
+  const [savedCount, setSavedCount] = useState(0);
 
   async function saveOffline() {
-    try {
-      setStatus("saving");
+    if (status === "saving") return;
 
-      if (!("caches" in window)) {
-        setStatus("error");
-        return;
+    setStatus("saving");
+    setMessage("");
+    setSavedCount(0);
+
+    if (!("caches" in window)) {
+      setStatus("error");
+      setMessage("Offline storage is not supported by this browser.");
+      return;
+    }
+
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      let successful = 0;
+      let failed = 0;
+
+      for (const path of OFFLINE_FILES) {
+        try {
+          const response = await fetch(path, {
+            credentials: "same-origin",
+            cache: "reload",
+          });
+
+          if (!response.ok) {
+            failed += 1;
+            continue;
+          }
+
+          await cache.put(path, response.clone());
+          successful += 1;
+          setSavedCount(successful);
+        } catch {
+          failed += 1;
+        }
       }
 
-      const cache = await caches.open("salahnearme-umrah-guide-v1");
-      await cache.addAll(umrahOfflineFiles);
-
-      setStatus("saved");
+      if (failed === 0) {
+        setStatus("saved");
+        setMessage("The Umrah guide is ready for offline use.");
+      } else if (successful > 0) {
+        setStatus("partial");
+        setMessage(`${successful} files were saved, but ${failed} could not be cached.`);
+      } else {
+        setStatus("error");
+        setMessage("No guide files could be saved.");
+      }
     } catch {
       setStatus("error");
+      setMessage("Offline save failed. Please try again.");
     }
   }
 
   return (
-    <section className="rounded-3xl border border-yellow-500/20 bg-black/40 p-6 md:p-8">
+    <section
+      aria-labelledby="umrah-offline-heading"
+      className="rounded-3xl border border-yellow-500/20 bg-black/40 p-6 md:p-8"
+    >
       <div className="text-sm uppercase tracking-[0.2em] text-yellow-400">
         Offline Umrah Mode
       </div>
 
-      <h2 className="mt-3 text-3xl font-bold text-white">
+      <h2 id="umrah-offline-heading" className="mt-3 text-3xl font-black text-white">
         Save this Umrah guide for offline use
       </h2>
 
-      <p className="mt-3 max-w-3xl text-white/70">
-        Save the guide and images on this device so you can access them in
-        Makkah when signal is weak.
+      <p className="mt-3 max-w-3xl text-sm leading-7 text-white/70">
+        Save the guide and its illustrations on this device for weak-signal areas in Makkah.
       </p>
 
       <button
         type="button"
-        onClick={saveOffline}
+        onClick={() => void saveOffline()}
         disabled={status === "saving"}
-        className="mt-5 rounded-2xl bg-yellow-500 px-6 py-4 font-semibold text-black hover:bg-yellow-400 disabled:opacity-50"
+        aria-busy={status === "saving"}
+        className="mt-5 inline-flex min-h-12 items-center justify-center rounded-2xl bg-yellow-500 px-6 py-4 font-black text-black transition hover:bg-yellow-400 disabled:opacity-50"
       >
         {status === "saving"
-          ? "Saving..."
+          ? `Saving ${savedCount}/${OFFLINE_FILES.length}…`
           : status === "saved"
-          ? "Saved offline"
-          : "Save Umrah guide offline"}
+            ? "Saved offline"
+            : "Save Umrah guide offline"}
       </button>
 
-      {status === "error" && (
-        <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
-          Offline save failed. Make sure all image files exist in
-          /public/images/umrah/.
+      {message ? (
+        <div
+          role={status === "error" ? "alert" : "status"}
+          className={`mt-4 rounded-xl border p-4 text-sm ${
+            status === "error"
+              ? "border-red-500/20 bg-red-500/10 text-red-200"
+              : status === "partial"
+                ? "border-amber-500/20 bg-amber-500/10 text-amber-200"
+                : "border-emerald-500/20 bg-emerald-500/10 text-emerald-200"
+          }`}
+        >
+          {message}
         </div>
-      )}
+      ) : null}
     </section>
   );
 }
-

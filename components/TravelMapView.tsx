@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type MapItem = {
   type: "mosque" | "business";
@@ -31,53 +38,354 @@ type ApiResponse = {
   businesses?: MapItem[];
 };
 
+type Filter = "all" | "mosques" | "businesses";
+
+type LeafletMap = {
+  setView: (coordinates: [number, number], zoom: number) => LeafletMap;
+  remove: () => void;
+  invalidateSize: () => void;
+  fitBounds: (bounds: unknown, options?: Record<string, unknown>) => void;
+};
+
+type LeafletLayerGroup = {
+  clearLayers: () => void;
+};
+
+type LeafletGlobal = {
+  map: (element: HTMLElement) => LeafletMap;
+  tileLayer: (
+    url: string,
+    options: Record<string, unknown>
+  ) => { addTo: (map: LeafletMap) => unknown };
+  layerGroup: () => { addTo: (map: LeafletMap) => LeafletLayerGroup };
+  marker: (
+    coordinates: [number, number]
+  ) => {
+    addTo: (layer: LeafletLayerGroup) => {
+      bindPopup: (content: string) => unknown;
+    };
+  };
+  circle: (
+    coordinates: [number, number],
+    options: Record<string, unknown>
+  ) => { addTo: (layer: LeafletLayerGroup) => unknown };
+  latLngBounds: (coordinates: [number, number][]) => unknown;
+};
+
 declare global {
   interface Window {
-    L: any;
+    L?: LeafletGlobal;
   }
 }
 
-function miles(meters: number) {
-  return (meters / 1609.344).toFixed(1);
+const LEAFLET_CSS =
+  "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+const LEAFLET_JS =
+  "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+const REQUEST_TIMEOUT_MS = 20_000;
+
+function cleanText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
-function itemHref(item: MapItem) {
-  if (!item.slug) return "#";
+function miles(meters: number): string {
+  const value =
+    typeof meters === "number" && Number.isFinite(meters)
+      ? Math.max(0, meters)
+      : 0;
+
+  return (value / 1609.344).toFixed(1);
+}
+
+function itemHref(item: MapItem): string | null {
+  const slug = cleanText(item.slug);
+
+  if (!slug) return null;
+
   return item.type === "mosque"
-    ? `/mosque/${item.slug}`
-    : `/business/${item.slug}`;
+    ? `/mosque/${encodeURIComponent(slug)}`
+    : `/business/${encodeURIComponent(slug)}`;
+}
+
+function escapeHtml(value: unknown): string {
+  return cleanText(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function loadLeaflet(): Promise<LeafletGlobal> {
+  if (window.L) {
+    return Promise.resolve(window.L);
+  }
+
+  return new Promise((resolve, reject) => {
+    let css = document.querySelector<HTMLLinkElement>(
+      'link[data-salahnearme-leaflet="true"]'
+    );
+
+    if (!css) {
+      css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = LEAFLET_CSS;
+      css.dataset.salahnearmeLeaflet = "true";
+      document.head.appendChild(css);
+    }
+
+    const existingScript = document.querySelector<HTMLScriptElement>(
+      'script[data-salahnearme-leaflet="true"]'
+    );
+
+    if (existingScript) {
+      existingScript.addEventListener("load", () => {
+        if (window.L) resolve(window.L);
+      });
+      existingScript.addEventListener("error", () =>
+        reject(new Error("Leaflet could not be loaded."))
+      );
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = LEAFLET_JS;
+    script.async = true;
+    script.dataset.salahnearmeLeaflet = "true";
+    script.onload = () => {
+      if (window.L) {
+        resolve(window.L);
+      } else {
+        reject(new Error("Leaflet did not initialise."));
+      }
+    };
+    script.onerror = () => reject(new Error("Leaflet could not be loaded."));
+    document.body.appendChild(script);
+  });
 }
 
 export default function TravelMapView() {
   const mapRef = useRef<HTMLDivElement | null>(null);
-  const leafletMapRef = useRef<any>(null);
-  const markerLayerRef = useRef<any>(null);
+  const leafletMapRef = useRef<LeafletMap | null>(null);
+  const markerLayerRef = useRef<LeafletLayerGroup | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const [loading, setLoading] = useState(false);
+  const [mapReady, setMapReady] = useState(false);
   const [error, setError] = useState("");
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
-  const [radius, setRadius] = useState(8000);
+  const [radius, setRadius] = useState(8_000);
   const [mosques, setMosques] = useState<MapItem[]>([]);
   const [businesses, setBusinesses] = useState<MapItem[]>([]);
-  const [filter, setFilter] = useState<"all" | "mosques" | "businesses">("all");
+  const [filter, setFilter] = useState<Filter>("all");
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+
+  const visibleItems = useMemo(
+    () => [
+      ...(filter === "all" || filter === "mosques" ? mosques : []),
+      ...(filter === "all" || filter === "businesses" ? businesses : []),
+    ],
+    [businesses, filter, mosques]
+  );
 
   useEffect(() => {
-    const css = document.createElement("link");
-    css.rel = "stylesheet";
-    css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-    document.head.appendChild(css);
+    let active = true;
 
-    const script = document.createElement("script");
-    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-    script.async = true;
-    document.body.appendChild(script);
+    void loadLeaflet()
+      .then(() => {
+        if (active) setMapReady(true);
+      })
+      .catch((loadError) => {
+        if (active) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "The map library could not be loaded."
+          );
+        }
+      });
 
     return () => {
-      css.remove();
-      script.remove();
+      active = false;
+      abortControllerRef.current?.abort();
+
+      if (leafletMapRef.current) {
+        leafletMapRef.current.remove();
+        leafletMapRef.current = null;
+        markerLayerRef.current = null;
+      }
     };
   }, []);
+
+  const renderMap = useCallback(
+    (
+      centerLat: number,
+      centerLng: number,
+      items: MapItem[],
+      nextRadius: number
+    ) => {
+      if (!mapRef.current || !window.L || !mapReady) return;
+
+      const leaflet = window.L;
+
+      if (!leafletMapRef.current) {
+        leafletMapRef.current = leaflet
+          .map(mapRef.current)
+          .setView([centerLat, centerLng], 13);
+
+        leaflet
+          .tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            attribution: "&copy; OpenStreetMap contributors",
+            maxZoom: 19,
+          })
+          .addTo(leafletMapRef.current);
+
+        markerLayerRef.current = leaflet
+          .layerGroup()
+          .addTo(leafletMapRef.current);
+      }
+
+      const map = leafletMapRef.current;
+      const layer = markerLayerRef.current;
+
+      if (!layer) return;
+
+      layer.clearLayers();
+
+      leaflet
+        .circle([centerLat, centerLng], {
+          radius: nextRadius,
+          color: "#eab308",
+          fillColor: "#eab308",
+          fillOpacity: 0.08,
+        })
+        .addTo(layer);
+
+      leaflet
+        .marker([centerLat, centerLng])
+        .addTo(layer)
+        .bindPopup("<strong>You are here</strong>");
+
+      const bounds: [number, number][] = [[centerLat, centerLng]];
+
+      for (const item of items) {
+        if (
+          typeof item.latitude !== "number" ||
+          typeof item.longitude !== "number" ||
+          !Number.isFinite(item.latitude) ||
+          !Number.isFinite(item.longitude)
+        ) {
+          continue;
+        }
+
+        bounds.push([item.latitude, item.longitude]);
+
+        const emoji = item.type === "mosque" ? "🕌" : "🍽️";
+        const href = itemHref(item);
+        const detail = [item.category, item.area, item.city]
+          .map(cleanText)
+          .filter(Boolean)
+          .join(" • ");
+
+        const link = href
+          ? `<a href="${escapeHtml(href)}">View details</a>`
+          : "";
+
+        leaflet
+          .marker([item.latitude, item.longitude])
+          .addTo(layer)
+          .bindPopup(`
+            <div style="min-width:180px">
+              <strong>${emoji} ${escapeHtml(item.name) || "Place"}</strong><br/>
+              ${escapeHtml(detail)}<br/>
+              <small>${miles(item.distance_meters)} miles away</small><br/>
+              ${link}
+            </div>
+          `);
+      }
+
+      if (bounds.length > 1) {
+        map.fitBounds(leaflet.latLngBounds(bounds), {
+          padding: [30, 30],
+          maxZoom: 14,
+        });
+      } else {
+        map.setView([centerLat, centerLng], 13);
+      }
+
+      window.setTimeout(() => map.invalidateSize(), 50);
+    },
+    [mapReady]
+  );
+
+  useEffect(() => {
+    if (lat !== null && lng !== null) {
+      renderMap(lat, lng, visibleItems, radius);
+    }
+  }, [lat, lng, radius, renderMap, visibleItems]);
+
+  const loadMapData = useCallback(
+    async (nextLat: number, nextLng: number, nextRadius: number) => {
+      abortControllerRef.current?.abort();
+
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      let timedOut = false;
+      const timeoutId = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, REQUEST_TIMEOUT_MS);
+
+      setLoading(true);
+      setError("");
+
+      try {
+        const params = new URLSearchParams({
+          lat: String(nextLat),
+          lng: String(nextLng),
+          radius: String(nextRadius),
+        });
+
+        const response = await fetch(`/api/travel/map?${params.toString()}`, {
+          headers: { Accept: "application/json" },
+          credentials: "same-origin",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        const data = (await response.json().catch(() => ({}))) as ApiResponse;
+
+        if (!response.ok || data.ok !== true) {
+          setError(cleanText(data.error) || "Could not load map results.");
+          return;
+        }
+
+        setMosques(Array.isArray(data.mosques) ? data.mosques : []);
+        setBusinesses(Array.isArray(data.businesses) ? data.businesses : []);
+        setLastUpdatedAt(new Date());
+      } catch (requestError) {
+        setError(
+          requestError instanceof DOMException &&
+            requestError.name === "AbortError"
+            ? timedOut
+              ? "The map request timed out."
+              : "The map request was cancelled."
+            : "Could not load map results."
+        );
+      } finally {
+        window.clearTimeout(timeoutId);
+
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+        }
+
+        setLoading(false);
+      }
+    },
+    []
+  );
 
   async function getLocation() {
     setLoading(true);
@@ -93,8 +401,8 @@ export default function TravelMapView() {
 
           navigator.geolocation.getCurrentPosition(resolve, reject, {
             enableHighAccuracy: true,
-            timeout: 15000,
-            maximumAge: 300000,
+            timeout: 15_000,
+            maximumAge: 300_000,
           });
         }
       );
@@ -106,126 +414,25 @@ export default function TravelMapView() {
       setLng(nextLng);
 
       await loadMapData(nextLat, nextLng, radius);
-    } catch (err) {
+    } catch (locationError) {
+      setLoading(false);
       setError(
-        err instanceof Error
-          ? err.message
+        locationError instanceof Error
+          ? locationError.message
           : "Could not access your current location."
       );
-    } finally {
-      setLoading(false);
     }
   }
-
-  async function loadMapData(nextLat: number, nextLng: number, nextRadius: number) {
-    setLoading(true);
-    setError("");
-
-    try {
-      const res = await fetch(
-        `/api/travel/map?lat=${nextLat}&lng=${nextLng}&radius=${nextRadius}`,
-        { cache: "no-store" }
-      );
-
-      const data = (await res.json()) as ApiResponse;
-
-      if (!res.ok || !data.ok) {
-        setError(data.error ?? "Could not load map results.");
-        return;
-      }
-
-      setMosques(data.mosques ?? []);
-      setBusinesses(data.businesses ?? []);
-
-      setTimeout(() => {
-        renderMap(nextLat, nextLng, data.mosques ?? [], data.businesses ?? []);
-      }, 100);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function renderMap(
-    centerLat: number,
-    centerLng: number,
-    mosqueItems: MapItem[],
-    businessItems: MapItem[]
-  ) {
-    if (!mapRef.current || !window.L) return;
-
-    const L = window.L;
-
-    if (!leafletMapRef.current) {
-      leafletMapRef.current = L.map(mapRef.current).setView(
-        [centerLat, centerLng],
-        13
-      );
-
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap contributors",
-      }).addTo(leafletMapRef.current);
-
-      markerLayerRef.current = L.layerGroup().addTo(leafletMapRef.current);
-    }
-
-    leafletMapRef.current.setView([centerLat, centerLng], 13);
-    markerLayerRef.current.clearLayers();
-
-    L.circle([centerLat, centerLng], {
-      radius,
-      color: "#eab308",
-      fillColor: "#eab308",
-      fillOpacity: 0.08,
-    }).addTo(markerLayerRef.current);
-
-    L.marker([centerLat, centerLng])
-      .addTo(markerLayerRef.current)
-      .bindPopup("<strong>You are here</strong>");
-
-    const selectedItems = [
-      ...(filter === "all" || filter === "mosques" ? mosqueItems : []),
-      ...(filter === "all" || filter === "businesses" ? businessItems : []),
-    ];
-
-    for (const item of selectedItems) {
-      if (
-        typeof item.latitude !== "number" ||
-        typeof item.longitude !== "number"
-      ) {
-        continue;
-      }
-
-      const emoji = item.type === "mosque" ? "🕌" : "🍽️";
-      const href = itemHref(item);
-
-      L.marker([item.latitude, item.longitude])
-        .addTo(markerLayerRef.current)
-        .bindPopup(`
-          <div style="min-width:180px">
-            <strong>${emoji} ${item.name ?? "Place"}</strong><br/>
-            ${[item.category, item.area, item.city].filter(Boolean).join(" • ")}<br/>
-            <small>${miles(item.distance_meters)} miles away</small><br/>
-            <a href="${href}">View details</a>
-          </div>
-        `);
-    }
-  }
-
-  useEffect(() => {
-    if (lat !== null && lng !== null) {
-      renderMap(lat, lng, mosques, businesses);
-    }
-  }, [filter]);
 
   return (
-    <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6">
+    <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-5 sm:p-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <div className="text-xl font-semibold text-yellow-400">
+          <div className="text-xl font-black text-yellow-400">
             Live travel map
           </div>
-          <p className="mt-2 text-sm text-white/60">
-            Shows nearby mosques and halal businesses using your current
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-white/60">
+            View nearby mosques and halal businesses using your current
             location.
           </p>
         </div>
@@ -233,7 +440,8 @@ export default function TravelMapView() {
         <div className="flex flex-wrap gap-3">
           <select
             value={radius}
-            onChange={(e) => setRadius(Number(e.target.value))}
+            disabled={loading}
+            onChange={(event) => setRadius(Number(event.target.value))}
             className="rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm text-white"
           >
             <option value={3000}>3 km</option>
@@ -244,9 +452,8 @@ export default function TravelMapView() {
 
           <select
             value={filter}
-            onChange={(e) =>
-              setFilter(e.target.value as "all" | "mosques" | "businesses")
-            }
+            disabled={loading}
+            onChange={(event) => setFilter(event.target.value as Filter)}
             className="rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm text-white"
           >
             <option value="all">Mosques + businesses</option>
@@ -258,28 +465,46 @@ export default function TravelMapView() {
             type="button"
             onClick={() => {
               if (lat !== null && lng !== null) {
-                loadMapData(lat, lng, radius);
+                void loadMapData(lat, lng, radius);
               } else {
-                getLocation();
+                void getLocation();
               }
             }}
-            disabled={loading}
-            className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-black hover:bg-yellow-400 disabled:opacity-50"
+            disabled={loading || !mapReady}
+            className="rounded-xl bg-yellow-500 px-5 py-3 text-sm font-black text-black hover:bg-yellow-400 disabled:opacity-50"
           >
-            {loading ? "Loading..." : "Use my location"}
+            {loading
+              ? "Loading…"
+              : mapReady
+                ? "Use my location"
+                : "Preparing map…"}
           </button>
         </div>
       </div>
 
-      {error && (
-        <div className="mt-5 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
+      {error ? (
+        <div
+          role="alert"
+          className="mt-5 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200"
+        >
           {error}
         </div>
-      )}
+      ) : null}
+
+      {lastUpdatedAt ? (
+        <p className="mt-3 text-xs text-white/35">
+          Updated{" "}
+          {lastUpdatedAt.toLocaleTimeString("en-GB", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </p>
+      ) : null}
 
       <div
         ref={mapRef}
-        className="mt-6 h-[560px] overflow-hidden rounded-3xl border border-white/10 bg-black"
+        aria-label="Map showing nearby mosques and halal businesses"
+        className="mt-6 h-[420px] overflow-hidden rounded-3xl border border-white/10 bg-black sm:h-[560px]"
       />
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -290,33 +515,65 @@ export default function TravelMapView() {
   );
 }
 
-function ResultColumn({ title, items }: { title: string; items: MapItem[] }) {
+function ResultColumn({
+  title,
+  items,
+}: {
+  title: string;
+  items: MapItem[];
+}) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/30 p-5">
-      <div className="text-lg font-semibold text-yellow-400">{title}</div>
+    <section className="rounded-2xl border border-white/10 bg-black/30 p-5">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-lg font-black text-yellow-400">{title}</h3>
+        <span className="text-xs text-white/40">
+          {items.length.toLocaleString("en-GB")}
+        </span>
+      </div>
 
       <div className="mt-4 space-y-3">
-        {items.slice(0, 8).map((item) => (
-          <a
-            key={`${item.type}-${item.id}`}
-            href={itemHref(item)}
-            className="block rounded-xl border border-white/10 bg-black/40 p-4 hover:border-yellow-500/30"
-          >
-            <div className="font-semibold text-white">{item.name}</div>
-            <div className="mt-1 text-sm text-white/60">
-              {[item.category, item.area, item.city].filter(Boolean).join(" • ")}
-            </div>
-            <div className="mt-2 text-xs text-yellow-400">
-              {miles(item.distance_meters)} miles away
-            </div>
-          </a>
-        ))}
+        {items.slice(0, 8).map((item) => {
+          const href = itemHref(item);
 
-        {!items.length && (
+          const card = (
+            <>
+              <div className="font-bold text-white">
+                {cleanText(item.name) || "Unnamed place"}
+              </div>
+              <div className="mt-1 text-sm text-white/60">
+                {[item.category, item.area, item.city]
+                  .map(cleanText)
+                  .filter(Boolean)
+                  .join(" • ")}
+              </div>
+              <div className="mt-2 text-xs text-yellow-400">
+                {miles(item.distance_meters)} miles away
+              </div>
+            </>
+          );
+
+          return href ? (
+            <Link
+              key={`${item.type}-${item.id}`}
+              href={href}
+              className="block rounded-xl border border-white/10 bg-black/40 p-4 transition hover:border-yellow-500/30"
+            >
+              {card}
+            </Link>
+          ) : (
+            <div
+              key={`${item.type}-${item.id}`}
+              className="rounded-xl border border-white/10 bg-black/40 p-4"
+            >
+              {card}
+            </div>
+          );
+        })}
+
+        {items.length === 0 ? (
           <div className="text-sm text-white/50">No results found yet.</div>
-        )}
+        ) : null}
       </div>
-    </div>
+    </section>
   );
 }
-

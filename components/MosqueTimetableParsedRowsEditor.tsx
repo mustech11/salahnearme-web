@@ -581,7 +581,7 @@ export default function MosqueTimetableParsedRowsEditor({
         }}
         aria-expanded={open}
         aria-controls={panelId}
-        className="inline-flex min-h-10 items-center justify-center rounded-xl border border-purple-500/30 bg-purple-500/10 px-4 py-2 text-xs font-bold text-purple-200 transition hover:bg-purple-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
+        className="inline-flex min-h-11 items-center justify-center rounded-xl border border-purple-500/30 bg-purple-500/[0.08] px-4 py-2.5 text-xs font-black text-purple-100 shadow-[0_10px_30px_rgba(168,85,247,0.06)] transition hover:border-purple-400/50 hover:bg-purple-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
       >
         {open
           ? "Hide review table"
@@ -591,7 +591,7 @@ export default function MosqueTimetableParsedRowsEditor({
       {open ? (
         <section
           id={panelId}
-          className="mt-4 rounded-2xl border border-purple-500/20 bg-black/40 p-4"
+          className="mt-4 overflow-hidden rounded-3xl border border-purple-500/20 bg-[radial-gradient(circle_at_top_right,rgba(168,85,247,0.08),transparent_30%),rgba(0,0,0,0.45)] p-4 sm:p-5"
         >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -631,7 +631,7 @@ export default function MosqueTimetableParsedRowsEditor({
             </div>
           ) : null}
 
-          <div className="mt-4 overflow-x-auto rounded-xl border border-white/10">
+          <div className="mt-4 overflow-x-auto rounded-2xl border border-white/10 shadow-[0_14px_40px_rgba(0,0,0,0.18)]">
             <table className="min-w-[1420px] border-collapse text-left text-xs">
               <thead className="bg-white/5 text-yellow-400">
                 <tr>
@@ -772,7 +772,7 @@ export default function MosqueTimetableParsedRowsEditor({
               }}
               disabled={isSaveDisabled}
               aria-busy={isSaving}
-              className="inline-flex min-h-10 items-center justify-center rounded-xl bg-yellow-500 px-4 py-2 text-xs font-bold text-black transition hover:bg-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-yellow-300/25 bg-gradient-to-b from-yellow-400 to-yellow-500 px-4 py-2.5 text-xs font-black text-black shadow-[0_10px_28px_rgba(234,179,8,0.1)] transition hover:from-yellow-300 hover:to-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSaving ? (
                 <>

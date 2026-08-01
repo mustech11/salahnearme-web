@@ -38,6 +38,7 @@ const UUID_REGEX =
 
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_NOTIFICATIONS = 100;
+const AUTO_REFRESH_MS = 120_000;
 
 function cleanString(value: unknown): string {
   return typeof value === "string"
@@ -185,6 +186,7 @@ export default function BusinessDashboardNotifications({
     useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] =
     useState<Date | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
 
   const cleanBusinessId = useMemo(
     () => cleanString(businessId),
@@ -292,7 +294,14 @@ export default function BusinessDashboardNotifications({
   useEffect(() => {
     void loadNotifications();
 
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadNotifications();
+      }
+    }, AUTO_REFRESH_MS);
+
     return () => {
+      window.clearInterval(intervalId);
       abortControllerRef.current?.abort();
     };
   }, [loadNotifications]);
@@ -306,14 +315,25 @@ export default function BusinessDashboardNotifications({
   );
 
   const visibleNotifications = useMemo(() => {
-    if (!showUnreadOnly) {
-      return notifications;
-    }
+    const term = searchTerm.trim().toLowerCase();
 
-    return notifications.filter(
-      (notification) => !notification.read
-    );
-  }, [notifications, showUnreadOnly]);
+    return notifications.filter((notification) => {
+      if (showUnreadOnly && notification.read) {
+        return false;
+      }
+
+      if (!term) {
+        return true;
+      }
+
+      return (
+        notification.title.toLowerCase().includes(term) ||
+        (notification.body ?? "").toLowerCase().includes(term)
+      );
+    });
+  }, [notifications, searchTerm, showUnreadOnly]);
+
+  const readCount = notifications.length - unreadCount;
 
   return (
     <section
@@ -374,7 +394,20 @@ export default function BusinessDashboardNotifications({
       </div>
 
       {notifications.length > 0 ? (
-        <div className="mt-6 flex flex-wrap items-center gap-3">
+        <div className="mt-6 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <label className="sr-only" htmlFor="business-notification-search">
+            Search notifications
+          </label>
+          <input
+            id="business-notification-search"
+            type="search"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Search updates, payments, listings or promotions"
+            className="min-h-11 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-2.5 text-sm text-white outline-none placeholder:text-white/30 focus:border-yellow-400 focus:ring-2 focus:ring-yellow-400/15"
+          />
+
+          <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
             aria-pressed={!showUnreadOnly}
@@ -404,6 +437,11 @@ export default function BusinessDashboardNotifications({
           >
             Unread ({unreadCount})
           </button>
+
+          <span className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/45">
+            Read {readCount.toLocaleString("en-GB")}
+          </span>
+          </div>
         </div>
       ) : null}
 
@@ -444,9 +482,11 @@ export default function BusinessDashboardNotifications({
         {loadState === "success" &&
         visibleNotifications.length === 0 ? (
           <div className="rounded-2xl border border-white/10 bg-black/30 p-5 text-sm leading-6 text-white/60">
-            {showUnreadOnly
-              ? "You have no unread notifications."
-              : "No notifications have been created for this business yet."}
+            {searchTerm.trim()
+              ? "No notifications match your search."
+              : showUnreadOnly
+                ? "You have no unread notifications."
+                : "No notifications have been created for this business yet."}
           </div>
         ) : null}
 

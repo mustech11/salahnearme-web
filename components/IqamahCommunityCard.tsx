@@ -71,6 +71,8 @@ const ALLOWED_PRAYERS = new Set([
 
 const REFRESH_INTERVAL_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 12_000;
+const STALE_AFTER_MS = 3 * REFRESH_INTERVAL_MS;
+const REPORT_COOLDOWN_MS = 15_000;
 
 function cleanString(
   value: string | null | undefined
@@ -252,6 +254,12 @@ export default function IqamahCommunityCard({
   const [updatedAt, setUpdatedAt] =
     useState<Date | null>(null);
 
+  const [isPageVisible, setIsPageVisible] =
+    useState(true);
+
+  const [reportCooldownUntil, setReportCooldownUntil] =
+    useState<number | null>(null);
+
   const cleanMosqueId = useMemo(
     () => mosqueId.trim(),
     [mosqueId]
@@ -375,7 +383,32 @@ export default function IqamahCommunityCard({
   ]);
 
   useEffect(() => {
+    const updateVisibility = () => {
+      const visible = document.visibilityState === "visible";
+      setIsPageVisible(visible);
+
+      if (visible) {
+        void load();
+      }
+    };
+
+    updateVisibility();
+    document.addEventListener("visibilitychange", updateVisibility);
+
+    return () => {
+      document.removeEventListener("visibilitychange", updateVisibility);
+    };
+  }, [load]);
+
+  useEffect(() => {
     void load();
+
+    if (!isPageVisible) {
+      return () => {
+        loadAbortRef.current?.abort();
+        reportAbortRef.current?.abort();
+      };
+    }
 
     const intervalId = window.setInterval(() => {
       void load();
@@ -386,7 +419,7 @@ export default function IqamahCommunityCard({
       loadAbortRef.current?.abort();
       reportAbortRef.current?.abort();
     };
-  }, [load]);
+  }, [isPageVisible, load]);
 
   const report = useCallback(
     async (reportType: ReportType) => {
@@ -452,6 +485,10 @@ export default function IqamahCommunityCard({
             "JazakAllahu khayran — your report was recorded."
         );
 
+        setReportCooldownUntil(
+          Date.now() + REPORT_COOLDOWN_MS
+        );
+
         await load();
       } catch (error) {
         if (
@@ -498,9 +535,36 @@ export default function IqamahCommunityCard({
   const label = getSignalLabel(signal);
   const signalTone = getSignalTone(signal);
 
+  const cooldownActive =
+    reportCooldownUntil !== null &&
+    Date.now() < reportCooldownUntil;
+
   const buttonDisabled =
     Boolean(submittingType) ||
-    Boolean(validationError);
+    Boolean(validationError) ||
+    cooldownActive;
+
+  const isStale =
+    updatedAt !== null &&
+    Date.now() - updatedAt.getTime() > STALE_AFTER_MS;
+
+  const confidenceLabel = signal
+    ? `${signal.confidence} confidence`
+    : "No confidence yet";
+
+  useEffect(() => {
+    if (!reportCooldownUntil) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setReportCooldownUntil(null);
+    }, Math.max(0, reportCooldownUntil - Date.now()));
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [reportCooldownUntil]);
 
   return (
     <section
@@ -521,9 +585,22 @@ export default function IqamahCommunityCard({
           </p>
         </div>
 
-        <span className="rounded-full border border-yellow-500/20 bg-yellow-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-yellow-300">
-          {cleanPrayer}
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="rounded-full border border-yellow-500/20 bg-yellow-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-yellow-300">
+            {cleanPrayer}
+          </span>
+
+          <button
+            type="button"
+            onClick={() => {
+              void load();
+            }}
+            disabled={loadState === "loading" || Boolean(submittingType)}
+            className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-white/60 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 disabled:cursor-wait disabled:opacity-50"
+          >
+            {loadState === "loading" ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </div>
 
       <div
@@ -534,13 +611,36 @@ export default function IqamahCommunityCard({
           : label}
       </div>
 
-      {updatedAt ? (
-        <div className="mt-2 text-[10px] text-white/40">
-          Last refreshed{" "}
-          {updatedAt.toLocaleTimeString("en-GB", {
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-white/40">
+        {updatedAt ? (
+          <span>
+            Last refreshed{" "}
+            {updatedAt.toLocaleTimeString("en-GB", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
+        ) : null}
+
+        {signal ? (
+          <>
+            <span aria-hidden="true">•</span>
+            <span>{signal.total.toLocaleString("en-GB")} recent report{signal.total === 1 ? "" : "s"}</span>
+            <span aria-hidden="true">•</span>
+            <span className="capitalize">{confidenceLabel}</span>
+          </>
+        ) : null}
+
+        {isStale ? (
+          <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 font-bold text-amber-300">
+            Signal may be stale
+          </span>
+        ) : null}
+      </div>
+
+      {cooldownActive ? (
+        <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/55">
+          Thank you. Please wait a short moment before sending another report.
         </div>
       ) : null}
 

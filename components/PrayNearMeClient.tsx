@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type PrayerTimes = {
   fajr_begins: string | null;
@@ -158,6 +165,8 @@ const TEST_LOCATIONS: TestLocation[] = [
 
 // Change this to false before public production launch.
 const SHOW_TEST_LOCATIONS = false;
+const REQUEST_TIMEOUT_MS = 20_000;
+const GEOLOCATION_TIMEOUT_MS = 12_000;
 
 function scoreLabel(score: number) {
   if (score >= 85) return "Excellent option";
@@ -819,6 +828,11 @@ function trackNearbyBusinessClick({
 }
 
 export default function PrayNearMeClient() {
+  const statusId = useId();
+  const requestControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  const lastCoordinatesRef = useRef<{ lat: number; lng: number } | null>(null);
+
   const [loading, setLoading] = useState(false);
   const [locationDenied, setLocationDenied] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -829,6 +843,16 @@ export default function PrayNearMeClient() {
   );
 
   const trackedResultKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+      requestControllerRef.current?.abort();
+      requestControllerRef.current = null;
+    };
+  }, []);
 
   const mosques = useMemo(() => data?.mosques ?? [], [data]);
   const bestMosque = data?.best ?? null;
@@ -871,11 +895,23 @@ export default function PrayNearMeClient() {
     });
   }, [data, bestMosque, mosques, radius, lastLocationLabel]);
 
-  async function loadRecommendations(
+  const loadRecommendations = useCallback(async (
     lat: number,
     lng: number,
     label = "Current location"
-  ) {
+  ) => {
+    requestControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    lastCoordinatesRef.current = { lat, lng };
+
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
+
     try {
       setLoading(true);
       setErrorMessage("");
@@ -883,29 +919,60 @@ export default function PrayNearMeClient() {
       setData(null);
       setLastLocationLabel(label);
 
-      const res = await fetch(
-        `/api/near-me/pray?lat=${encodeURIComponent(
-          lat
-        )}&lng=${encodeURIComponent(lng)}&radius=${radius}`,
-        {
-          cache: "no-store",
-        }
-      );
+      const params = new URLSearchParams({
+        lat: String(lat),
+        lng: String(lng),
+        radius: String(radius),
+      });
+
+      const res = await fetch(`/api/near-me/pray?${params.toString()}`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
 
       const json = (await res.json().catch(() => ({}))) as ApiResponse;
 
+      if (!mountedRef.current) return;
+
       if (!res.ok || !json.ok) {
-        setErrorMessage(json.error ?? "Could not load nearby prayer options.");
+        setErrorMessage(
+          json.error ??
+            (res.status === 429
+              ? "Too many searches were made. Please wait briefly and try again."
+              : "Could not load nearby prayer options.")
+        );
         return;
       }
 
       setData(json);
-    } catch {
+      trackedResultKeyRef.current = null;
+    } catch (error) {
+      if (!mountedRef.current) return;
+
+      if (error instanceof DOMException && error.name === "AbortError") {
+        if (timedOut) {
+          setErrorMessage("The mosque search timed out. Please try again.");
+        }
+        return;
+      }
+
+      console.error("Pray Near Me search failed:", error);
       setErrorMessage("Could not load nearby prayer options.");
     } finally {
-      setLoading(false);
+      window.clearTimeout(timeoutId);
+
+      if (mountedRef.current) {
+        setLoading(false);
+      }
+
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+      }
     }
-  }
+  }, [radius]);
 
   function useMyLocation() {
     setErrorMessage("");
@@ -936,7 +1003,7 @@ export default function PrayNearMeClient() {
       },
       {
         enableHighAccuracy: true,
-        timeout: 10000,
+        timeout: GEOLOCATION_TIMEOUT_MS,
         maximumAge: 60000,
       }
     );
@@ -1042,12 +1109,33 @@ export default function PrayNearMeClient() {
 
           {errorMessage ? (
             <div className="mt-5 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
-              {errorMessage}
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span>{errorMessage}</span>
+              {lastCoordinatesRef.current ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const coordinates = lastCoordinatesRef.current;
+                    if (coordinates) {
+                      void loadRecommendations(
+                        coordinates.lat,
+                        coordinates.lng,
+                        lastLocationLabel ?? "Current location"
+                      );
+                    }
+                  }}
+                  className="rounded-lg border border-red-400/30 px-3 py-2 text-xs font-black text-red-100 transition hover:bg-red-500/10"
+                >
+                  Retry
+                </button>
+              ) : null}
+              </div>
             </div>
           ) : null}
         </div>
       </section>
 
+      <div id={statusId} aria-live="polite" aria-atomic="true">
       {loading ? (
         <section className="mt-8 rounded-3xl border border-yellow-500/20 bg-yellow-500/10 p-6">
           <div className="text-sm uppercase tracking-[0.22em] text-yellow-300">
@@ -1064,6 +1152,7 @@ export default function PrayNearMeClient() {
           </p>
         </section>
       ) : null}
+      </div>
 
       {bestMosque ? (
         <BestMosqueCard
@@ -1757,4 +1846,3 @@ function Badge({ children }: { children: ReactNode }) {
     </span>
   );
 }
-

@@ -313,21 +313,42 @@ function buildPayload(form: FormState): FormState {
 async function readSaveResponse(
   response: Response
 ): Promise<SaveResponse> {
-  try {
-    const value: unknown = await response.json();
+  const contentType = response.headers.get("content-type") ?? "";
 
-    if (
-      !value ||
-      typeof value !== "object" ||
-      Array.isArray(value)
-    ) {
+  if (contentType.toLowerCase().includes("application/json")) {
+    try {
+      const value: unknown = await response.json();
+
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return {};
+      }
+
+      return value as SaveResponse;
+    } catch {
       return {};
     }
+  }
 
-    return value as SaveResponse;
+  try {
+    const text = cleanString(await response.text());
+    return text ? { message: text } : {};
   } catch {
     return {};
   }
+}
+
+function getSaveError(data: SaveResponse, status: number): string {
+  const supplied = cleanString(data.error) || cleanString(data.message);
+  if (supplied) return supplied;
+  if (status === 400) return "Some mosque settings are invalid.";
+  if (status === 401) return "Your session has expired. Please sign in again.";
+  if (status === 403) return "You do not have permission to update this mosque.";
+  if (status === 404) return "The mosque could not be found.";
+  if (status === 409) return "These settings changed before they could be saved. Refresh and try again.";
+  if (status === 422) return "Correct the invalid mosque settings and try again.";
+  if (status === 429) return "Too many save requests were submitted. Please wait and try again.";
+  if (status >= 500) return "The mosque settings service is temporarily unavailable.";
+  return DEFAULT_ERROR_MESSAGE;
 }
 
 export default function MosqueManagementEditor({
@@ -410,6 +431,16 @@ export default function MosqueManagementEditor({
     serialiseForm(form) !== savedSnapshot;
 
   const isSaving = saveState === "saving";
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasUnsavedChanges]);
 
   const clearFeedback = useCallback(() => {
     setSaveState("idle");
@@ -514,9 +545,7 @@ export default function MosqueManagementEditor({
       if (!response.ok || data.ok === false) {
         setSaveState("error");
         setErrorMessage(
-          cleanString(data.error) ||
-            cleanString(data.message) ||
-            DEFAULT_ERROR_MESSAGE
+          getSaveError(data, response.status)
         );
         return;
       }
@@ -593,7 +622,7 @@ export default function MosqueManagementEditor({
       }}
       noValidate
     >
-      <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8">
+      <section className="relative overflow-hidden rounded-[2rem] border border-yellow-500/20 bg-[radial-gradient(circle_at_top_right,rgba(234,179,8,0.08),transparent_30%),rgb(var(--card))] p-5 sm:p-6 md:p-8">
         <div className="text-xl font-semibold text-yellow-400">
           Mosque profile
         </div>
@@ -706,7 +735,7 @@ export default function MosqueManagementEditor({
         </div>
       </section>
 
-      <section className="rounded-3xl border border-green-500/20 bg-[rgb(var(--card))] p-6 md:p-8">
+      <section className="relative overflow-hidden rounded-[2rem] border border-green-500/20 bg-[radial-gradient(circle_at_top_right,rgba(34,197,94,0.08),transparent_30%),rgb(var(--card))] p-5 sm:p-6 md:p-8">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <div className="text-xl font-semibold text-green-300">
@@ -870,7 +899,7 @@ export default function MosqueManagementEditor({
         ) : null}
       </section>
 
-      <section className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8">
+      <section className="relative overflow-hidden rounded-[2rem] border border-yellow-500/20 bg-[radial-gradient(circle_at_top_right,rgba(234,179,8,0.08),transparent_30%),rgb(var(--card))] p-5 sm:p-6 md:p-8">
         <div className="text-xl font-semibold text-yellow-400">
           City prayer times
         </div>
@@ -1001,7 +1030,7 @@ export default function MosqueManagementEditor({
           }
           aria-busy={isSaving}
           aria-describedby={statusId}
-          className="inline-flex min-h-12 items-center justify-center rounded-xl bg-yellow-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex min-h-12 items-center justify-center rounded-xl border border-yellow-300/30 bg-gradient-to-b from-yellow-400 to-yellow-500 px-5 py-3 text-sm font-black text-black shadow-[0_14px_35px_rgba(234,179,8,0.12)] transition hover:-translate-y-0.5 hover:from-yellow-300 hover:to-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isSaving ? (
             <>

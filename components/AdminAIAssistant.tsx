@@ -1,6 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_QUESTION_LENGTH = 1_500;
 
 type Snapshot = {
   generated_at: string;
@@ -11,12 +14,12 @@ type Snapshot = {
   };
   totals: Record<string, number>;
   issues: {
-    cities_missing_coordinates: any[];
-    cities_missing_current_month_prayer_times: any[];
-    businesses_missing_phone_website_address_or_postcode: any[];
-    inactive_or_not_live_businesses: any[];
-    imported_mosques_needing_review: any[];
-    possible_duplicate_mosque_groups: any[][];
+    cities_missing_coordinates: Record<string, unknown>[];
+    cities_missing_current_month_prayer_times: Record<string, unknown>[];
+    businesses_missing_phone_website_address_or_postcode: Record<string, unknown>[];
+    inactive_or_not_live_businesses: Record<string, unknown>[];
+    imported_mosques_needing_review: Record<string, unknown>[];
+    possible_duplicate_mosque_groups: Record<string, unknown>[][];
   };
 };
 
@@ -37,6 +40,7 @@ function scoreClass(score: number) {
 }
 
 export default function AdminAIAssistant() {
+  const requestControllerRef = useRef<AbortController | null>(null);
   const [password, setPassword] = useState("");
   const [question, setQuestion] = useState(starterQuestions[0]);
   const [answer, setAnswer] = useState("");
@@ -44,14 +48,59 @@ export default function AdminAIAssistant() {
   const [loading, setLoading] = useState(false);
   const [loadingSnapshot, setLoadingSnapshot] = useState(false);
   const [error, setError] = useState("");
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+
+  useEffect(() => {
+    return () => {
+      requestControllerRef.current?.abort();
+    };
+  }, []);
+
+  const issueTotal = useMemo(() => {
+    if (!snapshot) return 0;
+    return Object.values(snapshot.totals).reduce(
+      (total, value) => total + (Number.isFinite(value) ? value : 0),
+      0
+    );
+  }, [snapshot]);
+
+  async function request(
+    input: RequestInfo | URL,
+    init?: RequestInit
+  ): Promise<Response> {
+    requestControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const timeoutId = window.setTimeout(
+      () => controller.abort(),
+      REQUEST_TIMEOUT_MS
+    );
+
+    try {
+      return await fetch(input, {
+        ...init,
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+    } finally {
+      window.clearTimeout(timeoutId);
+
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+      }
+    }
+  }
 
   async function loadSnapshot() {
     setLoadingSnapshot(true);
     setError("");
 
     try {
-      const res = await fetch(
-        `/api/admin/ai-assistant?password=${encodeURIComponent(password)}`
+      const res = await request(
+        `/api/admin/ai-assistant?password=${encodeURIComponent(password)}`,
+        { headers: { Accept: "application/json" } }
       );
 
       const data = await res.json();
@@ -62,8 +111,13 @@ export default function AdminAIAssistant() {
       }
 
       setSnapshot(data.snapshot);
-    } catch {
-      setError("Failed to load admin dashboard snapshot.");
+      setLastUpdatedAt(new Date());
+    } catch (error) {
+      setError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "The dashboard snapshot request timed out."
+          : "Failed to load admin dashboard snapshot."
+      );
     } finally {
       setLoadingSnapshot(false);
     }
@@ -77,7 +131,7 @@ export default function AdminAIAssistant() {
     setAnswer("");
 
     try {
-      const res = await fetch("/api/admin/ai-assistant", {
+      const res = await request("/api/admin/ai-assistant", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -97,8 +151,13 @@ export default function AdminAIAssistant() {
 
       setAnswer(data.answer ?? "No answer returned.");
       setSnapshot(data.snapshot ?? null);
-    } catch {
-      setError("Failed to contact AI assistant.");
+      setLastUpdatedAt(new Date());
+    } catch (error) {
+      setError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "The AI assistant request timed out."
+          : "Failed to contact AI assistant."
+      );
     } finally {
       setLoading(false);
     }
@@ -173,6 +232,24 @@ export default function AdminAIAssistant() {
 
       {snapshot && (
         <>
+          <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-xs text-white/45">
+            <span>
+              Snapshot generated{" "}
+              {new Date(snapshot.generated_at).toLocaleString("en-GB")}
+            </span>
+            <span>
+              {issueTotal.toLocaleString("en-GB")} total measured records
+            </span>
+            {lastUpdatedAt ? (
+              <span>
+                Refreshed{" "}
+                {lastUpdatedAt.toLocaleTimeString("en-GB", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
+            ) : null}
+          </section>
           <section className="grid gap-4 md:grid-cols-4">
             <div
               className={`rounded-3xl border p-6 ${scoreClass(
@@ -265,6 +342,7 @@ export default function AdminAIAssistant() {
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           rows={4}
+          maxLength={MAX_QUESTION_LENGTH}
           className="mt-2 w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-white outline-none focus:border-yellow-400"
         />
 
@@ -344,7 +422,7 @@ function IssueCard({
 }: {
   title: string;
   count: number;
-  items: any[];
+  items: Record<string, unknown>[];
   field: string;
 }) {
   return (
@@ -362,15 +440,15 @@ function IssueCard({
         ) : (
           items.slice(0, 20).map((item, index) => (
             <div
-              key={`${item.id ?? index}-${item[field] ?? "item"}`}
+              key={`${String(item.id ?? index)}-${String(item[field] ?? "item")}`}
               className="rounded-xl border border-white/10 bg-black/40 p-3"
             >
               <div className="font-semibold text-white">
-                {item[field] ?? "Unnamed"}
+                {String(item[field] ?? "Unnamed")}
               </div>
 
               <div className="mt-1 text-xs text-white/50">
-                {item.slug ?? item.city ?? item.postcode ?? "No extra detail"}
+                {String(item.slug ?? item.city ?? item.postcode ?? "No extra detail")}
               </div>
             </div>
           ))
@@ -384,7 +462,7 @@ function DuplicateGroups({
   groups,
   count,
 }: {
-  groups: any[][];
+  groups: Record<string, unknown>[][];
   count: number;
 }) {
   return (
@@ -412,10 +490,13 @@ function DuplicateGroups({
               </div>
 
               <div className="mt-2 space-y-1">
-                {group.map((mosque: any) => (
-                  <div key={mosque.id} className="text-xs text-white/60">
-                    {mosque.name ?? "Unnamed mosque"} ·{" "}
-                    {mosque.postcode ?? "No postcode"}
+                {group.map((mosque, mosqueIndex) => (
+                  <div
+                    key={String(mosque.id ?? mosqueIndex)}
+                    className="text-xs text-white/60"
+                  >
+                    {String(mosque.name ?? "Unnamed mosque")} ·{" "}
+                    {String(mosque.postcode ?? "No postcode")}
                   </div>
                 ))}
               </div>
@@ -426,4 +507,3 @@ function DuplicateGroups({
     </div>
   );
 }
-

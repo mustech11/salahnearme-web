@@ -147,9 +147,11 @@ export default function Nav({ cities = [] }: Props) {
   const pathname = usePathname() || "/";
   const router = useRouter();
   const mobileMenuRef = useRef<HTMLDivElement | null>(null);
+  const mobileToggleRef = useRef<HTMLButtonElement | null>(null);
 
   const [selectedCity, setSelectedCity] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [cityNavigating, setCityNavigating] = useState(false);
 
   const sortedCities = useMemo(
     () => getSafeCities(cities),
@@ -213,9 +215,13 @@ export default function Nav({ cities = [] }: Props) {
       return;
     }
 
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setMobileOpen(false);
+        mobileToggleRef.current?.focus();
       }
     }
 
@@ -235,6 +241,7 @@ export default function Nav({ cities = [] }: Props) {
     document.addEventListener("mousedown", handleOutsideClick);
 
     return () => {
+      document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleEscape);
       document.removeEventListener("mousedown", handleOutsideClick);
     };
@@ -259,7 +266,14 @@ export default function Nav({ cities = [] }: Props) {
       .filter(Boolean)
       .join("; ");
 
-    router.push(`/${nextSlug}`);
+    setCityNavigating(true);
+    setMobileOpen(false);
+
+    router.push(`/${encodeURIComponent(nextSlug)}`);
+
+    window.setTimeout(() => {
+      setCityNavigating(false);
+    }, 2_000);
   }
 
   const dashboardActive =
@@ -301,6 +315,7 @@ export default function Nav({ cities = [] }: Props) {
             <Link
               key={item.href}
               href={item.href}
+              aria-current={item.active ? "page" : undefined}
               className={desktopLinkClass(item.active)}
             >
               {item.label}
@@ -326,6 +341,7 @@ export default function Nav({ cities = [] }: Props) {
             <select
               id="desktop-city-select"
               value={selectedCity}
+              disabled={cityNavigating}
               onChange={(event) =>
                 handleCityChange(event.target.value)
               }
@@ -364,6 +380,7 @@ export default function Nav({ cities = [] }: Props) {
           </Link>
 
           <button
+            ref={mobileToggleRef}
             type="button"
             onClick={() => setMobileOpen((current) => !current)}
             aria-expanded={mobileOpen}
@@ -413,7 +430,10 @@ export default function Nav({ cities = [] }: Props) {
           {mobileOpen ? (
             <div
               id="mobile-navigation"
-              className="absolute right-0 top-[calc(100%+0.8rem)] w-[min(92vw,430px)] rounded-3xl border border-yellow-500/20 bg-[#030918]/98 p-4 shadow-2xl shadow-black/60 backdrop-blur-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Mobile navigation menu"
+              className="absolute right-0 top-[calc(100%+0.8rem)] max-h-[calc(100vh-7rem)] w-[min(92vw,430px)] overflow-y-auto rounded-3xl border border-yellow-500/20 bg-[#030918]/98 p-4 shadow-2xl shadow-black/60 backdrop-blur-2xl"
             >
               <div className="mb-4 flex items-center justify-between border-b border-white/10 pb-4">
                 <div>
@@ -439,6 +459,7 @@ export default function Nav({ cities = [] }: Props) {
                   <Link
                     key={item.href}
                     href={item.href}
+                    aria-current={item.active ? "page" : undefined}
                     className={mobileLinkClass(item.active)}
                   >
                     <span>{item.label}</span>
@@ -519,6 +540,7 @@ export default function Nav({ cities = [] }: Props) {
                   <select
                     id="mobile-city-select"
                     value={selectedCity}
+                    disabled={cityNavigating}
                     onChange={(event) =>
                       handleCityChange(event.target.value)
                     }
@@ -540,7 +562,11 @@ export default function Nav({ cities = [] }: Props) {
                     aria-hidden="true"
                     className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-xs text-yellow-300"
                   >
-                    ▾
+                    {cityNavigating ? (
+                      <span className="block size-4 animate-spin rounded-full border-2 border-yellow-300/30 border-t-yellow-300" />
+                    ) : (
+                      "▾"
+                    )}
                   </span>
                 </div>
               </div>

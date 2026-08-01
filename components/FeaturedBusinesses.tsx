@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 import BusinessTrackedLink from "@/components/BusinessTrackedLink";
@@ -382,11 +383,12 @@ export default async function FeaturedBusinesses({
                 <div className="relative h-44 overflow-hidden bg-[radial-gradient(circle_at_top_right,rgba(212,175,55,0.14),transparent_45%),linear-gradient(145deg,#071532,#020718)]">
                   {cardImage ? (
                     <>
-                      <img
+                      <Image
                         src={cardImage}
                         alt={`${businessName} image`}
-                        loading="lazy"
-                        className="h-full w-full object-cover transition duration-700 group-hover:scale-[1.05]"
+                        fill
+                        sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
+                        className="object-cover transition duration-700 group-hover:scale-[1.05]"
                       />
 
                       <div className="absolute inset-0 bg-gradient-to-t from-[#030a1d] via-black/20 to-transparent" />
@@ -424,12 +426,11 @@ export default async function FeaturedBusinesses({
 
                   {business.logo_url &&
                   business.cover_image_url ? (
-                    <img
-                      src={
-                        business.logo_url
-                      }
+                    <Image
+                      src={business.logo_url}
                       alt={`${businessName} logo`}
-                      loading="lazy"
+                      width={56}
+                      height={56}
                       className="absolute bottom-4 left-4 h-14 w-14 rounded-2xl border border-yellow-400/25 bg-black/80 object-cover p-1 shadow-xl"
                     />
                   ) : null}

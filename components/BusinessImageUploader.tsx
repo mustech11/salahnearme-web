@@ -66,6 +66,11 @@ type Operation =
   | "update"
   | null;
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const REQUEST_TIMEOUT_MS = 25_000;
+const MAX_MEDIA_LABEL_LENGTH = 80;
 const MAX_IMAGE_FILE_SIZE_MB = 5;
 const MAX_VIDEO_FILE_SIZE_MB = 50;
 const MAX_GALLERY_IMAGES = 12;
@@ -321,6 +326,10 @@ async function readJsonSafely(res: Response): Promise<ApiResponse> {
 }
 
 async function updateBusinessMedia(payload: MediaUpdatePayload) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
   const res = await fetch("/api/business-dashboard/media", {
     method: "POST",
     headers: {
@@ -329,6 +338,7 @@ async function updateBusinessMedia(payload: MediaUpdatePayload) {
     },
     credentials: "same-origin",
     cache: "no-store",
+    signal: controller.signal,
     body: JSON.stringify(payload),
   });
 
@@ -339,6 +349,15 @@ async function updateBusinessMedia(payload: MediaUpdatePayload) {
   }
 
   return data;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("The media update request timed out. Please try again.");
+    }
+
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 function buildInitialMediaItems(params: {
@@ -374,7 +393,17 @@ function buildInitialMediaItems(params: {
       })
     );
 
-  return [...params.currentMediaItems, ...galleryItems, ...videoItems];
+  const merged = [...params.currentMediaItems, ...galleryItems, ...videoItems];
+  const seen = new Set<string>();
+
+  return merged.filter((item) => {
+    if (!item.url || seen.has(item.url)) {
+      return false;
+    }
+
+    seen.add(item.url);
+    return true;
+  });
 }
 
 function categoryLabel(category: MediaCategory) {
@@ -421,6 +450,14 @@ export default function BusinessImageUploader({
     return mediaItems.find((item) => item.featured) ?? null;
   }, [mediaItems]);
 
+  const validationError = useMemo(
+    () =>
+      UUID_REGEX.test(businessId)
+        ? ""
+        : "A valid business is required before media can be managed.",
+    [businessId]
+  );
+
   const imageItems = mediaItems.filter((item) => item.kind === "image");
   const videoItems = mediaItems.filter((item) => item.kind === "video");
 
@@ -452,6 +489,7 @@ export default function BusinessImageUploader({
 
   async function uploadLogo(file: File) {
     try {
+      if (validationError) throw new Error(validationError);
       resetMessages();
       validateImage(file);
       setOperation("logo");
@@ -483,6 +521,7 @@ export default function BusinessImageUploader({
 
   async function uploadCover(file: File) {
     try {
+      if (validationError) throw new Error(validationError);
       resetMessages();
       validateImage(file);
       setOperation("cover");
@@ -515,6 +554,11 @@ export default function BusinessImageUploader({
   }
 
   async function uploadGallery(files: FileList | null) {
+    if (validationError) {
+      setErrorMessage(validationError);
+      return;
+    }
+
     if (!files || files.length === 0) {
       return;
     }
@@ -578,6 +622,11 @@ export default function BusinessImageUploader({
   }
 
   async function uploadVideos(files: FileList | null) {
+    if (validationError) {
+      setErrorMessage(validationError);
+      return;
+    }
+
     if (!files || files.length === 0) {
       return;
     }
@@ -986,6 +1035,7 @@ export default function BusinessImageUploader({
 
                     <input
                       value={item.label}
+                      maxLength={MAX_MEDIA_LABEL_LENGTH}
                       disabled={loading}
                       onChange={(event) => {
                         const nextLabel = event.target.value;
@@ -995,7 +1045,7 @@ export default function BusinessImageUploader({
                             mediaItem.id === item.id
                               ? {
                                   ...mediaItem,
-                                  label: nextLabel,
+                                  label: nextLabel.slice(0, MAX_MEDIA_LABEL_LENGTH),
                                 }
                               : mediaItem
                           )
@@ -1114,6 +1164,7 @@ export default function BusinessImageUploader({
 
                     <input
                       value={item.label}
+                      maxLength={MAX_MEDIA_LABEL_LENGTH}
                       disabled={loading}
                       onChange={(event) => {
                         const nextLabel = event.target.value;
@@ -1123,7 +1174,7 @@ export default function BusinessImageUploader({
                             mediaItem.id === item.id
                               ? {
                                   ...mediaItem,
-                                  label: nextLabel,
+                                  label: nextLabel.slice(0, MAX_MEDIA_LABEL_LENGTH),
                                 }
                               : mediaItem
                           )

@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type City = {
   name: string;
@@ -19,7 +25,10 @@ type PrayerTimes = {
   isha_start: string | null;
 } | null;
 
-type PrayerTimesSource = "manual_override" | "calculated" | "unavailable";
+type PrayerTimesSource =
+  | "manual_override"
+  | "calculated"
+  | "unavailable";
 
 type Props = {
   city?: City | null;
@@ -47,10 +56,24 @@ type NearestCityApiResponse = {
 };
 
 type PrayerItem = {
+  key:
+    | "fajr"
+    | "sunrise"
+    | "dhuhr"
+    | "asr"
+    | "maghrib"
+    | "isha";
   name: string;
   shortName: string;
   value: string | null;
+  isPrayer: boolean;
 };
+
+type NextPrayerResult = {
+  item: PrayerItem;
+  isTomorrow: boolean;
+  minutesUntil: number;
+} | null;
 
 type LocationState =
   | {
@@ -71,7 +94,10 @@ function cleanString(value: unknown, maxLength = 180): string {
     return "";
   }
 
-  return value.trim().replace(/\s+/g, " ").slice(0, maxLength);
+  return value
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, maxLength);
 }
 
 function cleanSlug(value: unknown): string {
@@ -84,41 +110,85 @@ function cleanSlug(value: unknown): string {
 
 function formatDisplayTime(value: string | null | undefined): string {
   const cleaned = cleanString(value, 20);
+  const match = cleaned.match(/^(\d{1,2}):(\d{2})/);
 
-  return cleaned ? cleaned.slice(0, 5) : "—";
+  if (!match) {
+    return "—";
+  }
+
+  const hour = match[1].padStart(2, "0");
+  const minute = match[2];
+
+  return `${hour}:${minute}`;
+}
+
+function timeToMinutes(value: string | null | undefined): number | null {
+  const match = cleanString(value, 20).match(/^(\d{1,2}):(\d{2})/);
+
+  if (!match) {
+    return null;
+  }
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+
+  if (
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+
+  return hour * 60 + minute;
 }
 
 function getPrayerItems(prayerTimes: PrayerTimes): PrayerItem[] {
   return [
     {
+      key: "fajr",
       name: "Fajr",
       shortName: "Fajr",
       value: prayerTimes?.fajr_start ?? null,
+      isPrayer: true,
     },
     {
+      key: "sunrise",
       name: "Sunrise",
       shortName: "Rise",
       value: prayerTimes?.sunrise ?? null,
+      isPrayer: false,
     },
     {
+      key: "dhuhr",
       name: "Dhuhr",
       shortName: "Dhuhr",
       value: prayerTimes?.dhuhr_start ?? null,
+      isPrayer: true,
     },
     {
+      key: "asr",
       name: "Asr",
       shortName: "Asr",
       value: prayerTimes?.asr_start ?? null,
+      isPrayer: true,
     },
     {
+      key: "maghrib",
       name: "Maghrib",
       shortName: "Maghrib",
       value: prayerTimes?.maghrib_start ?? null,
+      isPrayer: true,
     },
     {
+      key: "isha",
       name: "Isha",
       shortName: "Isha",
       value: prayerTimes?.isha_start ?? null,
+      isPrayer: true,
     },
   ];
 }
@@ -127,7 +197,8 @@ function getSourceDetails(source: PrayerTimesSource) {
   if (source === "manual_override") {
     return {
       label: "Verified local timetable",
-      description: "Local timetable data is available for this city.",
+      description:
+        "These beginning times come from locally maintained timetable data.",
       className:
         "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
     };
@@ -135,8 +206,9 @@ function getSourceDetails(source: PrayerTimesSource) {
 
   if (source === "calculated") {
     return {
-      label: "Calculated automatically",
-      description: "Calculated from the city coordinates and timezone.",
+      label: "Calculated locally",
+      description:
+        "These beginning times are calculated from the city coordinates and timezone.",
       className:
         "border-yellow-500/30 bg-yellow-500/10 text-yellow-300",
     };
@@ -144,8 +216,10 @@ function getSourceDetails(source: PrayerTimesSource) {
 
   return {
     label: "Times unavailable",
-    description: "Choose a supported city to display prayer times.",
-    className: "border-white/10 bg-white/5 text-white/55",
+    description:
+      "Choose a supported city to display local prayer beginning times.",
+    className:
+      "border-white/10 bg-white/[0.04] text-white/55",
   };
 }
 
@@ -211,7 +285,11 @@ function getNearestCityFromResponse(
     slug
       .split("-")
       .filter(Boolean)
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .map(
+        (word) =>
+          word.charAt(0).toUpperCase() +
+          word.slice(1)
+      )
       .join(" ");
 
   const timezone =
@@ -230,34 +308,21 @@ function getGeolocationErrorMessage(
   error: GeolocationPositionError
 ): string {
   if (error.code === error.PERMISSION_DENIED) {
-    return "Location permission was blocked. Choose your city from the menu instead.";
+    return "Location permission was blocked. Choose your city from the selector instead.";
   }
 
   if (error.code === error.POSITION_UNAVAILABLE) {
-    return "Your location could not be detected. Choose your city manually.";
+    return "Your current location could not be detected. Choose your city manually.";
   }
 
   if (error.code === error.TIMEOUT) {
     return "Location detection timed out. Please try again.";
   }
 
-  return "Your location could not be detected.";
+  return "Your current location could not be detected.";
 }
 
-function getNextPrayer(
-  items: PrayerItem[],
-  timezone: string
-): PrayerItem | null {
-  const validItems = items.filter((item) => {
-    return /^\d{1,2}:\d{2}/.test(cleanString(item.value, 20));
-  });
-
-  if (validItems.length === 0) {
-    return null;
-  }
-
-  let currentMinutes = 0;
-
+function getCurrentMinutes(timezone: string): number {
   try {
     const parts = new Intl.DateTimeFormat("en-GB", {
       hour: "2-digit",
@@ -274,21 +339,62 @@ function getNextPrayer(
       parts.find((part) => part.type === "minute")?.value ?? 0
     );
 
-    currentMinutes = hour * 60 + minute;
+    return hour * 60 + minute;
   } catch {
     const now = new Date();
-    currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+    return now.getHours() * 60 + now.getMinutes();
+  }
+}
+
+function getNextPrayer(
+  items: PrayerItem[],
+  timezone: string
+): NextPrayerResult {
+  const validPrayers = items
+    .filter((item) => item.isPrayer)
+    .map((item) => ({
+      item,
+      minutes: timeToMinutes(item.value),
+    }))
+    .filter(
+      (
+        value
+      ): value is {
+        item: PrayerItem;
+        minutes: number;
+      } => value.minutes !== null
+    )
+    .sort((a, b) => a.minutes - b.minutes);
+
+  if (validPrayers.length === 0) {
+    return null;
   }
 
-  const next = validItems.find((item) => {
-    const [hourText, minuteText] = cleanString(item.value, 20).split(":");
-    const hour = Number(hourText);
-    const minute = Number(minuteText);
+  const currentMinutes = getCurrentMinutes(timezone);
 
-    return hour * 60 + minute > currentMinutes;
-  });
+  const nextToday = validPrayers.find(
+    (value) => value.minutes > currentMinutes
+  );
 
-  return next ?? validItems[0] ?? null;
+  if (nextToday) {
+    return {
+      item: nextToday.item,
+      isTomorrow: false,
+      minutesUntil: nextToday.minutes - currentMinutes,
+    };
+  }
+
+  const fajr =
+    validPrayers.find(
+      (value) => value.item.key === "fajr"
+    ) ?? validPrayers[0];
+
+  return {
+    item: fajr.item,
+    isTomorrow: true,
+    minutesUntil: 24 * 60 - currentMinutes + fajr.minutes,
+  };
 }
 
 export default function SelectedCityHomePanel({
@@ -298,33 +404,47 @@ export default function SelectedCityHomePanel({
   prayerTimesUpdatedAt = null,
 }: Props) {
   const router = useRouter();
+
   const mountedRef = useRef(true);
+  const requestControllerRef =
+    useRef<AbortController | null>(null);
 
-  const cityName = cleanString(city?.name, 180) || "Your nearest city";
+  const cityName =
+    cleanString(city?.name, 180) ||
+    "Your nearest city";
+
   const citySlug = cleanSlug(city?.slug);
-  const timezone =
-    cleanString(city?.timezone, 120) || DEFAULT_TIMEZONE;
 
-  const [timeString, setTimeString] = useState("");
-  const [dateString, setDateString] = useState("");
-  const [locationState, setLocationState] = useState<LocationState>({
-    type: "idle",
-    message: null,
-  });
+  const timezone =
+    cleanString(city?.timezone, 120) ||
+    DEFAULT_TIMEZONE;
+
+  const [timeString, setTimeString] =
+    useState("");
+
+  const [dateString, setDateString] =
+    useState("");
+
+  const [locationState, setLocationState] =
+    useState<LocationState>({
+      type: "idle",
+      message: null,
+    });
 
   useEffect(() => {
     mountedRef.current = true;
 
     return () => {
       mountedRef.current = false;
+      requestControllerRef.current?.abort();
     };
   }, []);
 
   useEffect(() => {
     function updateClock() {
-      try {
-        const now = new Date();
+      const now = new Date();
 
+      try {
         setTimeString(
           new Intl.DateTimeFormat("en-GB", {
             hour: "2-digit",
@@ -345,8 +465,6 @@ export default function SelectedCityHomePanel({
           }).format(now)
         );
       } catch {
-        const now = new Date();
-
         setTimeString(
           now.toLocaleTimeString("en-GB", {
             hour: "2-digit",
@@ -368,9 +486,14 @@ export default function SelectedCityHomePanel({
 
     updateClock();
 
-    const timer = window.setInterval(updateClock, 1_000);
+    const timer = window.setInterval(
+      updateClock,
+      1_000
+    );
 
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+    };
   }, [timezone]);
 
   const useMyLocation = useCallback(() => {
@@ -388,14 +511,22 @@ export default function SelectedCityHomePanel({
       return;
     }
 
+    requestControllerRef.current?.abort();
+
     setLocationState({
       type: "loading",
-      message: "Finding your nearest SalahNearMe city...",
+      message:
+        "Finding your nearest supported SalahNearMe city…",
     });
 
     navigator.geolocation.getCurrentPosition(
       async (position) => {
-        const controller = new AbortController();
+        const controller =
+          new AbortController();
+
+        requestControllerRef.current =
+          controller;
+
         const timeout = window.setTimeout(
           () => controller.abort(),
           REQUEST_TIMEOUT_MS
@@ -403,8 +534,12 @@ export default function SelectedCityHomePanel({
 
         try {
           const params = new URLSearchParams({
-            lat: position.coords.latitude.toString(),
-            lng: position.coords.longitude.toString(),
+            lat: String(
+              position.coords.latitude
+            ),
+            lng: String(
+              position.coords.longitude
+            ),
           });
 
           const response = await fetch(
@@ -420,7 +555,9 @@ export default function SelectedCityHomePanel({
             }
           );
 
-          const data = (await response.json().catch(() => null)) as
+          const data = (await response
+            .json()
+            .catch(() => null)) as
             | NearestCityApiResponse
             | null;
 
@@ -433,29 +570,32 @@ export default function SelectedCityHomePanel({
               type: "error",
               message:
                 cleanString(data?.error, 300) ||
-                "Your nearest city could not be found.",
+                "Your nearest supported city could not be found.",
             });
 
             return;
           }
 
-          const nearestCity = getNearestCityFromResponse(data);
+          const nearestCity =
+            getNearestCityFromResponse(data);
 
           if (!nearestCity) {
             setLocationState({
               type: "error",
               message:
-                "No supported city was found near your location.",
+                "No supported SalahNearMe city was found near your location.",
             });
 
             return;
           }
 
-          setSelectedCityCookie(nearestCity.slug);
+          setSelectedCityCookie(
+            nearestCity.slug
+          );
 
           setLocationState({
             type: "success",
-            message: `Nearest city selected: ${nearestCity.name}`,
+            message: `${nearestCity.name} has been selected. Refreshing your local prayer information…`,
           });
 
           router.refresh();
@@ -474,6 +614,14 @@ export default function SelectedCityHomePanel({
           });
         } finally {
           window.clearTimeout(timeout);
+
+          if (
+            requestControllerRef.current ===
+            controller
+          ) {
+            requestControllerRef.current =
+              null;
+          }
         }
       },
       (error) => {
@@ -483,7 +631,8 @@ export default function SelectedCityHomePanel({
 
         setLocationState({
           type: "error",
-          message: getGeolocationErrorMessage(error),
+          message:
+            getGeolocationErrorMessage(error),
         });
       },
       {
@@ -499,24 +648,53 @@ export default function SelectedCityHomePanel({
     [prayerTimes]
   );
 
-  const hasAnyPrayerTime = prayerItems.some((item) => Boolean(item.value));
+  const hasAnyPrayerTime =
+    prayerItems.some(
+      (item) =>
+        timeToMinutes(item.value) !== null
+    );
 
   const sourceDetails = useMemo(
-    () => getSourceDetails(prayerTimesSource),
+    () =>
+      getSourceDetails(
+        prayerTimesSource
+      ),
     [prayerTimesSource]
   );
 
   const formattedUpdatedAt = useMemo(
-    () => formatUpdatedAt(prayerTimesUpdatedAt, timezone),
+    () =>
+      formatUpdatedAt(
+        prayerTimesUpdatedAt,
+        timezone
+      ),
     [prayerTimesUpdatedAt, timezone]
   );
 
   const nextPrayer = useMemo(
-    () => getNextPrayer(prayerItems, timezone),
+    () =>
+      getNextPrayer(
+        prayerItems,
+        timezone
+      ),
     [prayerItems, timezone, timeString]
   );
 
-  const isLocationLoading = locationState.type === "loading";
+  const isLocationLoading =
+    locationState.type === "loading";
+
+  const nextPrayerCountdown = useMemo(() => {
+    if (!nextPrayer) return null;
+
+    const minutes = Math.max(0, nextPrayer.minutesUntil);
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+
+    if (hours <= 0) return `${remainingMinutes} min`;
+    if (remainingMinutes <= 0) return `${hours}h`;
+
+    return `${hours}h ${remainingMinutes}m`;
+  }, [nextPrayer]);
 
   return (
     <section
@@ -527,34 +705,43 @@ export default function SelectedCityHomePanel({
         <div className="premium-inset rounded-3xl p-5 sm:p-6">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <div className="section-kicker">Your local SalahNearMe</div>
+              <div className="section-kicker">
+                Your local SalahNearMe
+              </div>
 
               <h2
                 id="selected-city-heading"
                 className="mt-3 text-3xl font-black tracking-tight text-white sm:text-4xl"
               >
-                {city ? cityName : "Personalise your homepage"}
+                {city
+                  ? cityName
+                  : "Personalise your homepage"}
               </h2>
             </div>
 
             <span className="premium-badge">
-              {city ? timezone : "Location ready"}
+              {city
+                ? timezone
+                : "Location ready"}
             </span>
           </div>
 
           <p className="mt-3 max-w-xl text-sm leading-7 text-white/60">
             {city
-              ? `Prayer times, mosques and halal places for ${cityName}, presented in one compact daily view.`
-              : "Use your location once or choose a city from the navigation to personalise SalahNearMe."}
+              ? `Prayer times, mosques and halal places for ${cityName}, presented in one clear daily view.`
+              : "Use your location once or choose a city above to personalise prayer times and local discovery."}
           </p>
 
-          <div className="mt-5 grid grid-cols-[1fr_auto] gap-3 rounded-2xl border border-white/10 bg-black/30 p-4">
+          <div className="mt-5 grid gap-3 rounded-2xl border border-white/10 bg-black/30 p-4 sm:grid-cols-[1fr_auto]">
             <div>
               <div className="text-xs font-black uppercase tracking-[0.18em] text-yellow-400">
                 Local time
               </div>
 
-              <div className="mt-1 text-3xl font-black text-white">
+              <div
+                className="mt-1 text-3xl font-black tabular-nums text-white"
+                aria-live="off"
+              >
                 {timeString || "—"}
               </div>
 
@@ -564,18 +751,27 @@ export default function SelectedCityHomePanel({
             </div>
 
             {nextPrayer ? (
-              <div className="min-w-[110px] rounded-2xl border border-yellow-400/25 bg-yellow-400/10 px-4 py-3 text-right">
+              <div className="min-w-[128px] rounded-2xl border border-yellow-400/25 bg-yellow-400/10 px-4 py-3 sm:text-right">
                 <div className="text-[0.65rem] font-black uppercase tracking-[0.17em] text-yellow-300">
-                  Next
+                  {nextPrayer.isTomorrow
+                    ? "Tomorrow"
+                    : "Next salah"}
                 </div>
 
                 <div className="mt-1 text-sm font-black text-white">
-                  {nextPrayer.name}
+                  {nextPrayer.item.name}
                 </div>
 
-                <div className="mt-0.5 text-xl font-black text-yellow-300">
-                  {formatDisplayTime(nextPrayer.value)}
+                <div className="mt-0.5 text-xl font-black tabular-nums text-yellow-300">
+                  {formatDisplayTime(nextPrayer.item.value)}
                 </div>
+
+                {nextPrayerCountdown ? (
+                  <div className="mt-1 text-[0.65rem] font-bold text-yellow-100/70">
+                    {nextPrayer.isTomorrow ? "in " : "Starts in "}
+                    {nextPrayerCountdown}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -585,9 +781,12 @@ export default function SelectedCityHomePanel({
               type="button"
               onClick={useMyLocation}
               disabled={isLocationLoading}
-              className="premium-button px-4 py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+              aria-busy={isLocationLoading}
+              className="premium-button px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isLocationLoading ? "Finding city..." : "Use my location"}
+              {isLocationLoading
+                ? "Finding city…"
+                : city ? "Update from location" : "Use my location"}
             </button>
 
             {citySlug ? (
@@ -625,12 +824,19 @@ export default function SelectedCityHomePanel({
 
           {locationState.message ? (
             <div
-              role={locationState.type === "error" ? "alert" : "status"}
+              role={
+                locationState.type === "error"
+                  ? "alert"
+                  : "status"
+              }
+              aria-live="polite"
               className={[
                 "mt-4 rounded-2xl border p-3 text-sm leading-6",
-                locationState.type === "success"
+                locationState.type ===
+                "success"
                   ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
-                  : locationState.type === "error"
+                  : locationState.type ===
+                      "error"
                     ? "border-red-500/25 bg-red-500/10 text-red-200"
                     : "border-yellow-500/20 bg-yellow-500/10 text-yellow-100",
               ].join(" ")}
@@ -648,7 +854,9 @@ export default function SelectedCityHomePanel({
               </div>
 
               <h3 className="mt-2 text-xl font-black text-white">
-                {city ? `${cityName} prayer times` : "Select your city"}
+                {city
+                  ? `${cityName} prayer times`
+                  : "Select your city"}
               </h3>
             </div>
 
@@ -662,12 +870,13 @@ export default function SelectedCityHomePanel({
           <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-6">
             {prayerItems.map((item) => {
               const isNext =
-                nextPrayer?.name === item.name &&
+                nextPrayer?.item.key ===
+                  item.key &&
                 hasAnyPrayerTime;
 
               return (
                 <div
-                  key={item.name}
+                  key={item.key}
                   className={[
                     "rounded-2xl border px-2 py-3 text-center transition",
                     isNext
@@ -679,13 +888,22 @@ export default function SelectedCityHomePanel({
                     {item.shortName}
                   </div>
 
-                  <div className="mt-1.5 text-lg font-black text-white">
-                    {formatDisplayTime(item.value)}
+                  <div className="mt-1.5 text-lg font-black tabular-nums text-white">
+                    {formatDisplayTime(
+                      item.value
+                    )}
                   </div>
 
                   {isNext ? (
                     <div className="mt-1 text-[0.6rem] font-bold text-yellow-300">
-                      Next
+                      {nextPrayer?.isTomorrow
+                        ? "Tomorrow"
+                        : "Next"}
+                    </div>
+                  ) : item.key ===
+                    "sunrise" ? (
+                    <div className="mt-1 text-[0.6rem] text-white/35">
+                      Not salah
                     </div>
                   ) : null}
                 </div>
@@ -694,26 +912,38 @@ export default function SelectedCityHomePanel({
           </div>
 
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
-            <div className="text-xs leading-5 text-white/45">
+            <div className="max-w-2xl text-xs leading-5 text-white/45">
               {sourceDetails.description}
+
               {formattedUpdatedAt
                 ? ` Last updated ${formattedUpdatedAt}.`
                 : ""}
             </div>
 
             {citySlug ? (
-              <Link
-                href={`/${citySlug}/prayer-times`}
-                className="text-xs font-bold text-yellow-300 hover:text-yellow-100"
-              >
-                View full timetable →
-              </Link>
+              <div className="flex flex-wrap items-center gap-3">
+                <Link
+                  href={`/${citySlug}/mosques`}
+                  className="text-xs font-bold text-white/55 transition hover:text-white"
+                >
+                  Find a mosque
+                </Link>
+
+                <Link
+                  href={`/${citySlug}/prayer-times`}
+                className="text-xs font-bold text-yellow-300 transition hover:text-yellow-100"
+                >
+                  View full timetable →
+                </Link>
+              </div>
             ) : null}
           </div>
 
           {!hasAnyPrayerTime ? (
             <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-4 text-sm leading-6 text-white/55">
-              Prayer times will appear here once a city is selected or detected.
+              Prayer times will appear here
+              after a supported city is selected
+              or detected.
             </div>
           ) : null}
         </div>

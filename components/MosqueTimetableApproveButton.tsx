@@ -274,7 +274,7 @@ export default function MosqueTimetableApproveButton({ importId }: Props) {
         aria-disabled={isDisabled}
         aria-describedby={describedBy}
         title={validationError || undefined}
-        className="inline-flex min-h-10 items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-xs font-bold text-black transition hover:bg-emerald-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+        className="group inline-flex min-h-11 items-center justify-center rounded-xl border border-emerald-300/25 bg-gradient-to-b from-emerald-400 to-emerald-500 px-4 py-2.5 text-xs font-black text-black shadow-[0_12px_30px_rgba(16,185,129,0.12)] transition hover:-translate-y-0.5 hover:from-emerald-300 hover:to-emerald-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
       >
         {isSubmitting ? (
           <>
@@ -304,7 +304,7 @@ export default function MosqueTimetableApproveButton({ importId }: Props) {
           <div
             id={successId}
             role="status"
-            className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs leading-5 text-emerald-300"
+            className="mt-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-4 text-xs leading-5 text-emerald-100"
           >
             <p>{message}</p>
             {resultStatus ? (
@@ -322,7 +322,7 @@ export default function MosqueTimetableApproveButton({ importId }: Props) {
           <div
             id={errorId}
             role="alert"
-            className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs leading-5 text-red-300"
+            className="mt-3 rounded-2xl border border-red-500/25 bg-red-500/[0.08] p-4 text-xs leading-5 text-red-100"
           >
             {errorMessage}
           </div>

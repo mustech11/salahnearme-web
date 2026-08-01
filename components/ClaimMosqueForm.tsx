@@ -110,6 +110,20 @@ export default function ClaimMosqueForm({
   const isSubmitting =
     submitState === "submitting";
 
+  const completion = useMemo(() => {
+    const fields = [fullName, email, role, relationship, phone, proof];
+    const complete = fields.filter((value) => cleanText(value).length > 0).length;
+    return Math.round((complete / fields.length) * 100);
+  }, [email, fullName, phone, proof, relationship, role]);
+
+  function clearFeedback() {
+    if (submitState !== "idle") {
+      setSubmitState("idle");
+      setErrorMessage("");
+      setSuccessMessage("");
+    }
+  }
+
   useEffect(() => {
     return () => {
       abortControllerRef.current?.abort();
@@ -276,6 +290,18 @@ export default function ClaimMosqueForm({
       aria-describedby={feedbackId}
       className="mt-6 grid gap-5 md:grid-cols-2"
     >
+      <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 p-4">
+        <div>
+          <div className="font-bold text-white">{cleanText(mosqueName)}</div>
+          <p className="mt-1 text-xs text-white/45">
+            Complete the claim with enough information for verification.
+          </p>
+        </div>
+
+        <span className="rounded-full border border-cyan-500/25 bg-cyan-500/10 px-3 py-1 text-xs font-bold text-cyan-200">
+          {completion}% complete
+        </span>
+      </div>
       <div>
         <label
           htmlFor="claim-full-name"
@@ -297,9 +323,10 @@ export default function ClaimMosqueForm({
           autoComplete="name"
           disabled={isSubmitting}
           value={fullName}
-          onChange={(event) =>
-            setFullName(event.target.value)
-          }
+          onChange={(event) => {
+            setFullName(event.target.value);
+            clearFeedback();
+          }}
           placeholder="Your full name"
           className={inputClassName}
         />
@@ -326,9 +353,10 @@ export default function ClaimMosqueForm({
           inputMode="email"
           disabled={isSubmitting}
           value={email}
-          onChange={(event) =>
-            setEmail(event.target.value)
-          }
+          onChange={(event) => {
+            setEmail(event.target.value);
+            clearFeedback();
+          }}
           placeholder="you@example.com"
           className={inputClassName}
         />
@@ -351,9 +379,10 @@ export default function ClaimMosqueForm({
           inputMode="tel"
           disabled={isSubmitting}
           value={phone}
-          onChange={(event) =>
-            setPhone(event.target.value)
-          }
+          onChange={(event) => {
+            setPhone(event.target.value);
+            clearFeedback();
+          }}
           placeholder="+44..."
           className={inputClassName}
         />
@@ -380,9 +409,10 @@ export default function ClaimMosqueForm({
           autoComplete="organization-title"
           disabled={isSubmitting}
           value={role}
-          onChange={(event) =>
-            setRole(event.target.value)
-          }
+          onChange={(event) => {
+            setRole(event.target.value);
+            clearFeedback();
+          }}
           placeholder="e.g. Imam, trustee or administrator"
           className={inputClassName}
         />
@@ -408,11 +438,10 @@ export default function ClaimMosqueForm({
           maxLength={LIMITS.relationship}
           disabled={isSubmitting}
           value={relationship}
-          onChange={(event) =>
-            setRelationship(
-              event.target.value
-            )
-          }
+          onChange={(event) => {
+            setRelationship(event.target.value);
+            clearFeedback();
+          }}
           placeholder="Explain your position, responsibilities and relationship with the mosque management team."
           className={inputClassName}
         />
@@ -438,9 +467,10 @@ export default function ClaimMosqueForm({
           maxLength={LIMITS.proof}
           disabled={isSubmitting}
           value={proof}
-          onChange={(event) =>
-            setProof(event.target.value)
-          }
+          onChange={(event) => {
+            setProof(event.target.value);
+            clearFeedback();
+          }}
           placeholder="Official mosque website, management email, public social profile, charity registration or other verification information."
           className={inputClassName}
         />

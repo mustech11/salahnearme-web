@@ -664,6 +664,18 @@ export default function MosqueTimetableSourcesEditor({
   const isSaving =
     saveState === "saving";
 
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
   const clearFeedback =
     useCallback(() => {
       setSaveState("idle");
@@ -1123,7 +1135,7 @@ export default function MosqueTimetableSourcesEditor({
   return (
     <section
       aria-labelledby={headingId}
-      className="rounded-3xl border border-yellow-500/20 bg-[rgb(var(--card))] p-6 md:p-8"
+      className="relative overflow-hidden rounded-[2rem] border border-yellow-500/20 bg-[radial-gradient(circle_at_top_right,rgba(234,179,8,0.08),transparent_28%),rgb(var(--card))] p-5 sm:p-6 md:p-8"
     >
       <div className="text-sm uppercase tracking-[0.25em] text-yellow-400">
         Timetable Sources
@@ -1167,6 +1179,14 @@ export default function MosqueTimetableSourcesEditor({
             role="status"
             className="mt-5 rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm leading-6 text-yellow-200"
           >
+            <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-black/30">
+              <div
+                className="h-full rounded-full bg-yellow-400 transition-[width] duration-300"
+                style={{
+                  width: `${Math.max(8, Math.round((saveProgress.completed / Math.max(saveProgress.total, 1)) * 100))}%`,
+                }}
+              />
+            </div>
             Saving source{" "}
             {Math.min(
               saveProgress.completed +
@@ -1299,7 +1319,7 @@ export default function MosqueTimetableSourcesEditor({
           aria-describedby={
             statusId
           }
-          className="inline-flex min-h-12 items-center justify-center rounded-2xl bg-yellow-500 px-6 py-3 text-sm font-bold text-black transition hover:bg-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex min-h-12 items-center justify-center rounded-2xl border border-yellow-300/30 bg-gradient-to-b from-yellow-400 to-yellow-500 px-6 py-3 text-sm font-black text-black shadow-[0_14px_35px_rgba(234,179,8,0.12)] transition hover:-translate-y-0.5 hover:from-yellow-300 hover:to-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isSaving ? (
             <>
@@ -1397,7 +1417,7 @@ function SourceEditorCard({
     "manual";
 
   return (
-    <article className="rounded-2xl border border-white/10 bg-black/30 p-5">
+    <article className="rounded-3xl border border-white/10 bg-black/30 p-5 shadow-[0_18px_45px_rgba(0,0,0,0.12)] transition hover:border-yellow-500/20">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold text-white">

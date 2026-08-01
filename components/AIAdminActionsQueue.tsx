@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type AIAction = {
   id: string;
@@ -13,7 +13,9 @@ type AIAction = {
   created_at: string;
 };
 
+const REQUEST_TIMEOUT_MS = 25_000;
 const statusOptions = ["all", "pending", "approved", "rejected"] as const;
+const riskOptions = ["all", "low", "medium", "high"] as const;
 
 function riskClass(risk: string) {
   if (risk === "high") return "border-red-500/30 bg-red-500/10 text-red-200";
@@ -31,19 +33,70 @@ function statusClass(status: string) {
 }
 
 export default function AIAdminActionsQueue() {
+  const requestControllerRef = useRef<AbortController | null>(null);
   const [password, setPassword] = useState("");
   const [actions, setActions] = useState<AIAction[]>([]);
   const [statusFilter, setStatusFilter] =
     useState<(typeof statusOptions)[number]>("pending");
   const [loading, setLoading] = useState(false);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [riskFilter, setRiskFilter] = useState<(typeof riskOptions)[number]>("all");
+  const [search, setSearch] = useState("");
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
   const filteredActions = useMemo(() => {
-    if (statusFilter === "all") return actions;
-    return actions.filter((a) => a.status === statusFilter);
-  }, [actions, statusFilter]);
+    const term = search.trim().toLowerCase();
+
+    return actions.filter((action) => {
+      if (statusFilter !== "all" && action.status !== statusFilter) return false;
+      if (riskFilter !== "all" && action.risk_level !== riskFilter) return false;
+      if (!term) return true;
+
+      return [action.title, action.reason, action.action_type]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(term);
+    });
+  }, [actions, riskFilter, search, statusFilter]);
+
+  useEffect(() => {
+    return () => {
+      requestControllerRef.current?.abort();
+    };
+  }, []);
+
+  async function request(
+    input: RequestInfo | URL,
+    init?: RequestInit
+  ): Promise<Response> {
+    requestControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const timeoutId = window.setTimeout(
+      () => controller.abort(),
+      REQUEST_TIMEOUT_MS
+    );
+
+    try {
+      return await fetch(input, {
+        ...init,
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+    } finally {
+      window.clearTimeout(timeoutId);
+
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+      }
+    }
+  }
 
   async function loadActions() {
     setLoading(true);
@@ -51,8 +104,9 @@ export default function AIAdminActionsQueue() {
     setMessage("");
 
     try {
-      const res = await fetch(
-        `/api/admin/ai-actions?password=${encodeURIComponent(password)}`
+      const res = await request(
+        `/api/admin/ai-actions?password=${encodeURIComponent(password)}`,
+        { headers: { Accept: "application/json" } }
       );
 
       const data = await res.json();
@@ -62,7 +116,8 @@ export default function AIAdminActionsQueue() {
         return;
       }
 
-      setActions(data.actions ?? []);
+      setActions(Array.isArray(data.actions) ? data.actions : []);
+      setLastUpdatedAt(new Date());
     } catch {
       setError("Failed to load actions.");
     } finally {
@@ -76,7 +131,7 @@ export default function AIAdminActionsQueue() {
     setMessage("");
 
     try {
-      const res = await fetch("/api/admin/ai-actions", {
+      const res = await request("/api/admin/ai-actions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -107,11 +162,23 @@ export default function AIAdminActionsQueue() {
     actionId: string,
     status: "approved" | "rejected" | "pending"
   ) {
+    setUpdatingId(actionId);
     setError("");
     setMessage("");
 
+    const action = actions.find((item) => item.id === actionId);
+
+    if (
+      status === "approved" &&
+      action?.risk_level === "high" &&
+      !window.confirm("Approve this high-risk AI recommendation?")
+    ) {
+      setUpdatingId(null);
+      return;
+    }
+
     try {
-      const res = await fetch("/api/admin/ai-actions", {
+      const res = await request("/api/admin/ai-actions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -138,8 +205,14 @@ export default function AIAdminActionsQueue() {
       );
 
       setMessage(`Action marked as ${status}. No database changes were made.`);
-    } catch {
-      setError("Failed to update action.");
+    } catch (error) {
+      setError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "The action update timed out."
+          : "Failed to update action."
+      );
+    } finally {
+      setUpdatingId(null);
     }
   }
 
@@ -219,7 +292,42 @@ export default function AIAdminActionsQueue() {
         </div>
       </section>
 
-      <section className="flex flex-wrap gap-3">
+      <section className="rounded-3xl border border-white/10 bg-black/20 p-4">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
+          <input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search AI actions"
+            className="min-h-11 rounded-xl border border-white/10 bg-black px-4 py-2.5 text-sm text-white outline-none placeholder:text-white/30 focus:border-yellow-400"
+          />
+
+          <select
+            value={riskFilter}
+            onChange={(event) =>
+              setRiskFilter(event.target.value as (typeof riskOptions)[number])
+            }
+            className="min-h-11 rounded-xl border border-white/10 bg-black px-4 py-2.5 text-sm text-white"
+          >
+            {riskOptions.map((risk) => (
+              <option key={risk} value={risk}>
+                {risk === "all" ? "All risks" : `${risk} risk`}
+              </option>
+            ))}
+          </select>
+
+          {lastUpdatedAt ? (
+            <span className="self-center text-xs text-white/35">
+              Updated{" "}
+              {lastUpdatedAt.toLocaleTimeString("en-GB", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-3">
         {statusOptions.map((status) => (
           <button
             key={status}
@@ -234,6 +342,7 @@ export default function AIAdminActionsQueue() {
             {status}
           </button>
         ))}
+        </div>
       </section>
 
       {error && (
@@ -298,7 +407,7 @@ export default function AIAdminActionsQueue() {
                   <button
                     type="button"
                     onClick={() => updateStatus(action.id, "approved")}
-                    disabled={action.status === "approved"}
+                    disabled={action.status === "approved" || updatingId === action.id}
                     className="rounded-xl bg-green-500 px-4 py-3 text-sm font-semibold text-black hover:bg-green-400 disabled:opacity-40"
                   >
                     Approve
@@ -307,7 +416,7 @@ export default function AIAdminActionsQueue() {
                   <button
                     type="button"
                     onClick={() => updateStatus(action.id, "rejected")}
-                    disabled={action.status === "rejected"}
+                    disabled={action.status === "rejected" || updatingId === action.id}
                     className="rounded-xl bg-red-500 px-4 py-3 text-sm font-semibold text-white hover:bg-red-400 disabled:opacity-40"
                   >
                     Reject
@@ -316,7 +425,7 @@ export default function AIAdminActionsQueue() {
                   <button
                     type="button"
                     onClick={() => updateStatus(action.id, "pending")}
-                    disabled={action.status === "pending"}
+                    disabled={action.status === "pending" || updatingId === action.id}
                     className="rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm font-semibold text-yellow-400 hover:bg-yellow-500/10 disabled:opacity-40"
                   >
                     Reset
@@ -340,4 +449,3 @@ export default function AIAdminActionsQueue() {
     </div>
   );
 }
-
