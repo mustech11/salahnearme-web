@@ -19,6 +19,26 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
 
   compress: true,
+
+  /**
+   * Next.js Image configuration
+   *
+   * Whitelist all image quality values used across SalahNearMe.
+   * This permanently removes:
+   *
+   * Image with src "..." is using quality "78"
+   * which is not configured in images.qualities
+   */
+  images: {
+    qualities: [60, 65, 70, 75, 78, 80, 85, 90, 95, 100],
+
+    formats: [
+      "image/avif",
+      "image/webp",
+    ],
+
+    minimumCacheTTL: 60 * 60 * 24 * 30,
+  },
 };
 
 export default nextConfig;

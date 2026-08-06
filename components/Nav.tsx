@@ -7,9 +7,11 @@ import {
 } from "next/navigation";
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
+  useTransition,
 } from "react";
 
 import Logo from "@/components/Logo";
@@ -27,6 +29,11 @@ type NavigationItem = {
   href: string;
   label: string;
   active: boolean;
+};
+
+type SafeCity = {
+  slug: string;
+  name: string;
 };
 
 const RESERVED_SEGMENTS = new Set([
@@ -58,6 +65,9 @@ const RESERVED_SEGMENTS = new Set([
   "sitemap.xml",
 ]);
 
+const CITY_COOKIE_MAX_AGE =
+  60 * 60 * 24 * 365;
+
 function cleanText(
   value: string | null | undefined,
   maxLength = 180
@@ -66,10 +76,15 @@ function cleanText(
     return "";
   }
 
-  return value.trim().replace(/\s+/g, " ").slice(0, maxLength);
+  return value
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, maxLength);
 }
 
-function cleanSlug(value: string | null | undefined): string {
+function cleanSlug(
+  value: string | null | undefined
+): string {
   return cleanText(value, 160)
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, "")
@@ -77,7 +92,9 @@ function cleanSlug(value: string | null | undefined): string {
     .replace(/^-|-$/g, "");
 }
 
-function formatCity(value: string | null | undefined): string {
+function formatCity(
+  value: string | null | undefined
+): string {
   const slug = cleanSlug(value);
 
   if (!slug) {
@@ -87,71 +104,154 @@ function formatCity(value: string | null | undefined): string {
   return slug
     .split("-")
     .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .map(
+      (part) =>
+        part.charAt(0).toUpperCase() +
+        part.slice(1)
+    )
     .join(" ");
 }
 
-function isCitySegment(segment: string | null | undefined): boolean {
+function isCitySegment(
+  segment: string | null | undefined
+): boolean {
   const value = cleanSlug(segment);
 
-  return Boolean(value && !RESERVED_SEGMENTS.has(value));
+  return Boolean(
+    value &&
+      !RESERVED_SEGMENTS.has(value)
+  );
 }
 
-function getSafeCities(cities?: City[] | null) {
+function getSafeCities(
+  cities?: City[] | null
+): SafeCity[] {
   const seen = new Set<string>();
+  const safeCities: SafeCity[] = [];
 
-  return (cities ?? [])
-    .map((city) => {
-      const slug = cleanSlug(city.slug);
-      const name = cleanText(city.name) || formatCity(slug);
+  for (const city of cities ?? []) {
+    const slug = cleanSlug(city.slug);
+    const name =
+      cleanText(city.name) ||
+      formatCity(slug);
 
-      return {
-        slug,
-        name,
-      };
-    })
-    .filter((city) => {
-      if (!city.slug || !city.name || seen.has(city.slug)) {
-        return false;
-      }
+    if (
+      !slug ||
+      !name ||
+      seen.has(slug)
+    ) {
+      continue;
+    }
 
-      seen.add(city.slug);
+    seen.add(slug);
 
-      return true;
-    })
-    .sort((first, second) =>
-      first.name.localeCompare(second.name, "en-GB")
-    );
+    safeCities.push({
+      slug,
+      name,
+    });
+  }
+
+  return safeCities.sort(
+    (first, second) =>
+      first.name.localeCompare(
+        second.name,
+        "en-GB",
+        {
+          sensitivity: "base",
+        }
+      )
+  );
 }
 
-function desktopLinkClass(active: boolean): string {
+function desktopLinkClass(
+  active: boolean
+): string {
   return [
-    "relative whitespace-nowrap py-3 text-sm font-semibold transition",
-    "after:absolute after:inset-x-0 after:-bottom-0.5 after:h-px after:origin-center after:scale-x-0 after:bg-yellow-400 after:transition-transform",
+    "relative whitespace-nowrap py-3 text-sm font-semibold transition-colors",
+    "after:absolute after:inset-x-0 after:-bottom-0.5 after:h-px",
+    "after:origin-center after:scale-x-0 after:bg-yellow-400",
+    "after:transition-transform after:duration-200",
+    "focus-visible:rounded-md focus-visible:outline-none",
+    "focus-visible:ring-2 focus-visible:ring-yellow-300",
     active
       ? "text-yellow-300 after:scale-x-100"
-      : "text-white/66 hover:text-yellow-200 hover:after:scale-x-100",
+      : "text-white/65 hover:text-yellow-200 hover:after:scale-x-100",
   ].join(" ");
 }
 
-function mobileLinkClass(active: boolean): string {
+function mobileLinkClass(
+  active: boolean
+): string {
   return [
-    "flex min-h-12 items-center justify-between rounded-2xl border px-4 py-3 text-sm font-bold transition",
+    "flex min-h-12 items-center justify-between rounded-2xl border",
+    "px-4 py-3 text-sm font-bold transition",
+    "focus-visible:outline-none focus-visible:ring-2",
+    "focus-visible:ring-yellow-300",
     active
       ? "border-yellow-400/45 bg-yellow-400/10 text-yellow-200"
       : "border-white/10 bg-white/[0.025] text-white/72 hover:border-yellow-400/30 hover:bg-yellow-400/[0.05] hover:text-yellow-200",
   ].join(" ");
 }
 
-export default function Nav({ cities = [] }: Props) {
-  const pathname = usePathname() || "/";
-  const router = useRouter();
-  const mobileMenuRef = useRef<HTMLDivElement | null>(null);
-  const mobileToggleRef = useRef<HTMLButtonElement | null>(null);
+function persistSelectedCity(
+  citySlug: string
+): void {
+  try {
+    window.localStorage.setItem(
+      "snm_city",
+      citySlug
+    );
+  } catch {
+    // Local storage is optional.
+  }
 
-  const [selectedCity, setSelectedCity] = useState("");
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const [cityNavigating, setCityNavigating] = useState(false);
+  const secure =
+    window.location.protocol ===
+    "https:";
+
+  document.cookie = [
+    `snm_city=${encodeURIComponent(
+      citySlug
+    )}`,
+    "path=/",
+    `max-age=${CITY_COOKIE_MAX_AGE}`,
+    "samesite=lax",
+    secure ? "secure" : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
+}
+
+export default function Nav({
+  cities = [],
+}: Props) {
+  const pathname =
+    usePathname() || "/";
+
+  const router = useRouter();
+
+  const mobileNavigationId =
+    useId();
+
+  const mobileMenuRef =
+    useRef<HTMLDivElement | null>(null);
+
+  const mobileToggleRef =
+    useRef<HTMLButtonElement | null>(null);
+
+  const firstMobileLinkRef =
+    useRef<HTMLAnchorElement | null>(null);
+
+  const [selectedCity, setSelectedCity] =
+    useState("");
+
+  const [mobileOpen, setMobileOpen] =
+    useState(false);
+
+  const [
+    isNavigationPending,
+    startNavigation,
+  ] = useTransition();
 
   const sortedCities = useMemo(
     () => getSafeCities(cities),
@@ -159,51 +259,80 @@ export default function Nav({ cities = [] }: Props) {
   );
 
   const pathParts = useMemo(
-    () => pathname.split("/").filter(Boolean),
+    () =>
+      pathname
+        .split("/")
+        .filter(Boolean),
     [pathname]
   );
 
-  const firstSegment = pathParts[0] ?? null;
-  const city = isCitySegment(firstSegment)
+  const firstSegment =
+    pathParts[0] ?? null;
+
+  const city = isCitySegment(
+    firstSegment
+  )
     ? cleanSlug(firstSegment)
     : null;
 
-  const navigationItems = useMemo<NavigationItem[]>(() => {
-    return [
-      {
-        href: "/",
-        label: "Home",
-        active: pathname === "/",
-      },
-      {
-        href: "/near-me/pray",
-        label: "Pray near me",
-        active: pathname.startsWith("/near-me/pray"),
-      },
-      {
-        href: "/businesses",
-        label: "Halal businesses",
-        active:
-          pathname === "/businesses" ||
-          Boolean(city && pathname.startsWith(`/${city}/businesses`)),
-      },
-      {
-        href: "/travel",
-        label: "Travel",
-        active: pathname.startsWith("/travel"),
-      },
-      {
-        href: "/hajj",
-        label: "Hajj",
-        active: pathname.startsWith("/hajj"),
-      },
-      {
-        href: "/umrah",
-        label: "Umrah",
-        active: pathname.startsWith("/umrah"),
-      },
-    ];
-  }, [city, pathname]);
+  const navigationItems =
+    useMemo<NavigationItem[]>(
+      () => [
+        {
+          href: "/",
+          label: "Home",
+          active:
+            pathname === "/",
+        },
+        {
+          href: "/near-me/pray",
+          label: "Pray near me",
+          active:
+            pathname.startsWith(
+              "/near-me/pray"
+            ),
+        },
+        {
+          href: "/businesses",
+          label:
+            "Halal businesses",
+          active:
+            pathname ===
+              "/businesses" ||
+            Boolean(
+              city &&
+                pathname.startsWith(
+                  `/${city}/businesses`
+                )
+            ),
+        },
+        {
+          href: "/travel",
+          label: "Travel",
+          active:
+            pathname.startsWith(
+              "/travel"
+            ),
+        },
+        {
+          href: "/hajj",
+          label: "Hajj",
+          active:
+            pathname.startsWith(
+              "/hajj"
+            ),
+        },
+        {
+          href: "/umrah",
+          label: "Umrah",
+          active:
+            pathname.startsWith(
+              "/umrah"
+            ),
+        },
+      ],
+      [city, pathname]
+    );
 
   useEffect(() => {
     setSelectedCity(city ?? "");
@@ -215,40 +344,94 @@ export default function Nav({ cities = [] }: Props) {
       return;
     }
 
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const previousOverflow =
+      document.body.style.overflow;
 
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setMobileOpen(false);
-        mobileToggleRef.current?.focus();
+    document.body.style.overflow =
+      "hidden";
+
+    const focusTimeout =
+      window.setTimeout(() => {
+        firstMobileLinkRef.current?.focus();
+      }, 50);
+
+    function handleEscape(
+      event: KeyboardEvent
+    ) {
+      if (
+        event.key !== "Escape"
+      ) {
+        return;
       }
+
+      setMobileOpen(false);
+
+      window.setTimeout(() => {
+        mobileToggleRef.current?.focus();
+      }, 0);
     }
 
-    function handleOutsideClick(event: MouseEvent) {
-      const target = event.target;
+    function handleOutsideClick(
+      event: MouseEvent
+    ) {
+      const target =
+        event.target;
 
       if (
-        target instanceof Node &&
+        !(target instanceof Node)
+      ) {
+        return;
+      }
+
+      if (
         mobileMenuRef.current &&
-        !mobileMenuRef.current.contains(target)
+        !mobileMenuRef.current.contains(
+          target
+        )
       ) {
         setMobileOpen(false);
       }
     }
 
-    document.addEventListener("keydown", handleEscape);
-    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener(
+      "keydown",
+      handleEscape
+    );
+
+    document.addEventListener(
+      "mousedown",
+      handleOutsideClick
+    );
 
     return () => {
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener("keydown", handleEscape);
-      document.removeEventListener("mousedown", handleOutsideClick);
+      window.clearTimeout(
+        focusTimeout
+      );
+
+      document.body.style.overflow =
+        previousOverflow;
+
+      document.removeEventListener(
+        "keydown",
+        handleEscape
+      );
+
+      document.removeEventListener(
+        "mousedown",
+        handleOutsideClick
+      );
     };
   }, [mobileOpen]);
 
-  function handleCityChange(nextValue: string) {
-    const nextSlug = cleanSlug(nextValue);
+  function closeMobileMenu(): void {
+    setMobileOpen(false);
+  }
+
+  function handleCityChange(
+    nextValue: string
+  ): void {
+    const nextSlug =
+      cleanSlug(nextValue);
 
     setSelectedCity(nextSlug);
 
@@ -256,41 +439,50 @@ export default function Nav({ cities = [] }: Props) {
       return;
     }
 
-    document.cookie = [
-      `snm_city=${encodeURIComponent(nextSlug)}`,
-      "path=/",
-      "max-age=31536000",
-      "samesite=lax",
-      window.location.protocol === "https:" ? "secure" : "",
-    ]
-      .filter(Boolean)
-      .join("; ");
+    persistSelectedCity(
+      nextSlug
+    );
 
-    setCityNavigating(true);
     setMobileOpen(false);
 
-    router.push(`/${encodeURIComponent(nextSlug)}`);
-
-    window.setTimeout(() => {
-      setCityNavigating(false);
-    }, 2_000);
+    startNavigation(() => {
+      router.push(
+        `/${encodeURIComponent(
+          nextSlug
+        )}`
+      );
+    });
   }
 
   const dashboardActive =
-    pathname.startsWith("/dashboard") ||
-    pathname.startsWith("/business-dashboard");
+    pathname.startsWith(
+      "/dashboard"
+    ) ||
+    pathname.startsWith(
+      "/business-dashboard"
+    );
 
-  const cityHomeActive = Boolean(
-    city && pathname === `/${city}`
-  );
+  const cityHomeActive =
+    Boolean(
+      city &&
+        pathname === `/${city}`
+    );
 
-  const cityMosquesActive = Boolean(
-    city && pathname.startsWith(`/${city}/mosques`)
-  );
+  const cityMosquesActive =
+    Boolean(
+      city &&
+        pathname.startsWith(
+          `/${city}/mosques`
+        )
+    );
 
-  const cityBusinessesActive = Boolean(
-    city && pathname.startsWith(`/${city}/businesses`)
-  );
+  const cityBusinessesActive =
+    Boolean(
+      city &&
+        pathname.startsWith(
+          `/${city}/businesses`
+        )
+    );
 
   return (
     <header className="sticky top-0 z-50 border-b border-yellow-500/15 bg-[#01040d]/92 backdrop-blur-2xl print:hidden">
@@ -298,9 +490,12 @@ export default function Nav({ cities = [] }: Props) {
         <Link
           href="/"
           aria-label="Open the SalahNearMe homepage"
-          className="group flex min-w-0 shrink-0 items-center gap-3"
+          className="group flex min-w-0 shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300"
         >
-          <Logo className="h-auto max-h-[68px] w-auto max-w-[185px] object-contain transition duration-300 group-hover:brightness-110 sm:max-w-[220px]" />
+          <Logo
+            priority
+            className="h-auto max-h-[68px] w-auto max-w-[185px] transition duration-300 group-hover:brightness-110 sm:max-w-[220px]"
+          />
 
           <span className="hidden whitespace-nowrap text-lg font-black text-yellow-400 2xl:block">
             SalahNearMe
@@ -311,21 +506,38 @@ export default function Nav({ cities = [] }: Props) {
           aria-label="Primary navigation"
           className="hidden min-w-0 flex-1 items-center justify-center gap-5 xl:flex 2xl:gap-7"
         >
-          {navigationItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              aria-current={item.active ? "page" : undefined}
-              className={desktopLinkClass(item.active)}
-            >
-              {item.label}
-            </Link>
-          ))}
+          {navigationItems.map(
+            (item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={
+                  item.active
+                    ? "page"
+                    : undefined
+                }
+                className={desktopLinkClass(
+                  item.active
+                )}
+              >
+                {item.label}
+              </Link>
+            )
+          )}
 
           <Link
             href="/how-it-works"
+            aria-current={
+              pathname.startsWith(
+                "/how-it-works"
+              )
+                ? "page"
+                : undefined
+            }
             className={desktopLinkClass(
-              pathname.startsWith("/how-it-works")
+              pathname.startsWith(
+                "/how-it-works"
+              )
             )}
           >
             How it works
@@ -334,36 +546,58 @@ export default function Nav({ cities = [] }: Props) {
 
         <div className="ml-auto hidden shrink-0 items-center gap-2 xl:flex">
           <div className="relative w-[185px] 2xl:w-[210px]">
-            <label htmlFor="desktop-city-select" className="sr-only">
+            <label
+              htmlFor="desktop-city-select"
+              className="sr-only"
+            >
               Choose city
             </label>
 
             <select
               id="desktop-city-select"
               value={selectedCity}
-              disabled={cityNavigating}
-              onChange={(event) =>
-                handleCityChange(event.target.value)
+              disabled={
+                isNavigationPending
               }
-              className="premium-select appearance-none pr-10 text-sm font-semibold"
+              aria-busy={
+                isNavigationPending
+              }
+              onChange={(event) => {
+                handleCityChange(
+                  event.target.value
+                );
+              }}
+              className="premium-select appearance-none pr-10 text-sm font-semibold disabled:cursor-wait disabled:opacity-60"
             >
-              <option value="">Choose city</option>
+              <option value="">
+                Choose city
+              </option>
 
-              {sortedCities.map((cityOption) => (
-                <option
-                  key={cityOption.slug}
-                  value={cityOption.slug}
-                >
-                  {cityOption.name}
-                </option>
-              ))}
+              {sortedCities.map(
+                (cityOption) => (
+                  <option
+                    key={
+                      cityOption.slug
+                    }
+                    value={
+                      cityOption.slug
+                    }
+                  >
+                    {cityOption.name}
+                  </option>
+                )
+              )}
             </select>
 
             <span
               aria-hidden="true"
               className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-xs text-yellow-300"
             >
-              ▾
+              {isNavigationPending ? (
+                <span className="block size-4 animate-spin rounded-full border-2 border-yellow-300/30 border-t-yellow-300" />
+              ) : (
+                "▾"
+              )}
             </span>
           </div>
         </div>
@@ -374,7 +608,7 @@ export default function Nav({ cities = [] }: Props) {
         >
           <Link
             href="/near-me/pray"
-            className="hidden rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm font-bold text-yellow-300 transition hover:border-yellow-400/60 sm:inline-flex"
+            className="hidden rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm font-bold text-yellow-300 transition hover:border-yellow-400/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300 sm:inline-flex"
           >
             Pray now
           </Link>
@@ -382,9 +616,18 @@ export default function Nav({ cities = [] }: Props) {
           <button
             ref={mobileToggleRef}
             type="button"
-            onClick={() => setMobileOpen((current) => !current)}
-            aria-expanded={mobileOpen}
-            aria-controls="mobile-navigation"
+            onClick={() => {
+              setMobileOpen(
+                (current) =>
+                  !current
+              );
+            }}
+            aria-expanded={
+              mobileOpen
+            }
+            aria-controls={
+              mobileNavigationId
+            }
             aria-label={
               mobileOpen
                 ? "Close navigation menu"
@@ -393,7 +636,9 @@ export default function Nav({ cities = [] }: Props) {
             className="premium-icon-button"
           >
             <span className="sr-only">
-              {mobileOpen ? "Close menu" : "Open menu"}
+              {mobileOpen
+                ? "Close menu"
+                : "Open menu"}
             </span>
 
             <span
@@ -412,7 +657,9 @@ export default function Nav({ cities = [] }: Props) {
               <span
                 className={[
                   "h-0.5 w-full rounded-full bg-current transition",
-                  mobileOpen ? "opacity-0" : "",
+                  mobileOpen
+                    ? "opacity-0"
+                    : "",
                 ].join(" ")}
               />
 
@@ -429,7 +676,7 @@ export default function Nav({ cities = [] }: Props) {
 
           {mobileOpen ? (
             <div
-              id="mobile-navigation"
+              id={mobileNavigationId}
               role="dialog"
               aria-modal="true"
               aria-label="Mobile navigation menu"
@@ -442,7 +689,8 @@ export default function Nav({ cities = [] }: Props) {
                   </div>
 
                   <div className="mt-1 text-sm text-white/50">
-                    Find. Pray. Connect.
+                    Find. Pray.
+                    Connect.
                   </div>
                 </div>
 
@@ -455,74 +703,153 @@ export default function Nav({ cities = [] }: Props) {
                 aria-label="Mobile navigation"
                 className="grid gap-2 sm:grid-cols-2"
               >
-                {navigationItems.map((item) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    aria-current={item.active ? "page" : undefined}
-                    className={mobileLinkClass(item.active)}
-                  >
-                    <span>{item.label}</span>
-                    <span aria-hidden="true">→</span>
-                  </Link>
-                ))}
+                {navigationItems.map(
+                  (item, index) => (
+                    <Link
+                      ref={
+                        index === 0
+                          ? firstMobileLinkRef
+                          : undefined
+                      }
+                      key={item.href}
+                      href={item.href}
+                      aria-current={
+                        item.active
+                          ? "page"
+                          : undefined
+                      }
+                      onClick={
+                        closeMobileMenu
+                      }
+                      className={mobileLinkClass(
+                        item.active
+                      )}
+                    >
+                      <span>
+                        {item.label}
+                      </span>
+
+                      <span aria-hidden="true">
+                        →
+                      </span>
+                    </Link>
+                  )
+                )}
 
                 <Link
                   href="/how-it-works"
+                  onClick={
+                    closeMobileMenu
+                  }
                   className={mobileLinkClass(
-                    pathname.startsWith("/how-it-works")
+                    pathname.startsWith(
+                      "/how-it-works"
+                    )
                   )}
                 >
-                  <span>How it works</span>
-                  <span aria-hidden="true">→</span>
+                  <span>
+                    How it works
+                  </span>
+
+                  <span aria-hidden="true">
+                    →
+                  </span>
                 </Link>
 
                 <Link
                   href="/advertise"
+                  onClick={
+                    closeMobileMenu
+                  }
                   className={mobileLinkClass(
-                    pathname.startsWith("/advertise")
+                    pathname.startsWith(
+                      "/advertise"
+                    )
                   )}
                 >
-                  <span>Advertise</span>
-                  <span aria-hidden="true">→</span>
+                  <span>
+                    Advertise
+                  </span>
+
+                  <span aria-hidden="true">
+                    →
+                  </span>
                 </Link>
 
                 <Link
                   href="/business-dashboard"
-                  className={mobileLinkClass(dashboardActive)}
+                  onClick={
+                    closeMobileMenu
+                  }
+                  className={mobileLinkClass(
+                    dashboardActive
+                  )}
                 >
-                  <span>Dashboard</span>
-                  <span aria-hidden="true">→</span>
+                  <span>
+                    Dashboard
+                  </span>
+
+                  <span aria-hidden="true">
+                    →
+                  </span>
                 </Link>
 
                 {city ? (
                   <>
                     <Link
                       href={`/${city}`}
-                      className={mobileLinkClass(cityHomeActive)}
+                      onClick={
+                        closeMobileMenu
+                      }
+                      className={mobileLinkClass(
+                        cityHomeActive
+                      )}
                     >
-                      <span>{formatCity(city)}</span>
-                      <span aria-hidden="true">→</span>
+                      <span>
+                        {formatCity(
+                          city
+                        )}
+                      </span>
+
+                      <span aria-hidden="true">
+                        →
+                      </span>
                     </Link>
 
                     <Link
                       href={`/${city}/mosques`}
+                      onClick={
+                        closeMobileMenu
+                      }
                       className={mobileLinkClass(
                         cityMosquesActive
                       )}
                     >
-                      <span>City mosques</span>
-                      <span aria-hidden="true">→</span>
+                      <span>
+                        City mosques
+                      </span>
+
+                      <span aria-hidden="true">
+                        →
+                      </span>
                     </Link>
 
                     <Link
                       href={`/${city}/businesses`}
+                      onClick={
+                        closeMobileMenu
+                      }
                       className={mobileLinkClass(
                         cityBusinessesActive
                       )}
                     >
-                      <span>City businesses</span>
-                      <span aria-hidden="true">→</span>
+                      <span>
+                        City businesses
+                      </span>
+
+                      <span aria-hidden="true">
+                        →
+                      </span>
                     </Link>
                   </>
                 ) : null}
@@ -540,35 +867,65 @@ export default function Nav({ cities = [] }: Props) {
                   <select
                     id="mobile-city-select"
                     value={selectedCity}
-                    disabled={cityNavigating}
-                    onChange={(event) =>
-                      handleCityChange(event.target.value)
+                    disabled={
+                      isNavigationPending
                     }
-                    className="premium-select appearance-none pr-10 text-sm"
+                    aria-busy={
+                      isNavigationPending
+                    }
+                    onChange={(event) => {
+                      handleCityChange(
+                        event.target.value
+                      );
+                    }}
+                    className="premium-select appearance-none pr-10 text-sm disabled:cursor-wait disabled:opacity-60"
                   >
-                    <option value="">Choose city</option>
+                    <option value="">
+                      Choose city
+                    </option>
 
-                    {sortedCities.map((cityOption) => (
-                      <option
-                        key={cityOption.slug}
-                        value={cityOption.slug}
-                      >
-                        {cityOption.name}
-                      </option>
-                    ))}
+                    {sortedCities.map(
+                      (cityOption) => (
+                        <option
+                          key={
+                            cityOption.slug
+                          }
+                          value={
+                            cityOption.slug
+                          }
+                        >
+                          {
+                            cityOption.name
+                          }
+                        </option>
+                      )
+                    )}
                   </select>
 
                   <span
                     aria-hidden="true"
                     className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-xs text-yellow-300"
                   >
-                    {cityNavigating ? (
+                    {isNavigationPending ? (
                       <span className="block size-4 animate-spin rounded-full border-2 border-yellow-300/30 border-t-yellow-300" />
                     ) : (
                       "▾"
                     )}
                   </span>
                 </div>
+
+                <p
+                  aria-live="polite"
+                  className="mt-2 min-h-5 text-xs text-white/45"
+                >
+                  {isNavigationPending
+                    ? "Opening the selected city..."
+                    : sortedCities.length > 0
+                      ? `${sortedCities.length.toLocaleString(
+                          "en-GB"
+                        )} cities available.`
+                      : "No active cities are currently available."}
+                </p>
               </div>
             </div>
           ) : null}
