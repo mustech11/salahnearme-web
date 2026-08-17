@@ -27,6 +27,10 @@ import type {
   UsageMetric,
 } from "@/lib/systemHealthTypes";
 
+/* ============================================================================
+ * API TYPES
+ * ========================================================================== */
+
 type RawSnapshotRow = {
   id?: unknown;
   overall_status?: unknown;
@@ -97,13 +101,177 @@ type HealthCheckResponse = {
   error?: string;
 };
 
+/* ============================================================================
+ * AI OPERATIONS TYPES
+ * ========================================================================== */
+
+type AIOperationsRiskLevel =
+  | "none"
+  | "low"
+  | "moderate"
+  | "high"
+  | "critical";
+
+type AIOperationsPlatformStatus =
+  | "excellent"
+  | "healthy"
+  | "attention"
+  | "degraded"
+  | "critical";
+
+type AIOperationsAreaStatus =
+  | "excellent"
+  | "healthy"
+  | "attention"
+  | "degraded"
+  | "critical"
+  | "unknown";
+
+type AIOperationsRecommendationPriority =
+  | "monitor"
+  | "low"
+  | "medium"
+  | "high"
+  | "urgent";
+
+type AIOperationsDirection =
+  | "improving"
+  | "stable"
+  | "increasing"
+  | "decreasing"
+  | "uncertain";
+
+type AIOperationsAreaAssessment = {
+  status: AIOperationsAreaStatus;
+  score: number;
+  summary: string;
+};
+
+type AIOperationsCause = {
+  cause: string;
+  confidence: number;
+  evidence: string[];
+};
+
+type AIOperationsRecommendation = {
+  priority: AIOperationsRecommendationPriority;
+  title: string;
+  action: string;
+  reason: string;
+  affected_area: string;
+  confidence: number;
+};
+
+type AIOperationsPrediction = {
+  metric: string;
+  direction: AIOperationsDirection;
+  summary: string;
+  projected_risk: AIOperationsRiskLevel;
+  confidence: number;
+  horizon: string;
+};
+
+type AIOperationsAssessment = {
+  executive_summary: string;
+
+  platform_status: AIOperationsPlatformStatus;
+
+  risk_level: AIOperationsRiskLevel;
+
+  confidence: number;
+
+  action_required: boolean;
+
+  immediate_action: string;
+
+  infrastructure: AIOperationsAreaAssessment;
+
+  performance: AIOperationsAreaAssessment;
+
+  database: AIOperationsAreaAssessment;
+
+  quota: AIOperationsAreaAssessment;
+
+  application: AIOperationsAreaAssessment;
+
+  what_changed: string[];
+
+  likely_causes: AIOperationsCause[];
+
+  recommendations: AIOperationsRecommendation[];
+
+  predictions: AIOperationsPrediction[];
+
+  watch_list: string[];
+
+  positive_signals: string[];
+};
+
+type AIOperationsResponse = {
+  ok?: boolean;
+
+  latest_snapshot_id?: string | null;
+
+  history_count?: number;
+
+  generated_at?: string;
+
+  operations?: {
+    ok?: boolean;
+
+    source?:
+      | "openai"
+      | "deterministic_fallback";
+
+    assessment?: AIOperationsAssessment;
+
+    model?: string | null;
+
+    generated_at?: string;
+
+    response_id?: string | null;
+
+    error?: string;
+  };
+
+  error?: string;
+};
+
+type NormalisedAIResult = {
+  source:
+    | "openai"
+    | "deterministic_fallback";
+
+  assessment: AIOperationsAssessment;
+
+  model: string | null;
+
+  generatedAt: string | null;
+
+  responseId: string | null;
+};
+
 type CheckState =
   | "idle"
   | "lightweight"
   | "daily";
 
+type AIState =
+  | "idle"
+  | "loading"
+  | "refreshing"
+  | "ready"
+  | "error";
+
+/* ============================================================================
+ * CONSTANTS
+ * ========================================================================== */
+
 const AUTO_REFRESH_INTERVAL_MS =
   60_000;
+
+const AI_REFRESH_INTERVAL_MS =
+  5 * 60_000;
 
 const HISTORY_LIMIT = 30;
 
@@ -126,6 +294,10 @@ const ALERT_SEVERITIES: AlertSeverity[] = [
   "critical",
 ];
 
+/* ============================================================================
+ * SANITISERS / NORMALISERS
+ * ========================================================================== */
+
 function cleanString(
   value: unknown,
   maxLength = 2_000
@@ -139,7 +311,10 @@ function cleanString(
   }
 
   return String(value)
-    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(
+      /[\u0000-\u001F\u007F]/g,
+      ""
+    )
     .trim()
     .replace(/\s+/g, " ")
     .slice(0, maxLength);
@@ -161,7 +336,8 @@ function safeNumber(
 function safeNonNegativeNumber(
   value: unknown
 ): number | null {
-  const number = safeNumber(value);
+  const number =
+    safeNumber(value);
 
   if (
     number === null ||
@@ -177,26 +353,37 @@ function safeDateString(
   value: unknown
 ): string | null {
   const cleaned =
-    cleanString(value, 100);
+    cleanString(
+      value,
+      100
+    );
 
   if (!cleaned) {
     return null;
   }
 
   const timestamp =
-    new Date(cleaned).getTime();
+    new Date(
+      cleaned
+    ).getTime();
 
-  return Number.isFinite(timestamp)
+  return Number.isFinite(
+    timestamp
+  )
     ? cleaned
     : null;
 }
 
 function isRecord(
   value: unknown
-): value is Record<string, unknown> {
+): value is Record<
+  string,
+  unknown
+> {
   return Boolean(
     value &&
-      typeof value === "object" &&
+      typeof value ===
+        "object" &&
       !Array.isArray(value)
   );
 }
@@ -205,7 +392,8 @@ function isHealthSeverity(
   value: unknown
 ): value is HealthSeverity {
   return (
-    typeof value === "string" &&
+    typeof value ===
+      "string" &&
     HEALTH_SEVERITIES.includes(
       value as HealthSeverity
     )
@@ -216,7 +404,8 @@ function isHealthMode(
   value: unknown
 ): value is HealthCheckMode {
   return (
-    typeof value === "string" &&
+    typeof value ===
+      "string" &&
     HEALTH_MODES.includes(
       value as HealthCheckMode
     )
@@ -227,7 +416,8 @@ function isAlertSeverity(
   value: unknown
 ): value is AlertSeverity {
   return (
-    typeof value === "string" &&
+    typeof value ===
+      "string" &&
     ALERT_SEVERITIES.includes(
       value as AlertSeverity
     )
@@ -256,7 +446,8 @@ function normaliseService(
     cleanString(
       value.key,
       120
-    ) || `service_${index + 1}`;
+    ) ||
+    `service_${index + 1}`;
 
   const label =
     cleanString(
@@ -265,30 +456,38 @@ function normaliseService(
     ) || key;
 
   const status =
-    isHealthSeverity(value.status)
+    isHealthSeverity(
+      value.status
+    )
       ? value.status
       : "warning";
 
   const checkedAt =
     safeDateString(
       value.checked_at
-    ) ?? new Date().toISOString();
+    ) ??
+    new Date().toISOString();
 
   return {
     key,
     label,
     status,
+
     response_time_ms:
       safeNonNegativeNumber(
         value.response_time_ms
       ),
+
     message:
       cleanString(
         value.message,
         2_000
       ) ||
       "No service message was returned.",
-    checked_at: checkedAt,
+
+    checked_at:
+      checkedAt,
+
     metadata:
       normaliseMetadata(
         value.metadata
@@ -325,51 +524,64 @@ function normaliseUsageMetric(
       ? (sourceValue as UsageMetric["source"])
       : "unavailable";
 
-  const rawStatus =
-    value.status;
-
   return {
     key:
       cleanString(
         value.key,
         120
-      ) || `usage_${index + 1}`,
+      ) ||
+      `usage_${index + 1}`,
+
     label:
       cleanString(
         value.label,
         180
-      ) || `Usage metric ${index + 1}`,
+      ) ||
+      `Usage metric ${index + 1}`,
+
     used:
       safeNonNegativeNumber(
         value.used
       ),
+
     limit:
       safeNonNegativeNumber(
         value.limit
       ),
+
     unit:
       cleanString(
         value.unit,
         40
-      ) || "units",
+      ) ||
+      "units",
+
     percentage:
       safeNonNegativeNumber(
         value.percentage
       ),
+
     source,
+
     estimated:
-      typeof value.estimated === "boolean"
+      typeof value.estimated ===
+      "boolean"
         ? value.estimated
         : false,
+
     status:
-      isHealthSeverity(rawStatus)
-        ? rawStatus
+      isHealthSeverity(
+        value.status
+      )
+        ? value.status
         : undefined,
+
     message:
       cleanString(
         value.message,
         1_000
       ) || undefined,
+
     metadata:
       normaliseMetadata(
         value.metadata
@@ -390,27 +602,34 @@ function normaliseApplicationMetric(
       cleanString(
         value.key,
         120
-      ) || `application_${index + 1}`,
+      ) ||
+      `application_${index + 1}`,
+
     label:
       cleanString(
         value.label,
         180
-      ) || `Application metric ${index + 1}`,
+      ) ||
+      `Application metric ${index + 1}`,
+
     value:
       safeNonNegativeNumber(
         value.value
       ),
+
     status:
       isHealthSeverity(
         value.status
       )
         ? value.status
         : "warning",
+
     message:
       cleanString(
         value.message,
         1_000
       ) || undefined,
+
     metadata:
       normaliseMetadata(
         value.metadata
@@ -419,41 +638,60 @@ function normaliseApplicationMetric(
 }
 
 function normaliseSnapshot(
-  row: RawSnapshotRow | null | undefined
+  row:
+    | RawSnapshotRow
+    | null
+    | undefined
 ): NormalisedSnapshot | null {
   if (!row) {
     return null;
   }
 
   const metrics =
-    isRecord(row.metrics)
+    isRecord(
+      row.metrics
+    )
       ? row.metrics
       : {};
 
   const rawServices =
-    Array.isArray(row.services)
+    Array.isArray(
+      row.services
+    )
       ? row.services
-      : Array.isArray(row.service_status)
+      : Array.isArray(
+            row.service_status
+          )
         ? row.service_status
         : [];
 
   const rawUsage =
-    Array.isArray(row.usage)
+    Array.isArray(
+      row.usage
+    )
       ? row.usage
-      : Array.isArray(metrics.usage)
+      : Array.isArray(
+            metrics.usage
+          )
         ? metrics.usage
         : [];
 
   const rawApplication =
-    Array.isArray(row.application)
+    Array.isArray(
+      row.application
+    )
       ? row.application
-      : Array.isArray(metrics.application)
+      : Array.isArray(
+            metrics.application
+          )
         ? metrics.application
         : [];
 
   const services =
     rawServices
-      .map(normaliseService)
+      .map(
+        normaliseService
+      )
       .filter(
         (
           value
@@ -463,7 +701,9 @@ function normaliseSnapshot(
 
   const usage =
     rawUsage
-      .map(normaliseUsageMetric)
+      .map(
+        normaliseUsageMetric
+      )
       .filter(
         (
           value
@@ -473,7 +713,9 @@ function normaliseSnapshot(
 
   const application =
     rawApplication
-      .map(normaliseApplicationMetric)
+      .map(
+        normaliseApplicationMetric
+      )
       .filter(
         (
           value
@@ -491,12 +733,16 @@ function normaliseSnapshot(
     new Date().toISOString();
 
   const nestedMetadata =
-    isRecord(metrics.metadata)
+    isRecord(
+      metrics.metadata
+    )
       ? metrics.metadata
       : {};
 
   const directMetadata =
-    isRecord(row.metadata)
+    isRecord(
+      row.metadata
+    )
       ? row.metadata
       : {};
 
@@ -513,43 +759,57 @@ function normaliseSnapshot(
         row.id,
         120
       ) || null,
+
     overall_status:
       isHealthSeverity(
         row.overall_status
       )
         ? row.overall_status
         : "warning",
+
     mode:
-      isHealthMode(row.mode)
+      isHealthMode(
+        row.mode
+      )
         ? row.mode
         : "lightweight",
+
     services,
     usage,
     application,
+
     response_time_ms:
       Math.round(
         safeNonNegativeNumber(
           row.response_time_ms
         ) ?? 0
       ),
-    checked_at: checkedAt,
+
+    checked_at:
+      checkedAt,
+
     metadata: {
       project_ref_configured:
         Boolean(
           directMetadata.project_ref_configured ??
             nestedMetadata.project_ref_configured
         ),
+
       management_api_configured:
         Boolean(
           directMetadata.management_api_configured ??
             nestedMetadata.management_api_configured
         ),
+
       site_url:
         siteUrl || null,
+
       version: 1,
+
       ...normaliseMetadata(
         nestedMetadata
       ),
+
       ...normaliseMetadata(
         directMetadata
       ),
@@ -574,11 +834,13 @@ function normaliseAlert(
       50
     );
 
-  const status:
-    HealthAlert["status"] =
-    statusValue === "active" ||
-    statusValue === "acknowledged" ||
-    statusValue === "resolved"
+  const status: HealthAlert["status"] =
+    statusValue ===
+      "active" ||
+    statusValue ===
+      "acknowledged" ||
+    statusValue ===
+      "resolved"
       ? statusValue
       : "unknown";
 
@@ -587,41 +849,55 @@ function normaliseAlert(
       cleanString(
         row.id,
         120
-      ) || `alert_${index + 1}`,
+      ) ||
+      `alert_${index + 1}`,
+
     alertKey:
       cleanString(
         row.alert_key,
         160
-      ) || `alert_${index + 1}`,
+      ) ||
+      `alert_${index + 1}`,
+
     severity,
+
     title:
       cleanString(
         row.title,
         300
-      ) || "System health alert",
+      ) ||
+      "System health alert",
+
     message:
       cleanString(
         row.message,
         2_000
-      ) || "No alert details were provided.",
+      ) ||
+      "No alert details were provided.",
+
     status,
+
     metricName:
       cleanString(
         row.metric_name,
         160
       ) || null,
+
     metricValue:
       safeNumber(
         row.metric_value
       ),
+
     thresholdValue:
       safeNumber(
         row.threshold_value
       ),
+
     firstDetectedAt:
       safeDateString(
         row.first_detected_at
       ),
+
     lastDetectedAt:
       safeDateString(
         row.last_detected_at
@@ -629,8 +905,15 @@ function normaliseAlert(
   };
 }
 
+/* ============================================================================
+ * FORMATTERS
+ * ========================================================================== */
+
 function formatDateTime(
-  value: string | null | undefined
+  value:
+    | string
+    | null
+    | undefined
 ): string {
   if (!value) {
     return "Not available";
@@ -657,22 +940,32 @@ function formatDateTime(
 }
 
 function formatRelativeTime(
-  value: string | null | undefined
+  value:
+    | string
+    | null
+    | undefined
 ): string {
   if (!value) {
     return "Never";
   }
 
   const timestamp =
-    new Date(value).getTime();
+    new Date(
+      value
+    ).getTime();
 
-  if (!Number.isFinite(timestamp)) {
+  if (
+    !Number.isFinite(
+      timestamp
+    )
+  ) {
     return "Unknown";
   }
 
   const differenceSeconds =
     Math.round(
-      (timestamp - Date.now()) /
+      (timestamp -
+        Date.now()) /
         1_000
     );
 
@@ -682,17 +975,23 @@ function formatRelativeTime(
     );
 
   let divisor = 1;
+
   let unit:
     | "second"
     | "minute"
     | "hour"
-    | "day" = "second";
+    | "day" =
+    "second";
 
-  if (absoluteSeconds >= 86_400) {
+  if (
+    absoluteSeconds >=
+    86_400
+  ) {
     divisor = 86_400;
     unit = "day";
   } else if (
-    absoluteSeconds >= 3_600
+    absoluteSeconds >=
+    3_600
   ) {
     divisor = 3_600;
     unit = "hour";
@@ -718,10 +1017,14 @@ function formatRelativeTime(
 }
 
 function formatMilliseconds(
-  value: number | null | undefined
+  value:
+    | number
+    | null
+    | undefined
 ): string {
   if (
-    typeof value !== "number" ||
+    typeof value !==
+      "number" ||
     !Number.isFinite(value)
   ) {
     return "—";
@@ -729,7 +1032,9 @@ function formatMilliseconds(
 
   return `${Math.round(
     value
-  ).toLocaleString("en-GB")} ms`;
+  ).toLocaleString(
+    "en-GB"
+  )} ms`;
 }
 
 function formatMetricValue(
@@ -746,9 +1051,37 @@ function formatMetricValue(
   return `${value.toLocaleString(
     "en-GB",
     {
-      maximumFractionDigits: 2,
+      maximumFractionDigits:
+        2,
     }
-  )}${unit ? ` ${unit}` : ""}`;
+  )}${
+    unit
+      ? ` ${unit}`
+      : ""
+  }`;
+}
+
+/* ============================================================================
+ * VISUAL HELPERS
+ * ========================================================================== */
+
+function clampPercentage(
+  value: number | null
+): number {
+  if (
+    value === null ||
+    !Number.isFinite(value)
+  ) {
+    return 0;
+  }
+
+  return Math.min(
+    100,
+    Math.max(
+      0,
+      value
+    )
+  );
 }
 
 function getStatusClasses(
@@ -774,16 +1107,16 @@ function getStatusDotClasses(
 ): string {
   switch (status) {
     case "healthy":
-      return "bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.7)]";
+      return "bg-emerald-400 shadow-[0_0_18px_rgba(52,211,153,0.72)]";
 
     case "warning":
-      return "bg-amber-400 shadow-[0_0_14px_rgba(251,191,36,0.65)]";
+      return "bg-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.68)]";
 
     case "critical":
-      return "bg-red-400 shadow-[0_0_14px_rgba(248,113,113,0.7)]";
+      return "bg-red-400 shadow-[0_0_18px_rgba(248,113,113,0.72)]";
 
     case "offline":
-      return "bg-rose-500 shadow-[0_0_14px_rgba(244,63,94,0.75)]";
+      return "bg-rose-500 shadow-[0_0_18px_rgba(244,63,94,0.78)]";
   }
 }
 
@@ -850,39 +1183,117 @@ function getAlertClasses(
 function getUsageTone(
   percentage: number | null
 ): HealthSeverity {
-  if (percentage === null) {
+  if (
+    percentage === null
+  ) {
     return "warning";
   }
 
-  if (percentage >= 95) {
+  if (
+    percentage >= 95
+  ) {
     return "critical";
   }
 
-  if (percentage >= 70) {
+  if (
+    percentage >= 70
+  ) {
     return "warning";
   }
 
   return "healthy";
 }
 
-function clampPercentage(
-  value: number | null
-): number {
-  if (
-    value === null ||
-    !Number.isFinite(value)
-  ) {
-    return 0;
-  }
+function getAIRiskClasses(
+  risk: AIOperationsRiskLevel
+): string {
+  switch (risk) {
+    case "none":
+      return "border-emerald-400/20 bg-emerald-400/10 text-emerald-200";
 
-  return Math.min(
-    100,
-    Math.max(
-      0,
-      value
-    )
-  );
+    case "low":
+      return "border-sky-400/20 bg-sky-400/10 text-sky-200";
+
+    case "moderate":
+      return "border-amber-400/20 bg-amber-400/10 text-amber-200";
+
+    case "high":
+      return "border-orange-400/25 bg-orange-400/10 text-orange-200";
+
+    case "critical":
+      return "border-red-400/25 bg-red-400/10 text-red-200";
+  }
 }
+
+function getAIStatusClasses(
+  status: AIOperationsAreaStatus
+): string {
+  switch (status) {
+    case "excellent":
+      return "border-emerald-400/20 bg-emerald-400/10 text-emerald-200";
+
+    case "healthy":
+      return "border-green-400/20 bg-green-400/10 text-green-200";
+
+    case "attention":
+      return "border-amber-400/20 bg-amber-400/10 text-amber-200";
+
+    case "degraded":
+      return "border-orange-400/20 bg-orange-400/10 text-orange-200";
+
+    case "critical":
+      return "border-red-400/20 bg-red-400/10 text-red-200";
+
+    case "unknown":
+      return "border-white/10 bg-white/5 text-white/55";
+  }
+}
+
+function getAIRecommendationClasses(
+  priority: AIOperationsRecommendationPriority
+): string {
+  switch (priority) {
+    case "urgent":
+      return "border-red-400/25 bg-red-400/10";
+
+    case "high":
+      return "border-orange-400/25 bg-orange-400/10";
+
+    case "medium":
+      return "border-amber-400/25 bg-amber-400/10";
+
+    case "low":
+      return "border-sky-400/20 bg-sky-400/10";
+
+    case "monitor":
+      return "border-emerald-400/20 bg-emerald-400/10";
+  }
+}
+
+function getPredictionArrow(
+  direction: AIOperationsDirection
+): string {
+  switch (direction) {
+    case "improving":
+      return "↗";
+
+    case "increasing":
+      return "↗";
+
+    case "decreasing":
+      return "↘";
+
+    case "stable":
+      return "→";
+
+    case "uncertain":
+      return "?";
+  }
+}
+
+/* ============================================================================
+ * MAIN DASHBOARD
+ * ========================================================================== */
 
 export default function SystemHealthDashboard() {
   const [
@@ -897,13 +1308,39 @@ export default function SystemHealthDashboard() {
     history,
     setHistory,
   ] =
-    useState<NormalisedSnapshot[]>([]);
+    useState<NormalisedSnapshot[]>(
+      []
+    );
 
   const [
     alerts,
     setAlerts,
   ] =
-    useState<HealthAlert[]>([]);
+    useState<HealthAlert[]>(
+      []
+    );
+
+  const [
+    aiResult,
+    setAIResult,
+  ] =
+    useState<NormalisedAIResult | null>(
+      null
+    );
+
+  const [
+    aiState,
+    setAIState,
+  ] =
+    useState<AIState>(
+      "idle"
+    );
+
+  const [
+    aiError,
+    setAIError,
+  ] =
+    useState("");
 
   const [
     loading,
@@ -921,7 +1358,9 @@ export default function SystemHealthDashboard() {
     checkState,
     setCheckState,
   ] =
-    useState<CheckState>("idle");
+    useState<CheckState>(
+      "idle"
+    );
 
   const [
     errorMessage,
@@ -945,10 +1384,35 @@ export default function SystemHealthDashboard() {
     lastLoadedAt,
     setLastLoadedAt,
   ] =
-    useState<string | null>(null);
+    useState<string | null>(
+      null
+    );
+
+  const [
+    lastAILoadedAt,
+    setLastAILoadedAt,
+  ] =
+    useState<string | null>(
+      null
+    );
 
   const mountedRef =
     useRef(true);
+
+  const loadInFlightRef =
+    useRef(false);
+
+  const aiInFlightRef =
+    useRef(false);
+
+  const aiAbortRef =
+    useRef<AbortController | null>(
+      null
+    );
+
+  /* ------------------------------------------------------------------------
+   * Deterministic system health fetch
+   * ---------------------------------------------------------------------- */
 
   const loadHealth =
     useCallback(
@@ -957,6 +1421,15 @@ export default function SystemHealthDashboard() {
       }: {
         silent?: boolean;
       } = {}) => {
+        if (
+          loadInFlightRef.current
+        ) {
+          return;
+        }
+
+        loadInFlightRef.current =
+          true;
+
         if (!silent) {
           setRefreshing(true);
         }
@@ -967,7 +1440,8 @@ export default function SystemHealthDashboard() {
               `/api/admin/system-health?limit=${HISTORY_LIMIT}`,
               {
                 method: "GET",
-                cache: "no-store",
+                cache:
+                  "no-store",
                 headers: {
                   Accept:
                     "application/json",
@@ -979,8 +1453,7 @@ export default function SystemHealthDashboard() {
             (await response
               .json()
               .catch(
-                () =>
-                  null
+                () => null
               )) as HealthReadResponse | null;
 
           if (
@@ -1010,7 +1483,8 @@ export default function SystemHealthDashboard() {
                     (
                       value
                     ): value is NormalisedSnapshot =>
-                      value !== null
+                      value !==
+                      null
                   )
               : [];
 
@@ -1023,7 +1497,9 @@ export default function SystemHealthDashboard() {
                 )
               : [];
 
-          if (!mountedRef.current) {
+          if (
+            !mountedRef.current
+          ) {
             return;
           }
 
@@ -1045,17 +1521,25 @@ export default function SystemHealthDashboard() {
 
           setErrorMessage("");
         } catch (error) {
-          if (!mountedRef.current) {
+          if (
+            !mountedRef.current
+          ) {
             return;
           }
 
           setErrorMessage(
-            error instanceof Error
+            error instanceof
+              Error
               ? error.message
               : "Could not load Operations Centre data."
           );
         } finally {
-          if (mountedRef.current) {
+          loadInFlightRef.current =
+            false;
+
+          if (
+            mountedRef.current
+          ) {
             setLoading(false);
             setRefreshing(false);
           }
@@ -1064,18 +1548,216 @@ export default function SystemHealthDashboard() {
       []
     );
 
+  /* ------------------------------------------------------------------------
+   * AI assessment fetch
+   * ---------------------------------------------------------------------- */
+
+  const loadAI =
+    useCallback(
+      async ({
+        silent = false,
+        force = false,
+      }: {
+        silent?: boolean;
+        force?: boolean;
+      } = {}) => {
+        if (
+          aiInFlightRef.current
+        ) {
+          if (!force) {
+            return;
+          }
+
+          aiAbortRef.current?.abort();
+        }
+
+        const controller =
+          new AbortController();
+
+        aiAbortRef.current =
+          controller;
+
+        aiInFlightRef.current =
+          true;
+
+        setAIError("");
+
+        if (
+          !silent ||
+          !aiResult
+        ) {
+          setAIState(
+            aiResult
+              ? "refreshing"
+              : "loading"
+          );
+        }
+
+        try {
+          const response =
+            await fetch(
+              "/api/admin/system-health/ai",
+              {
+                method: "GET",
+
+                cache:
+                  "no-store",
+
+                signal:
+                  controller.signal,
+
+                headers: {
+                  Accept:
+                    "application/json",
+                },
+              }
+            );
+
+          const payload =
+            (await response
+              .json()
+              .catch(
+                () => null
+              )) as AIOperationsResponse | null;
+
+          if (
+            !response.ok ||
+            !payload?.ok
+          ) {
+            throw new Error(
+              payload?.error ||
+                payload?.operations
+                  ?.error ||
+                "Could not generate AI operational assessment."
+            );
+          }
+
+          const operations =
+            payload.operations;
+
+          const assessment =
+            operations?.assessment;
+
+          if (
+            !operations?.ok ||
+            !assessment
+          ) {
+            throw new Error(
+              operations?.error ||
+                "AI operations assessment was unavailable."
+            );
+          }
+
+          const nextResult: NormalisedAIResult =
+            {
+              source:
+                operations.source ===
+                "deterministic_fallback"
+                  ? "deterministic_fallback"
+                  : "openai",
+
+              assessment,
+
+              model:
+                cleanString(
+                  operations.model,
+                  160
+                ) || null,
+
+              generatedAt:
+                safeDateString(
+                  operations.generated_at ??
+                    payload.generated_at
+                ),
+
+              responseId:
+                cleanString(
+                  operations.response_id,
+                  200
+                ) || null,
+            };
+
+          if (
+            !mountedRef.current
+          ) {
+            return;
+          }
+
+          setAIResult(
+            nextResult
+          );
+
+          setLastAILoadedAt(
+            new Date().toISOString()
+          );
+
+          setAIState(
+            "ready"
+          );
+        } catch (error) {
+          if (
+            error instanceof
+              Error &&
+            error.name ===
+              "AbortError"
+          ) {
+            return;
+          }
+
+          if (
+            !mountedRef.current
+          ) {
+            return;
+          }
+
+          setAIError(
+            error instanceof
+              Error
+              ? error.message
+              : "AI operational intelligence could not be loaded."
+          );
+
+          setAIState(
+            aiResult
+              ? "ready"
+              : "error"
+          );
+        } finally {
+          aiInFlightRef.current =
+            false;
+
+          if (
+            aiAbortRef.current ===
+            controller
+          ) {
+            aiAbortRef.current =
+              null;
+          }
+        }
+      },
+      [aiResult]
+    );
+
+  /* ------------------------------------------------------------------------
+   * Manual / deep health check
+   * ---------------------------------------------------------------------- */
+
   const runCheck =
     useCallback(
       async (
         mode: HealthCheckMode
       ) => {
         if (
-          checkState !== "idle"
+          checkState !==
+          "idle"
         ) {
           return;
         }
 
-        setCheckState(mode);
+        setCheckState(
+          mode
+        );
+
         setErrorMessage("");
         setSuccessMessage("");
 
@@ -1084,14 +1766,20 @@ export default function SystemHealthDashboard() {
             await fetch(
               "/api/admin/system-health/check",
               {
-                method: "POST",
-                cache: "no-store",
+                method:
+                  "POST",
+
+                cache:
+                  "no-store",
+
                 headers: {
                   "Content-Type":
                     "application/json",
+
                   Accept:
                     "application/json",
                 },
+
                 body:
                   JSON.stringify({
                     mode,
@@ -1103,8 +1791,7 @@ export default function SystemHealthDashboard() {
             (await response
               .json()
               .catch(
-                () =>
-                  null
+                () => null
               )) as HealthCheckResponse | null;
 
           if (
@@ -1117,40 +1804,79 @@ export default function SystemHealthDashboard() {
             );
           }
 
-          setSuccessMessage(
-            mode === "daily"
-              ? "Daily deep health check completed successfully."
-              : "Lightweight health check completed successfully."
-          );
+          if (
+            mountedRef.current
+          ) {
+            setSuccessMessage(
+              mode ===
+                "daily"
+                ? "Daily deep health check completed successfully. Monitoring evidence and AI intelligence are being refreshed."
+                : "Lightweight health check completed successfully. Monitoring evidence and AI intelligence are being refreshed."
+            );
+          }
 
           await loadHealth({
             silent: true,
           });
+
+          await loadAI({
+            silent: true,
+            force: true,
+          });
         } catch (error) {
-          setErrorMessage(
-            error instanceof Error
-              ? error.message
-              : "The system health check failed."
-          );
+          if (
+            mountedRef.current
+          ) {
+            setErrorMessage(
+              error instanceof
+                Error
+                ? error.message
+                : "The system health check failed."
+            );
+          }
         } finally {
-          setCheckState("idle");
+          if (
+            mountedRef.current
+          ) {
+            setCheckState(
+              "idle"
+            );
+          }
         }
       },
       [
         checkState,
+        loadAI,
         loadHealth,
       ]
     );
 
+  /* ------------------------------------------------------------------------
+   * Initial load
+   * ---------------------------------------------------------------------- */
+
   useEffect(() => {
-    mountedRef.current = true;
+    mountedRef.current =
+      true;
 
     void loadHealth();
 
+    void loadAI();
+
     return () => {
-      mountedRef.current = false;
+      mountedRef.current =
+        false;
+
+      aiAbortRef.current?.abort();
     };
-  }, [loadHealth]);
+  }, [
+    loadAI,
+    loadHealth,
+  ]);
+
+  /* ------------------------------------------------------------------------
+   * Deterministic auto refresh
+   * ---------------------------------------------------------------------- */
 
   useEffect(() => {
     if (!autoRefresh) {
@@ -1177,6 +1903,39 @@ export default function SystemHealthDashboard() {
     loadHealth,
   ]);
 
+  /* ------------------------------------------------------------------------
+   * AI auto refresh - deliberately less frequent than monitoring
+   * ---------------------------------------------------------------------- */
+
+  useEffect(() => {
+    if (!autoRefresh) {
+      return;
+    }
+
+    const intervalId =
+      window.setInterval(
+        () => {
+          void loadAI({
+            silent: true,
+          });
+        },
+        AI_REFRESH_INTERVAL_MS
+      );
+
+    return () => {
+      window.clearInterval(
+        intervalId
+      );
+    };
+  }, [
+    autoRefresh,
+    loadAI,
+  ]);
+
+  /* ------------------------------------------------------------------------
+   * Derived intelligence
+   * ---------------------------------------------------------------------- */
+
   const intelligence =
     useMemo(
       () =>
@@ -1202,16 +1961,18 @@ export default function SystemHealthDashboard() {
   const sortedServices =
     useMemo(
       () =>
-        [...(latest?.services ?? [])].sort(
+        [
+          ...(latest?.services ??
+            []),
+        ].sort(
           (
             first,
             second
           ) => {
-            const statusOrder:
-              Record<
-                HealthSeverity,
-                number
-              > = {
+            const statusOrder: Record<
+              HealthSeverity,
+              number
+            > = {
               offline: 4,
               critical: 3,
               warning: 2,
@@ -1254,9 +2015,17 @@ export default function SystemHealthDashboard() {
   return (
     <div className="space-y-6 pb-16">
       <OperationsHeader
-        latest={latest}
+        latest={
+          latest
+        }
         intelligence={
           intelligence
+        }
+        aiResult={
+          aiResult
+        }
+        aiState={
+          aiState
         }
         checkState={
           checkState
@@ -1270,11 +2039,19 @@ export default function SystemHealthDashboard() {
         lastLoadedAt={
           lastLoadedAt
         }
+        lastAILoadedAt={
+          lastAILoadedAt
+        }
         onCheck={
           runCheck
         }
         onRefresh={() =>
           void loadHealth()
+        }
+        onAIRefresh={() =>
+          void loadAI({
+            force: true,
+          })
         }
         onAutoRefreshChange={
           setAutoRefresh
@@ -1300,7 +2077,9 @@ export default function SystemHealthDashboard() {
       ) : null}
 
       <IntelligenceOverview
-        latest={latest}
+        latest={
+          latest
+        }
         intelligence={
           intelligence
         }
@@ -1309,14 +2088,32 @@ export default function SystemHealthDashboard() {
         }
       />
 
+      <AIOperationsCentre
+        result={
+          aiResult
+        }
+        state={
+          aiState
+        }
+        error={
+          aiError
+        }
+        onRetry={() =>
+          void loadAI({
+            force: true,
+          })
+        }
+      />
+
       <section
-        aria-labelledby="services-heading"
+        aria-labelledby="monitored-services-heading"
         className="rounded-[2rem] border border-yellow-500/15 bg-[#061024] p-5 shadow-2xl shadow-black/20 md:p-7"
       >
         <SectionHeading
+          id="monitored-services-heading"
           eyebrow="Live infrastructure"
           title="Monitored services"
-          description="Current availability and response times from the latest platform health check."
+          description="Authoritative deterministic service availability and response times from the latest platform health check."
         />
 
         {sortedServices.length >
@@ -1359,7 +2156,8 @@ export default function SystemHealthDashboard() {
 
       <UsagePanel
         usage={
-          latest?.usage ?? []
+          latest?.usage ??
+          []
         }
       />
 
@@ -1369,7 +2167,8 @@ export default function SystemHealthDashboard() {
           []
         }
         latestMode={
-          latest?.mode ?? null
+          latest?.mode ??
+          null
         }
       />
 
@@ -1386,52 +2185,89 @@ export default function SystemHealthDashboard() {
           }
         />
       </div>
+
+      <AuthorityFooter />
     </div>
   );
 }
 
+/* ============================================================================
+ * HERO
+ * ========================================================================== */
+
 function OperationsHeader({
   latest,
   intelligence,
+  aiResult,
+  aiState,
   checkState,
   refreshing,
   autoRefresh,
   lastLoadedAt,
+  lastAILoadedAt,
   onCheck,
   onRefresh,
+  onAIRefresh,
   onAutoRefreshChange,
 }: {
   latest: NormalisedSnapshot | null;
+
   intelligence: HealthIntelligenceSummary;
+
+  aiResult: NormalisedAIResult | null;
+
+  aiState: AIState;
+
   checkState: CheckState;
+
   refreshing: boolean;
+
   autoRefresh: boolean;
+
   lastLoadedAt: string | null;
+
+  lastAILoadedAt: string | null;
+
   onCheck: (
     mode: HealthCheckMode
   ) => Promise<void>;
+
   onRefresh: () => void;
+
+  onAIRefresh: () => void;
+
   onAutoRefreshChange: (
     value: boolean
   ) => void;
 }) {
   const disabled =
-    checkState !== "idle";
+    checkState !==
+    "idle";
 
   return (
-    <section className="relative overflow-hidden rounded-[2rem] border border-yellow-500/20 bg-[#061024] p-6 shadow-2xl shadow-black/25 md:p-8">
-      <div className="pointer-events-none absolute -right-28 -top-28 size-80 rounded-full border border-yellow-500/10" />
-      <div className="pointer-events-none absolute -right-10 -top-10 size-52 rounded-full border border-yellow-500/10" />
+    <section className="relative overflow-hidden rounded-[2.2rem] border border-yellow-500/20 bg-[radial-gradient(circle_at_top_right,rgba(234,179,8,0.08),transparent_28%),linear-gradient(135deg,#071126_0%,#040b19_55%,#050914_100%)] p-6 shadow-[0_35px_90px_rgba(0,0,0,0.35)] md:p-8">
+      <div className="pointer-events-none absolute -right-32 -top-32 size-[27rem] rounded-full border border-yellow-500/10" />
+
+      <div className="pointer-events-none absolute -right-12 -top-12 size-64 rounded-full border border-yellow-500/10" />
+
+      <div className="pointer-events-none absolute bottom-0 left-0 h-px w-full bg-gradient-to-r from-transparent via-yellow-400/30 to-transparent" />
 
       <div className="relative flex flex-col gap-7 xl:flex-row xl:items-end xl:justify-between">
         <div className="max-w-4xl">
-          <div className="text-xs font-black uppercase tracking-[0.32em] text-yellow-400">
-            SalahNearMe Operations Centre
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="text-xs font-black uppercase tracking-[0.32em] text-yellow-400">
+              SalahNearMe Operations Centre
+            </div>
+
+            <span className="rounded-full border border-yellow-400/15 bg-yellow-400/5 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-yellow-200/80">
+              Private admin
+            </span>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <h1 className="text-4xl font-black tracking-tight text-white md:text-6xl">
-              Intelligent platform monitoring
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <h1 className="max-w-4xl text-4xl font-black tracking-[-0.045em] text-white md:text-6xl">
+              Intelligent platform
+              monitoring
             </h1>
 
             <span
@@ -1439,20 +2275,27 @@ function OperationsHeader({
                 intelligence.grade
               )}`}
             >
-              {intelligence.grade}
+              {
+                intelligence.grade
+              }
             </span>
           </div>
 
-          <p className="mt-4 max-w-3xl text-base leading-8 text-white/65 md:text-lg">
-            Live infrastructure health,
-            operational intelligence,
-            quota awareness and automated
-            service monitoring.
+          <p className="mt-5 max-w-3xl text-base leading-8 text-white/60 md:text-lg">
+            Deterministic
+            infrastructure
+            telemetry combined
+            with AI-assisted
+            operational reasoning,
+            anomaly interpretation,
+            capacity awareness and
+            forward-looking risk
+            intelligence.
           </p>
 
-          <div className="mt-5 flex flex-wrap gap-3 text-xs text-white/45">
+          <div className="mt-6 flex flex-wrap gap-x-4 gap-y-2 text-xs text-white/40">
             <span>
-              Latest check:{" "}
+              Evidence:{" "}
               <strong className="text-white/75">
                 {formatRelativeTime(
                   latest?.checked_at
@@ -1465,11 +2308,29 @@ function OperationsHeader({
             </span>
 
             <span>
-              Dashboard refreshed:{" "}
+              Dashboard:{" "}
               <strong className="text-white/75">
                 {formatRelativeTime(
                   lastLoadedAt
                 )}
+              </strong>
+            </span>
+
+            <span aria-hidden="true">
+              •
+            </span>
+
+            <span>
+              AI:{" "}
+              <strong className="text-white/75">
+                {aiResult
+                  ? formatRelativeTime(
+                      lastAILoadedAt
+                    )
+                  : aiState ===
+                      "loading"
+                    ? "Loading"
+                    : "Unavailable"}
               </strong>
             </span>
 
@@ -1494,7 +2355,7 @@ function OperationsHeader({
           </div>
         </div>
 
-        <div className="flex w-full flex-col gap-3 sm:flex-row sm:flex-wrap xl:w-auto xl:justify-end">
+        <div className="grid w-full gap-3 sm:grid-cols-2 xl:w-[430px]">
           <button
             type="button"
             disabled={
@@ -1505,7 +2366,7 @@ function OperationsHeader({
                 "lightweight"
               )
             }
-            className="rounded-2xl bg-yellow-500 px-5 py-3 text-sm font-black text-black transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-2xl bg-yellow-500 px-5 py-3.5 text-sm font-black text-black shadow-[0_12px_35px_rgba(234,179,8,0.15)] transition hover:-translate-y-0.5 hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {checkState ===
             "lightweight"
@@ -1523,12 +2384,12 @@ function OperationsHeader({
                 "daily"
               )
             }
-            className="rounded-2xl border border-yellow-500/30 bg-yellow-500/10 px-5 py-3 text-sm font-black text-yellow-200 transition hover:bg-yellow-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-2xl border border-yellow-500/30 bg-yellow-500/10 px-5 py-3.5 text-sm font-black text-yellow-200 transition hover:-translate-y-0.5 hover:bg-yellow-500/20 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {checkState ===
             "daily"
               ? "Running deep scan..."
-              : "Run daily deep scan"}
+              : "Run deep scan"}
           </button>
 
           <button
@@ -1539,17 +2400,46 @@ function OperationsHeader({
             disabled={
               refreshing
             }
-            className="rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-black text-white/75 transition hover:border-yellow-500/25 hover:text-yellow-200 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-2xl border border-white/10 bg-white/[0.045] px-5 py-3 text-sm font-black text-white/75 transition hover:border-yellow-500/25 hover:bg-white/[0.07] hover:text-yellow-200 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {refreshing
               ? "Refreshing..."
-              : "Refresh data"}
+              : "Refresh telemetry"}
           </button>
 
-          <label className="flex cursor-pointer items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/70">
-            <span className="font-bold">
-              Auto-refresh
-            </span>
+          <button
+            type="button"
+            onClick={
+              onAIRefresh
+            }
+            disabled={
+              aiState ===
+                "loading" ||
+              aiState ===
+                "refreshing"
+            }
+            className="rounded-2xl border border-violet-400/20 bg-violet-400/[0.08] px-5 py-3 text-sm font-black text-violet-200 transition hover:border-violet-300/30 hover:bg-violet-400/[0.13] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {aiState ===
+              "loading" ||
+            aiState ===
+              "refreshing"
+              ? "AI analysing..."
+              : "Refresh AI"}
+          </button>
+
+          <label className="col-span-full flex cursor-pointer items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/65">
+            <div>
+              <div className="font-black text-white/80">
+                Automatic monitoring
+              </div>
+
+              <div className="mt-1 text-xs text-white/35">
+                Telemetry every
+                minute · AI less
+                frequently
+              </div>
+            </div>
 
             <input
               type="checkbox"
@@ -1573,35 +2463,49 @@ function OperationsHeader({
   );
 }
 
+/* ============================================================================
+ * DETERMINISTIC SUMMARY
+ * ========================================================================== */
+
 function IntelligenceOverview({
   latest,
   intelligence,
   alertsCount,
 }: {
   latest: NormalisedSnapshot | null;
+
   intelligence: HealthIntelligenceSummary;
+
   alertsCount: number;
 }) {
   return (
     <section className="grid gap-5 xl:grid-cols-[340px_1fr]">
       <article className="rounded-[2rem] border border-yellow-500/20 bg-[#061024] p-6 shadow-2xl shadow-black/20">
-        <div className="text-xs font-black uppercase tracking-[0.24em] text-yellow-400">
-          Intelligence score
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-xs font-black uppercase tracking-[0.24em] text-yellow-400">
+            Deterministic score
+          </div>
+
+          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[9px] font-black uppercase tracking-[0.15em] text-white/40">
+            Evidence
+          </span>
         </div>
 
         <div className="mt-5 flex items-end gap-3">
           <div className="text-7xl font-black tracking-tighter text-white">
-            {intelligence.score}
+            {
+              intelligence.score
+            }
           </div>
 
-          <div className="pb-2 text-xl font-bold text-white/35">
+          <div className="pb-2 text-xl font-bold text-white/30">
             /100
           </div>
         </div>
 
         <div className="mt-5 h-3 overflow-hidden rounded-full bg-white/10">
           <div
-            className="h-full rounded-full bg-yellow-500 transition-all duration-700"
+            className="h-full rounded-full bg-gradient-to-r from-yellow-600 via-yellow-500 to-amber-300 transition-all duration-700"
             style={{
               width: `${clampPercentage(
                 intelligence.score
@@ -1616,26 +2520,42 @@ function IntelligenceOverview({
           )}`}
         >
           <div className="text-sm font-black capitalize">
-            {intelligence.grade}
+            {
+              intelligence.grade
+            }
           </div>
 
           <p className="mt-2 text-sm leading-6 text-current/80">
-            {intelligence.headline}
+            {
+              intelligence.headline
+            }
           </p>
         </div>
       </article>
 
       <article className="rounded-[2rem] border border-yellow-500/15 bg-[#061024] p-6 shadow-2xl shadow-black/20 md:p-7">
-        <div className="text-xs font-black uppercase tracking-[0.24em] text-yellow-400">
-          Operational assessment
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs font-black uppercase tracking-[0.24em] text-yellow-400">
+            Authoritative
+            operational evidence
+          </div>
+
+          <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-200">
+            <span className="size-2 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.7)]" />
+            Deterministic engine
+          </div>
         </div>
 
         <h2 className="mt-3 text-2xl font-black text-white md:text-3xl">
-          {intelligence.headline}
+          {
+            intelligence.headline
+          }
         </h2>
 
-        <p className="mt-3 max-w-4xl text-sm leading-7 text-white/60">
-          {intelligence.explanation}
+        <p className="mt-3 max-w-4xl text-sm leading-7 text-white/55">
+          {
+            intelligence.explanation
+          }
         </p>
 
         <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -1717,13 +2637,914 @@ function IntelligenceOverview({
   );
 }
 
+/* ============================================================================
+ * AI OPERATIONS CENTRE
+ * ========================================================================== */
+
+function AIOperationsCentre({
+  result,
+  state,
+  error,
+  onRetry,
+}: {
+  result: NormalisedAIResult | null;
+
+  state: AIState;
+
+  error: string;
+
+  onRetry: () => void;
+}) {
+  if (
+    state === "loading" &&
+    !result
+  ) {
+    return (
+      <AILoadingPanel />
+    );
+  }
+
+  if (
+    !result
+  ) {
+    return (
+      <section className="rounded-[2rem] border border-violet-400/15 bg-[linear-gradient(135deg,rgba(18,14,39,0.92),rgba(6,16,36,0.98))] p-6 shadow-2xl shadow-black/20 md:p-7">
+        <SectionHeading
+          eyebrow="AI operations intelligence"
+          title="Assessment unavailable"
+          description="The deterministic monitoring system remains fully operational even when AI analysis is unavailable."
+        />
+
+        <div className="mt-6 rounded-3xl border border-amber-400/20 bg-amber-400/10 p-5">
+          <div className="text-sm font-black text-amber-200">
+            AI analysis could not
+            be loaded
+          </div>
+
+          <p className="mt-2 text-sm leading-6 text-white/55">
+            {error ||
+              "No AI operational assessment has been generated yet."}
+          </p>
+
+          <button
+            type="button"
+            onClick={
+              onRetry
+            }
+            className="mt-4 rounded-xl border border-violet-300/20 bg-violet-400/10 px-4 py-2 text-sm font-black text-violet-200 transition hover:bg-violet-400/20"
+          >
+            Retry AI assessment
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  const {
+    assessment,
+  } = result;
+
+  const genuinelyUrgent =
+    assessment.action_required &&
+    (
+      assessment.risk_level ===
+        "high" ||
+      assessment.risk_level ===
+        "critical" ||
+      assessment.platform_status ===
+        "degraded" ||
+      assessment.platform_status ===
+        "critical"
+    );
+
+  const improvementRecommended =
+    assessment.action_required &&
+    !genuinelyUrgent;
+
+  return (
+    <section className="relative overflow-hidden rounded-[2.2rem] border border-violet-400/20 bg-[radial-gradient(circle_at_top_right,rgba(139,92,246,0.12),transparent_25%),linear-gradient(140deg,#0c0c20_0%,#071126_45%,#040b19_100%)] p-5 shadow-[0_35px_80px_rgba(0,0,0,0.28)] md:p-7">
+      <div className="pointer-events-none absolute -right-16 top-10 size-52 rounded-full bg-violet-500/[0.035] blur-3xl" />
+
+      <div className="relative">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-4xl">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-xs font-black uppercase tracking-[0.26em] text-violet-300">
+                AI Operations
+                Intelligence
+              </span>
+
+              <AISourceBadge
+                result={
+                  result
+                }
+              />
+
+              {state ===
+              "refreshing" ? (
+                <span className="inline-flex items-center gap-2 rounded-full border border-violet-400/15 bg-violet-400/[0.07] px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-violet-200">
+                  <span className="size-2 animate-pulse rounded-full bg-violet-300" />
+                  Updating
+                </span>
+              ) : null}
+            </div>
+
+            <h2 className="mt-4 max-w-4xl text-3xl font-black tracking-tight text-white md:text-4xl">
+              {
+                assessment.executive_summary
+              }
+            </h2>
+          </div>
+
+          <div className="grid min-w-[280px] grid-cols-2 gap-3">
+            <AIHeroMetric
+              label="AI confidence"
+              value={`${Math.round(
+                assessment.confidence
+              )}%`}
+            />
+
+            <AIHeroMetric
+              label="Risk level"
+              value={
+                assessment.risk_level
+              }
+              className={
+                getAIRiskClasses(
+                  assessment.risk_level
+                )
+              }
+            />
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-4 lg:grid-cols-[1fr_320px]">
+          <div
+            className={`rounded-3xl border p-5 ${
+              genuinelyUrgent
+                ? "border-red-400/25 bg-red-400/10"
+                : improvementRecommended
+                  ? "border-amber-400/20 bg-amber-400/[0.08]"
+                  : "border-emerald-400/20 bg-emerald-400/[0.08]"
+            }`}
+          >
+            <div className="flex flex-wrap items-center gap-3">
+              <span
+                className={`size-3 rounded-full ${
+                  genuinelyUrgent
+                    ? "bg-red-400 shadow-[0_0_16px_rgba(248,113,113,0.7)]"
+                    : improvementRecommended
+                      ? "bg-amber-400 shadow-[0_0_16px_rgba(251,191,36,0.6)]"
+                      : "bg-emerald-400 shadow-[0_0_16px_rgba(52,211,153,0.65)]"
+                }`}
+              />
+
+              <div className="text-sm font-black uppercase tracking-[0.15em] text-white/80">
+                {genuinelyUrgent
+                  ? "Operational action required"
+                  : improvementRecommended
+                    ? "Improvement recommended"
+                    : "No immediate intervention"}
+              </div>
+            </div>
+
+            <p className="mt-3 text-sm leading-7 text-white/60">
+              {
+                assessment.immediate_action
+              }
+            </p>
+          </div>
+
+          <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
+            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/35">
+              Platform status
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-4">
+              <div className="text-2xl font-black capitalize text-white">
+                {
+                  assessment.platform_status
+                }
+              </div>
+
+              <span
+                className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${getAIStatusClasses(
+                  assessment.platform_status
+                )}`}
+              >
+                AI assessment
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <AIAreaGrid
+          assessment={
+            assessment
+          }
+        />
+
+        <div className="mt-6 grid gap-6 xl:grid-cols-2">
+          <AIChangesPanel
+            changes={
+              assessment.what_changed
+            }
+          />
+
+          <AICausesPanel
+            causes={
+              assessment.likely_causes
+            }
+          />
+        </div>
+
+        <AIRecommendationsPanel
+          recommendations={
+            assessment.recommendations
+          }
+        />
+
+        <AIPredictionsPanel
+          predictions={
+            assessment.predictions
+          }
+        />
+
+        <div className="mt-6 grid gap-6 xl:grid-cols-2">
+          <AIWatchListPanel
+            items={
+              assessment.watch_list
+            }
+          />
+
+          <AIPositiveSignalsPanel
+            items={
+              assessment.positive_signals
+            }
+          />
+        </div>
+
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-5 text-xs text-white/35">
+          <div className="flex flex-wrap gap-x-4 gap-y-2">
+            <span>
+              Source:{" "}
+              <strong className="text-white/60">
+                {result.source ===
+                "openai"
+                  ? "OpenAI"
+                  : "Deterministic fallback"}
+              </strong>
+            </span>
+
+            <span>
+              Model:{" "}
+              <strong className="text-white/60">
+                {result.model ||
+                  "Not reported"}
+              </strong>
+            </span>
+
+            <span>
+              Generated:{" "}
+              <strong className="text-white/60">
+                {formatDateTime(
+                  result.generatedAt
+                )}
+              </strong>
+            </span>
+          </div>
+
+          <span className="max-w-xl text-right">
+            AI interpretation is
+            advisory. Deterministic
+            monitoring evidence
+            remains authoritative.
+          </span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AISourceBadge({
+  result,
+}: {
+  result: NormalisedAIResult;
+}) {
+  const openAI =
+    result.source ===
+    "openai";
+
+  return (
+    <span
+      className={
+        openAI
+          ? "rounded-full border border-violet-300/20 bg-violet-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-violet-200"
+          : "rounded-full border border-sky-300/20 bg-sky-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-sky-200"
+      }
+    >
+      {openAI
+        ? "OpenAI reasoning"
+        : "Fallback intelligence"}
+    </span>
+  );
+}
+
+function AIHeroMetric({
+  label,
+  value,
+  className = "",
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
+  return (
+    <div
+      className={`rounded-2xl border border-white/10 bg-black/20 p-4 ${className}`}
+    >
+      <div className="text-[9px] font-black uppercase tracking-[0.15em] text-white/35">
+        {label}
+      </div>
+
+      <div className="mt-2 text-xl font-black capitalize text-white">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function AIAreaGrid({
+  assessment,
+}: {
+  assessment: AIOperationsAssessment;
+}) {
+  const areas = [
+    {
+      key: "infrastructure",
+      label: "Infrastructure",
+      value:
+        assessment.infrastructure,
+    },
+    {
+      key: "performance",
+      label: "Performance",
+      value:
+        assessment.performance,
+    },
+    {
+      key: "database",
+      label: "Database",
+      value:
+        assessment.database,
+    },
+    {
+      key: "quota",
+      label: "Capacity / quota",
+      value:
+        assessment.quota,
+    },
+    {
+      key: "application",
+      label: "Application",
+      value:
+        assessment.application,
+    },
+  ];
+
+  return (
+    <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      {areas.map(
+        (area) => (
+          <AIAreaCard
+            key={
+              area.key
+            }
+            label={
+              area.label
+            }
+            area={
+              area.value
+            }
+          />
+        )
+      )}
+    </div>
+  );
+}
+
+function AIAreaCard({
+  label,
+  area,
+}: {
+  label: string;
+  area: AIOperationsAreaAssessment;
+}) {
+  return (
+    <article className="rounded-3xl border border-white/10 bg-black/20 p-5 transition duration-200 hover:border-violet-400/20 hover:bg-black/25">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/40">
+          {label}
+        </div>
+
+        <span
+          className={`rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] ${getAIStatusClasses(
+            area.status
+          )}`}
+        >
+          {area.status}
+        </span>
+      </div>
+
+      <div className="mt-4 flex items-end gap-2">
+        <div className="text-4xl font-black tracking-tight text-white">
+          {Math.round(
+            area.score
+          )}
+        </div>
+
+        <div className="pb-1 text-sm font-black text-white/25">
+          /100
+        </div>
+      </div>
+
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-violet-600 via-violet-400 to-fuchsia-300"
+          style={{
+            width: `${clampPercentage(
+              area.score
+            )}%`,
+          }}
+        />
+      </div>
+
+      <p className="mt-4 text-xs leading-6 text-white/45">
+        {area.summary}
+      </p>
+    </article>
+  );
+}
+
+function AIChangesPanel({
+  changes,
+}: {
+  changes: string[];
+}) {
+  return (
+    <AIListSection
+      eyebrow="Change detection"
+      title="What changed"
+      description="Material changes identified from the supplied monitoring history."
+    >
+      {changes.length > 0 ? (
+        <div className="space-y-3">
+          {changes.map(
+            (
+              item,
+              index
+            ) => (
+              <div
+                key={`${item}-${index}`}
+                className="flex gap-3 rounded-2xl border border-white/10 bg-black/20 p-4"
+              >
+                <div className="flex size-7 shrink-0 items-center justify-center rounded-full border border-violet-400/20 bg-violet-400/10 text-xs font-black text-violet-200">
+                  {
+                    index +
+                    1
+                  }
+                </div>
+
+                <p className="text-sm leading-6 text-white/60">
+                  {item}
+                </p>
+              </div>
+            )
+          )}
+        </div>
+      ) : (
+        <SmallEmptyState text="No material changes were identified." />
+      )}
+    </AIListSection>
+  );
+}
+
+function AICausesPanel({
+  causes,
+}: {
+  causes: AIOperationsCause[];
+}) {
+  return (
+    <AIListSection
+      eyebrow="Evidence-based inference"
+      title="Likely causes"
+      description="Potential explanations are shown separately from observed facts."
+    >
+      {causes.length > 0 ? (
+        <div className="space-y-4">
+          {causes.map(
+            (
+              cause,
+              index
+            ) => (
+              <article
+                key={`${cause.cause}-${index}`}
+                className="rounded-3xl border border-white/10 bg-black/20 p-5"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <h3 className="font-black text-white">
+                    {
+                      cause.cause
+                    }
+                  </h3>
+
+                  <span className="shrink-0 rounded-full border border-violet-400/15 bg-violet-400/[0.08] px-3 py-1 text-[10px] font-black text-violet-200">
+                    {Math.round(
+                      cause.confidence
+                    )}
+                    % confidence
+                  </span>
+                </div>
+
+                {cause.evidence
+                  .length >
+                0 ? (
+                  <div className="mt-4 space-y-2">
+                    {cause.evidence.map(
+                      (
+                        evidence,
+                        evidenceIndex
+                      ) => (
+                        <div
+                          key={`${evidence}-${evidenceIndex}`}
+                          className="flex gap-2 text-xs leading-5 text-white/45"
+                        >
+                          <span className="mt-2 size-1.5 shrink-0 rounded-full bg-violet-300/70" />
+
+                          <span>
+                            {
+                              evidence
+                            }
+                          </span>
+                        </div>
+                      )
+                    )}
+                  </div>
+                ) : null}
+              </article>
+            )
+          )}
+        </div>
+      ) : (
+        <SmallEmptyState text="No likely causes were required for the current assessment." />
+      )}
+    </AIListSection>
+  );
+}
+
+function AIRecommendationsPanel({
+  recommendations,
+}: {
+  recommendations: AIOperationsRecommendation[];
+}) {
+  return (
+    <div className="mt-6">
+      <SectionHeading
+        eyebrow="AI action plan"
+        title="Prioritised recommendations"
+        description="Suggested administrator actions ordered by operational importance. No destructive action is executed automatically."
+      />
+
+      {recommendations.length >
+      0 ? (
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          {recommendations.map(
+            (
+              recommendation,
+              index
+            ) => (
+              <article
+                key={`${recommendation.title}-${index}`}
+                className={`rounded-3xl border p-5 ${getAIRecommendationClasses(
+                  recommendation.priority
+                )}`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[9px] font-black uppercase tracking-[0.13em] text-white/65">
+                      {
+                        recommendation.priority
+                      }
+                    </span>
+
+                    <span className="text-[9px] font-black uppercase tracking-[0.13em] text-white/35">
+                      {
+                        recommendation.affected_area
+                      }
+                    </span>
+                  </div>
+
+                  <span className="text-[10px] font-bold text-white/40">
+                    {Math.round(
+                      recommendation.confidence
+                    )}
+                    % confidence
+                  </span>
+                </div>
+
+                <h3 className="mt-4 text-lg font-black text-white">
+                  {
+                    recommendation.title
+                  }
+                </h3>
+
+                <p className="mt-2 text-sm leading-6 text-white/55">
+                  {
+                    recommendation.reason
+                  }
+                </p>
+
+                <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-[10px] font-black uppercase tracking-[0.14em] text-yellow-300">
+                    Suggested action
+                  </div>
+
+                  <p className="mt-2 text-sm leading-6 text-white/65">
+                    {
+                      recommendation.action
+                    }
+                  </p>
+                </div>
+              </article>
+            )
+          )}
+        </div>
+      ) : (
+        <SmallEmptyState text="No additional AI recommendations were generated." />
+      )}
+    </div>
+  );
+}
+
+function AIPredictionsPanel({
+  predictions,
+}: {
+  predictions: AIOperationsPrediction[];
+}) {
+  return (
+    <div className="mt-6">
+      <SectionHeading
+        eyebrow="Forward intelligence"
+        title="Predictions and emerging risk"
+        description="Forecasts are advisory and should be interpreted according to their confidence and available historical evidence."
+      />
+
+      {predictions.length >
+      0 ? (
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {predictions.map(
+            (
+              prediction,
+              index
+            ) => (
+              <article
+                key={`${prediction.metric}-${index}`}
+                className="rounded-3xl border border-white/10 bg-black/20 p-5"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.15em] text-violet-300">
+                      {
+                        prediction.metric
+                      }
+                    </div>
+
+                    <div className="mt-3 flex items-center gap-3">
+                      <span className="text-3xl font-black text-white">
+                        {getPredictionArrow(
+                          prediction.direction
+                        )}
+                      </span>
+
+                      <span className="font-black capitalize text-white/80">
+                        {
+                          prediction.direction
+                        }
+                      </span>
+                    </div>
+                  </div>
+
+                  <span
+                    className={`rounded-full border px-3 py-1 text-[9px] font-black uppercase ${getAIRiskClasses(
+                      prediction.projected_risk
+                    )}`}
+                  >
+                    {
+                      prediction.projected_risk
+                    }{" "}
+                    risk
+                  </span>
+                </div>
+
+                <p className="mt-4 text-sm leading-6 text-white/50">
+                  {
+                    prediction.summary
+                  }
+                </p>
+
+                <div className="mt-5 grid grid-cols-2 gap-3">
+                  <SmallInfoCard
+                    label="Horizon"
+                    value={
+                      prediction.horizon
+                    }
+                  />
+
+                  <SmallInfoCard
+                    label="Confidence"
+                    value={`${Math.round(
+                      prediction.confidence
+                    )}%`}
+                  />
+                </div>
+              </article>
+            )
+          )}
+        </div>
+      ) : (
+        <SmallEmptyState text="There is not yet enough evidence for useful predictions." />
+      )}
+    </div>
+  );
+}
+
+function AIWatchListPanel({
+  items,
+}: {
+  items: string[];
+}) {
+  return (
+    <AIListSection
+      eyebrow="Watch list"
+      title="Monitor next"
+      description="Conditions worth watching without classifying them as current incidents."
+    >
+      {items.length > 0 ? (
+        <div className="space-y-3">
+          {items.map(
+            (
+              item,
+              index
+            ) => (
+              <div
+                key={`${item}-${index}`}
+                className="flex gap-3 rounded-2xl border border-amber-400/15 bg-amber-400/[0.055] p-4"
+              >
+                <span className="mt-2 size-2 shrink-0 rounded-full bg-amber-300 shadow-[0_0_10px_rgba(252,211,77,0.5)]" />
+
+                <p className="text-sm leading-6 text-white/60">
+                  {item}
+                </p>
+              </div>
+            )
+          )}
+        </div>
+      ) : (
+        <SmallEmptyState text="Nothing material is currently on the AI watch list." />
+      )}
+    </AIListSection>
+  );
+}
+
+function AIPositiveSignalsPanel({
+  items,
+}: {
+  items: string[];
+}) {
+  return (
+    <AIListSection
+      eyebrow="Positive signals"
+      title="What is working well"
+      description="Healthy evidence retained so the Operations Centre does not become alarm-biased."
+    >
+      {items.length > 0 ? (
+        <div className="space-y-3">
+          {items.map(
+            (
+              item,
+              index
+            ) => (
+              <div
+                key={`${item}-${index}`}
+                className="flex gap-3 rounded-2xl border border-emerald-400/15 bg-emerald-400/[0.055] p-4"
+              >
+                <span className="mt-2 size-2 shrink-0 rounded-full bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.5)]" />
+
+                <p className="text-sm leading-6 text-white/60">
+                  {item}
+                </p>
+              </div>
+            )
+          )}
+        </div>
+      ) : (
+        <SmallEmptyState text="No explicit positive signals were returned." />
+      )}
+    </AIListSection>
+  );
+}
+
+function AIListSection({
+  eyebrow,
+  title,
+  description,
+  children,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  children:
+    React.ReactNode;
+}) {
+  return (
+    <section className="rounded-[1.8rem] border border-white/10 bg-black/[0.14] p-5">
+      <div className="text-[10px] font-black uppercase tracking-[0.18em] text-violet-300">
+        {eyebrow}
+      </div>
+
+      <h3 className="mt-2 text-xl font-black text-white">
+        {title}
+      </h3>
+
+      <p className="mt-2 text-xs leading-6 text-white/40">
+        {description}
+      </p>
+
+      <div className="mt-5">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function SmallEmptyState({
+  text,
+}: {
+  text: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-5 text-sm leading-6 text-white/40">
+      {text}
+    </div>
+  );
+}
+
+function AILoadingPanel() {
+  return (
+    <section
+      aria-busy="true"
+      aria-live="polite"
+      className="rounded-[2rem] border border-violet-400/15 bg-[linear-gradient(135deg,rgba(18,14,39,0.92),rgba(6,16,36,0.98))] p-7 shadow-2xl shadow-black/20"
+    >
+      <div className="flex items-center gap-4">
+        <span className="size-7 animate-spin rounded-full border-2 border-violet-300/20 border-t-violet-300" />
+
+        <div>
+          <div className="text-xs font-black uppercase tracking-[0.18em] text-violet-300">
+            AI Operations
+            Intelligence
+          </div>
+
+          <div className="mt-2 text-lg font-black text-white">
+            Analysing platform
+            evidence
+          </div>
+
+          <p className="mt-1 text-sm text-white/45">
+            Historical snapshots,
+            deterministic findings,
+            service health,
+            application metrics
+            and capacity evidence
+            are being interpreted.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ============================================================================
+ * SERVICES
+ * ========================================================================== */
+
 function ServiceStatusCard({
   service,
 }: {
   service: ServiceCheck;
 }) {
   return (
-    <article className="rounded-3xl border border-white/10 bg-black/25 p-5 transition hover:border-yellow-500/20">
+    <article className="group rounded-3xl border border-white/10 bg-black/25 p-5 transition duration-200 hover:-translate-y-0.5 hover:border-yellow-500/20 hover:bg-black/30">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-center gap-3">
@@ -1735,7 +3556,9 @@ function ServiceStatusCard({
             />
 
             <h3 className="truncate text-lg font-black text-white">
-              {service.label}
+              {
+                service.label
+              }
             </h3>
           </div>
 
@@ -1756,7 +3579,9 @@ function ServiceStatusCard({
       </div>
 
       <p className="mt-4 min-h-12 text-sm leading-6 text-white/55">
-        {service.message}
+        {
+          service.message
+        }
       </p>
 
       <div className="mt-4 border-t border-white/10 pt-4 text-xs text-white/35">
@@ -1768,6 +3593,10 @@ function ServiceStatusCard({
     </article>
   );
 }
+
+/* ============================================================================
+ * HISTORY
+ * ========================================================================== */
 
 function HistoryPanel({
   history,
@@ -1807,7 +3636,8 @@ function HistoryPanel({
         description={`Latest ${ordered.length} stored health snapshots.`}
       />
 
-      {ordered.length >= 2 ? (
+      {ordered.length >=
+      2 ? (
         <div className="mt-6">
           <HistoryChart
             snapshots={
@@ -1893,7 +3723,8 @@ function HistoryChart({
   const range =
     Math.max(
       1,
-      maximum - minimum
+      maximum -
+        minimum
     );
 
   const points =
@@ -1911,7 +3742,8 @@ function HistoryChart({
                 1
             )) *
             (width -
-              padding * 2);
+              padding *
+                2);
 
         const y =
           height -
@@ -1920,7 +3752,8 @@ function HistoryChart({
             minimum) /
             range) *
             (height -
-              padding * 2);
+              padding *
+                2);
 
         return {
           x,
@@ -1937,7 +3770,11 @@ function HistoryChart({
           point,
           index
         ) =>
-          `${index === 0 ? "M" : "L"} ${point.x.toFixed(
+          `${
+            index === 0
+              ? "M"
+              : "L"
+          } ${point.x.toFixed(
             2
           )} ${point.y.toFixed(
             2
@@ -1966,6 +3803,7 @@ function HistoryChart({
               stopColor="rgb(234 179 8)"
               stopOpacity="0.3"
             />
+
             <stop
               offset="100%"
               stopColor="rgb(234 179 8)"
@@ -1974,7 +3812,11 @@ function HistoryChart({
           </linearGradient>
         </defs>
 
-        {[0.25, 0.5, 0.75].map(
+        {[
+          0.25,
+          0.5,
+          0.75,
+        ].map(
           (ratio) => (
             <line
               key={
@@ -2012,13 +3854,15 @@ function HistoryChart({
             points[
               points.length -
                 1
-            ]?.x ?? padding
+            ]?.x ??
+            padding
           } ${
             height -
             padding
           } L ${
             points[0]
-              ?.x ?? padding
+              ?.x ??
+            padding
           } ${
             height -
             padding
@@ -2075,11 +3919,16 @@ function HistoryChart({
   );
 }
 
+/* ============================================================================
+ * SNAPSHOT
+ * ========================================================================== */
+
 function LatestSnapshotPanel({
   latest,
   lastLoadedAt,
 }: {
   latest: NormalisedSnapshot | null;
+
   lastLoadedAt: string | null;
 }) {
   return (
@@ -2150,6 +3999,10 @@ function LatestSnapshotPanel({
   );
 }
 
+/* ============================================================================
+ * USAGE
+ * ========================================================================== */
+
 function UsagePanel({
   usage,
 }: {
@@ -2163,7 +4016,8 @@ function UsagePanel({
         description="Configured Supabase capacity metrics and intelligent alert thresholds."
       />
 
-      {usage.length > 0 ? (
+      {usage.length >
+      0 ? (
         <div className="mt-6 grid gap-4 lg:grid-cols-3">
           {usage.map(
             (metric) => (
@@ -2192,7 +4046,7 @@ function UsageGauge({
 }) {
   const percentage =
     metric.percentage !==
-      null
+    null
       ? clampPercentage(
           metric.percentage
         )
@@ -2208,7 +4062,9 @@ function UsageGauge({
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-black text-white">
-            {metric.label}
+            {
+              metric.label
+            }
           </h3>
 
           <p className="mt-1 text-xs text-white/40">
@@ -2223,7 +4079,8 @@ function UsageGauge({
             tone
           )}`}
         >
-          {percentage === null
+          {percentage ===
+          null
             ? "Unavailable"
             : `${percentage.toFixed(
                 1
@@ -2268,7 +4125,8 @@ function UsageGauge({
 
       <p className="mt-4 text-xs leading-6 text-white/40">
         {metric.message ||
-          (percentage === null
+          (percentage ===
+          null
             ? "Add configured usage and quota values to enable forecasting."
             : "Usage is being compared with the configured capacity limit.")}
       </p>
@@ -2276,11 +4134,16 @@ function UsageGauge({
   );
 }
 
+/* ============================================================================
+ * APPLICATION METRICS
+ * ========================================================================== */
+
 function ApplicationMetricsPanel({
   metrics,
   latestMode,
 }: {
   metrics: ApplicationMetric[];
+
   latestMode: HealthCheckMode | null;
 }) {
   return (
@@ -2291,7 +4154,8 @@ function ApplicationMetricsPanel({
         description="Daily deep scans collect important SalahNearMe application metrics."
       />
 
-      {metrics.length > 0 ? (
+      {metrics.length >
+      0 ? (
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           {metrics.map(
             (metric) => (
@@ -2302,7 +4166,9 @@ function ApplicationMetricsPanel({
                 className="rounded-3xl border border-white/10 bg-black/25 p-5"
               >
                 <div className="text-xs font-black uppercase tracking-[0.16em] text-yellow-400">
-                  {metric.label}
+                  {
+                    metric.label
+                  }
                 </div>
 
                 <div className="mt-4 text-3xl font-black text-white">
@@ -2319,7 +4185,9 @@ function ApplicationMetricsPanel({
                     metric.status
                   )}`}
                 >
-                  {metric.status}
+                  {
+                    metric.status
+                  }
                 </div>
 
                 {metric.message ? (
@@ -2338,7 +4206,7 @@ function ApplicationMetricsPanel({
           message={
             latestMode ===
             "lightweight"
-              ? "Application counts are collected during a daily deep scan. Use “Run daily deep scan” above."
+              ? "Application counts are collected during a daily deep scan. Use “Run deep scan” above."
               : "No application metrics were returned by the latest daily scan."
           }
         />
@@ -2346,6 +4214,10 @@ function ApplicationMetricsPanel({
     </section>
   );
 }
+
+/* ============================================================================
+ * DETERMINISTIC FINDINGS
+ * ========================================================================== */
 
 function FindingsPanel({
   findings,
@@ -2355,9 +4227,9 @@ function FindingsPanel({
   return (
     <section className="rounded-[2rem] border border-yellow-500/15 bg-[#061024] p-5 shadow-2xl shadow-black/20 md:p-7">
       <SectionHeading
-        eyebrow="Intelligent analysis"
+        eyebrow="Deterministic intelligence"
         title="Operational findings"
-        description="Prioritised observations and recommended actions generated from the latest snapshot."
+        description="Rule-based observations and recommended actions generated directly from monitoring evidence."
       />
 
       <div className="mt-6 space-y-4">
@@ -2386,17 +4258,22 @@ function FindingsPanel({
               </div>
 
               <h3 className="mt-4 text-lg font-black text-white">
-                {finding.title}
+                {
+                  finding.title
+                }
               </h3>
 
               <p className="mt-2 text-sm leading-6 text-white/60">
-                {finding.message}
+                {
+                  finding.message
+                }
               </p>
 
               {finding.recommendation ? (
                 <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="text-xs font-black uppercase tracking-[0.14em] text-yellow-300">
-                    Recommended action
+                    Recommended
+                    action
                   </div>
 
                   <p className="mt-2 text-sm leading-6 text-white/60">
@@ -2414,6 +4291,10 @@ function FindingsPanel({
   );
 }
 
+/* ============================================================================
+ * ALERTS
+ * ========================================================================== */
+
 function AlertsPanel({
   alerts,
 }: {
@@ -2427,7 +4308,8 @@ function AlertsPanel({
         description="Open or acknowledged platform alerts generated by the monitoring engine."
       />
 
-      {alerts.length > 0 ? (
+      {alerts.length >
+      0 ? (
         <div className="mt-6 space-y-4">
           {alerts.map(
             (alert) => (
@@ -2462,11 +4344,15 @@ function AlertsPanel({
                 </div>
 
                 <h3 className="mt-4 text-lg font-black text-white">
-                  {alert.title}
+                  {
+                    alert.title
+                  }
                 </h3>
 
                 <p className="mt-2 text-sm leading-6 text-white/60">
-                  {alert.message}
+                  {
+                    alert.message
+                  }
                 </p>
 
                 {alert.metricName ? (
@@ -2521,13 +4407,20 @@ function AlertsPanel({
           </div>
 
           <p className="mt-3 text-sm leading-6 text-white/55">
-            The monitoring engine has not detected any active or acknowledged incidents.
+            The monitoring engine
+            has not detected any
+            active or acknowledged
+            incidents.
           </p>
         </div>
       )}
     </section>
   );
 }
+
+/* ============================================================================
+ * GENERIC UI
+ * ========================================================================== */
 
 function MetricCard({
   label,
@@ -2576,7 +4469,9 @@ function SmallInfoCard({
 
       <div
         className="mt-2 truncate text-sm font-black capitalize text-white/80"
-        title={value}
+        title={
+          value
+        }
       >
         {value}
       </div>
@@ -2599,7 +4494,9 @@ function DetailRow({
 
       <div
         className="max-w-full break-all text-sm font-bold capitalize text-white/75"
-        title={value}
+        title={
+          value
+        }
       >
         {value}
       </div>
@@ -2611,11 +4508,26 @@ function SectionHeading({
   eyebrow,
   title,
   description,
+  id,
 }: {
   eyebrow: string;
   title: string;
   description: string;
+  id?: string;
 }) {
+  const headingId =
+    id ||
+    `${title
+      .toLowerCase()
+      .replace(
+        /[^a-z0-9]+/g,
+        "-"
+      )
+      .replace(
+        /^-+|-+$/g,
+        ""
+      )}-heading`;
+
   return (
     <div>
       <div className="text-xs font-black uppercase tracking-[0.24em] text-yellow-400">
@@ -2623,12 +4535,9 @@ function SectionHeading({
       </div>
 
       <h2
-        id={`${title
-          .toLowerCase()
-          .replace(
-            /[^a-z0-9]+/g,
-            "-"
-          )}-heading`}
+        id={
+          headingId
+        }
         className="mt-3 text-2xl font-black text-white md:text-3xl"
       >
         {title}
@@ -2648,17 +4557,20 @@ function MessagePanel({
   tone:
     | "error"
     | "success";
+
   message: string;
 }) {
   return (
     <div
       role={
-        tone === "error"
+        tone ===
+        "error"
           ? "alert"
           : "status"
       }
       className={
-        tone === "error"
+        tone ===
+        "error"
           ? "rounded-2xl border border-red-400/25 bg-red-400/10 p-5 text-sm font-bold text-red-200"
           : "rounded-2xl border border-emerald-400/25 bg-emerald-400/10 p-5 text-sm font-bold text-emerald-200"
       }
@@ -2680,6 +4592,28 @@ function EmptyPanel({
   );
 }
 
+function AuthorityFooter() {
+  return (
+    <footer className="rounded-3xl border border-white/[0.07] bg-black/20 px-5 py-4 text-xs leading-6 text-white/30">
+      <strong className="text-white/50">
+        SalahNearMe Operations
+        Centre architecture:
+      </strong>{" "}
+      deterministic telemetry,
+      health rules and persisted
+      alerts remain the source of
+      operational truth. AI
+      intelligence provides an
+      additional interpretation
+      layer for prioritisation,
+      explanation and forecasting
+      and does not automatically
+      perform destructive
+      administrative actions.
+    </footer>
+  );
+}
+
 function OperationsLoading() {
   return (
     <section
@@ -2692,11 +4626,15 @@ function OperationsLoading() {
 
         <div>
           <div className="text-lg font-black text-white">
-            Loading Operations Centre
+            Loading Operations
+            Centre
           </div>
 
           <p className="mt-1 text-sm text-white/50">
-            Retrieving the latest monitoring snapshot, alerts and operational intelligence.
+            Retrieving the latest
+            monitoring snapshot,
+            alerts and operational
+            intelligence.
           </p>
         </div>
       </div>

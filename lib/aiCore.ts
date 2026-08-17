@@ -1,6 +1,6 @@
-import type {
-  ZodType,
-} from "zod";
+import "server-only";
+
+import type { ZodType } from "zod";
 
 export type AIRole =
   | "system"
@@ -13,34 +13,21 @@ export type AIMessage = {
   content: string;
 };
 
-export type AIJsonSchema =
-  Record<string, unknown>;
+export type AIJsonSchema = Record<string, unknown>;
 
 export type AIStructuredOutput = {
   name: string;
-
   description?: string;
-
   schema: AIJsonSchema;
-
   strict?: boolean;
 };
 
 export type AIRequestOptions<T> = {
   messages: AIMessage[];
 
-  /**
-   * Optional Zod validation performed after the model response
-   * has been received.
-   */
   schema?: ZodType<T>;
 
-  /**
-   * Optional strict JSON Schema passed directly to the
-   * OpenAI Responses API.
-   */
-  structuredOutput?:
-    AIStructuredOutput;
+  structuredOutput?: AIStructuredOutput;
 
   model?: string;
 
@@ -54,55 +41,41 @@ export type AIRequestOptions<T> = {
     string,
     string | number | boolean | null
   >;
+
+  /**
+   * Responses are not stored by default because SalahNearMe
+   * can send operational/admin context.
+   */
+  store?: boolean;
+
+  /**
+   * Additional retry attempts after the initial request.
+   */
+  maxRetries?: number;
 };
 
 export type AIUsage = {
-  inputTokens:
-    | number
-    | null;
-
-  outputTokens:
-    | number
-    | null;
-
-  totalTokens:
-    | number
-    | null;
-
-  cachedInputTokens:
-    | number
-    | null;
-
-  reasoningTokens:
-    | number
-    | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  cachedInputTokens: number | null;
+  reasoningTokens: number | null;
 };
 
 export type AIResult<T> = {
   ok: true;
 
-  /**
-   * Raw textual representation returned by OpenAI.
-   */
   text: string;
 
-  /**
-   * Validated structured object when a Zod schema is supplied.
-   */
   parsed: T | null;
 
-  /**
-   * Whether the structured result successfully passed local
-   * schema validation.
-   */
-  structured:
-    boolean;
+  structured: boolean;
 
   model: string;
 
-  responseId:
-    | string
-    | null;
+  responseId: string | null;
+
+  requestId: string | null;
 
   usage: AIUsage;
 
@@ -114,54 +87,40 @@ export class AICoreError extends Error {
 
   code: string;
 
-  details:
-    | Record<string, unknown>
-    | null;
+  details: Record<string, unknown> | null;
 
   constructor(
     message: string,
     options?: {
       status?: number;
       code?: string;
-
-      details?: Record<
-        string,
-        unknown
-      > | null;
+      details?: Record<string, unknown> | null;
     }
   ) {
     super(message);
 
-    this.name =
-      "AICoreError";
+    this.name = "AICoreError";
 
     this.status =
-      options?.status ??
-      500;
+      options?.status ?? 500;
 
     this.code =
-      options?.code ??
-      "AI_CORE_ERROR";
+      options?.code ?? "AI_CORE_ERROR";
 
     this.details =
-      options?.details ??
-      null;
+      options?.details ?? null;
   }
 }
 
 type OpenAIResponseContent = {
   type?: unknown;
-
   text?: unknown;
-
   refusal?: unknown;
 };
 
 type OpenAIResponseOutput = {
   type?: unknown;
-
   content?: unknown;
-
   status?: unknown;
 };
 
@@ -195,20 +154,15 @@ type OpenAIResponseBody = {
 
     total_tokens?: unknown;
 
-    input_tokens_details?:
-      OpenAIUsageDetails;
+    input_tokens_details?: OpenAIUsageDetails;
 
-    output_tokens_details?:
-      OpenAIOutputTokenDetails;
+    output_tokens_details?: OpenAIOutputTokenDetails;
   };
 
   error?: {
     message?: unknown;
-
     code?: unknown;
-
     type?: unknown;
-
     param?: unknown;
   };
 };
@@ -216,52 +170,59 @@ type OpenAIResponseBody = {
 const OPENAI_RESPONSES_URL =
   "https://api.openai.com/v1/responses";
 
-const DEFAULT_TIMEOUT_MS =
-  30_000;
+const DEFAULT_TIMEOUT_MS = 30_000;
+const MIN_TIMEOUT_MS = 1_000;
+const MAX_TIMEOUT_MS = 120_000;
 
-const MAX_TIMEOUT_MS =
-  60_000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 2_500;
+const MAX_OUTPUT_TOKENS = 8_000;
 
-const DEFAULT_MAX_OUTPUT_TOKENS =
-  2_500;
+const MAX_MESSAGE_LENGTH = 100_000;
+const MAX_OUTPUT_TEXT_LENGTH = 30_000;
 
-const MAX_OUTPUT_TOKENS =
-  8_000;
+const MAX_SCHEMA_NAME_LENGTH = 64;
+const MAX_SCHEMA_DESCRIPTION_LENGTH = 500;
 
-const MAX_MESSAGE_LENGTH =
-  100_000;
+const MAX_METADATA_ENTRIES = 16;
+const MAX_METADATA_KEY_LENGTH = 64;
+const MAX_METADATA_VALUE_LENGTH = 500;
 
-const MAX_OUTPUT_TEXT_LENGTH =
-  30_000;
+const DEFAULT_MAX_RETRIES = 2;
+const MAX_RETRIES = 5;
 
-const MAX_SCHEMA_NAME_LENGTH =
-  64;
+const RETRYABLE_HTTP_STATUSES = new Set([
+  408,
+  409,
+  429,
+  500,
+  502,
+  503,
+  504,
+]);
 
 function cleanString(
   value: unknown,
   maxLength = 10_000
 ): string {
-  if (
-    typeof value !==
-    "string"
-  ) {
+  if (typeof value !== "string") {
     return "";
   }
 
   return value
+    .replace(
+      /[\u0000-\u001F\u007F]/g,
+      " "
+    )
     .trim()
-    .slice(
-      0,
-      maxLength
-    );
+    .replace(/\s+/g, " ")
+    .slice(0, maxLength);
 }
 
 function safeNumber(
   value: unknown
 ): number | null {
   return (
-    typeof value ===
-      "number" &&
+    typeof value === "number" &&
     Number.isFinite(value)
   )
     ? value
@@ -282,11 +243,20 @@ function clampInteger(
   );
 }
 
+function sleep(
+  milliseconds: number
+): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(
+      resolve,
+      milliseconds
+    );
+  });
+}
+
 function getApiKey(): string {
   const key =
-    process.env
-      .OPENAI_API_KEY
-      ?.trim();
+    process.env.OPENAI_API_KEY?.trim();
 
   if (!key) {
     throw new AICoreError(
@@ -311,23 +281,38 @@ function getModel(
       120
     ) ||
     cleanString(
-      process.env
-        .OPENAI_MODEL,
+      process.env.OPENAI_MODEL,
       120
     ) ||
     "gpt-4o-mini"
   );
 }
 
+/**
+ * Converts a user-provided structured-output schema name
+ * into a safe API-compatible identifier.
+ *
+ * Keeps only letters, numbers, underscores and hyphens.
+ */
 function sanitizeSchemaName(
   value: string
 ): string {
-  const sanitized =
-    value
-      .trim()
+  const cleaned =
+    cleanString(
+      value,
+      MAX_SCHEMA_NAME_LENGTH * 2
+    )
       .replace(
         /[^a-zA-Z0-9_-]/g,
         "_"
+      )
+      .replace(
+        /_+/g,
+        "_"
+      )
+      .replace(
+        /^[_-]+|[_-]+$/g,
+        ""
       )
       .slice(
         0,
@@ -335,59 +320,167 @@ function sanitizeSchemaName(
       );
 
   return (
-    sanitized ||
+    cleaned ||
     "salahnearme_response"
   );
 }
 
+function sanitizeMetadata(
+  metadata:
+    | AIRequestOptions<unknown>["metadata"]
+    | undefined
+):
+  | Record<
+      string,
+      string | number | boolean | null
+    >
+  | undefined {
+  if (!metadata) {
+    return undefined;
+  }
+
+  const sanitized: Record<
+    string,
+    string | number | boolean | null
+  > = {};
+
+  const entries =
+    Object.entries(metadata).slice(
+      0,
+      MAX_METADATA_ENTRIES
+    );
+
+  for (const [rawKey, rawValue] of entries) {
+    const safeKey =
+      cleanString(
+        rawKey,
+        MAX_METADATA_KEY_LENGTH * 2
+      )
+        .replace(
+          /[^a-zA-Z0-9_-]/g,
+          "_"
+        )
+        .replace(
+          /_+/g,
+          "_"
+        )
+        .replace(
+          /^[_-]+|[_-]+$/g,
+          ""
+        )
+        .slice(
+          0,
+          MAX_METADATA_KEY_LENGTH
+        );
+
+    if (!safeKey) {
+      continue;
+    }
+
+    if (rawValue === null) {
+      sanitized[safeKey] = null;
+      continue;
+    }
+
+    if (
+      typeof rawValue === "string"
+    ) {
+      sanitized[safeKey] =
+        cleanString(
+          rawValue,
+          MAX_METADATA_VALUE_LENGTH
+        );
+
+      continue;
+    }
+
+    if (
+      typeof rawValue === "number"
+    ) {
+      sanitized[safeKey] =
+        Number.isFinite(rawValue)
+          ? rawValue
+          : null;
+
+      continue;
+    }
+
+    if (
+      typeof rawValue === "boolean"
+    ) {
+      sanitized[safeKey] =
+        rawValue;
+    }
+  }
+
+  return Object.keys(
+    sanitized
+  ).length > 0
+    ? sanitized
+    : undefined;
+}
+
 function buildInput(
   messages: AIMessage[]
-) {
-  return messages
-    .map(
-      (message) => ({
-        role:
-          message.role,
+): AIMessage[] {
+  const result: AIMessage[] = [];
 
-        content:
-          cleanString(
-            message.content,
-            MAX_MESSAGE_LENGTH
-          ),
-      })
-    )
-    .filter(
-      (message) =>
-        message.content
-          .length > 0
-    );
+  for (const message of messages) {
+    const content =
+      cleanString(
+        message.content,
+        MAX_MESSAGE_LENGTH
+      );
+
+    if (!content) {
+      continue;
+    }
+
+    result.push({
+      role: message.role,
+      content,
+    });
+  }
+
+  return result;
 }
 
 function buildTextConfiguration(
   structuredOutput?:
     AIStructuredOutput
-) {
+):
+  | {
+      format: {
+        type: "json_schema";
+        name: string;
+        description?: string;
+        schema: AIJsonSchema;
+        strict: boolean;
+      };
+    }
+  | undefined {
   if (!structuredOutput) {
     return undefined;
   }
 
+  const description =
+    cleanString(
+      structuredOutput.description,
+      MAX_SCHEMA_DESCRIPTION_LENGTH
+    );
+
   return {
     format: {
-      type:
-        "json_schema",
+      type: "json_schema",
 
       name:
         sanitizeSchemaName(
           structuredOutput.name
         ),
 
-      ...(structuredOutput.description
+      ...(description
         ? {
-            description:
-              cleanString(
-                structuredOutput.description,
-                500
-              ),
+            description,
           }
         : {}),
 
@@ -404,29 +497,20 @@ function buildTextConfiguration(
 function extractRefusal(
   body: OpenAIResponseBody
 ): string | null {
-  if (
-    !Array.isArray(
-      body.output
-    )
-  ) {
+  if (!Array.isArray(body.output)) {
     return null;
   }
 
-  for (
-    const rawOutput of
-    body.output
-  ) {
+  for (const rawOutput of body.output) {
     if (
       !rawOutput ||
-      typeof rawOutput !==
-        "object"
+      typeof rawOutput !== "object"
     ) {
       continue;
     }
 
     const output =
-      rawOutput as
-        OpenAIResponseOutput;
+      rawOutput as OpenAIResponseOutput;
 
     if (
       !Array.isArray(
@@ -442,15 +526,13 @@ function extractRefusal(
     ) {
       if (
         !rawContent ||
-        typeof rawContent !==
-          "object"
+        typeof rawContent !== "object"
       ) {
         continue;
       }
 
       const content =
-        rawContent as
-          OpenAIResponseContent;
+        rawContent as OpenAIResponseContent;
 
       const refusal =
         cleanString(
@@ -480,32 +562,22 @@ function extractOutputText(
     return direct;
   }
 
-  if (
-    !Array.isArray(
-      body.output
-    )
-  ) {
+  if (!Array.isArray(body.output)) {
     return "";
   }
 
-  const parts:
-    string[] = [];
+  const parts: string[] = [];
 
-  for (
-    const rawOutput of
-    body.output
-  ) {
+  for (const rawOutput of body.output) {
     if (
       !rawOutput ||
-      typeof rawOutput !==
-        "object"
+      typeof rawOutput !== "object"
     ) {
       continue;
     }
 
     const output =
-      rawOutput as
-        OpenAIResponseOutput;
+      rawOutput as OpenAIResponseOutput;
 
     if (
       !Array.isArray(
@@ -521,15 +593,13 @@ function extractOutputText(
     ) {
       if (
         !rawContent ||
-        typeof rawContent !==
-          "object"
+        typeof rawContent !== "object"
       ) {
         continue;
       }
 
       const content =
-        rawContent as
-          OpenAIResponseContent;
+        rawContent as OpenAIResponseContent;
 
       const text =
         cleanString(
@@ -559,9 +629,7 @@ function stripMarkdownCodeFence(
     value.trim();
 
   if (
-    !trimmed.startsWith(
-      "```"
-    )
+    !trimmed.startsWith("```")
   ) {
     return trimmed;
   }
@@ -582,17 +650,11 @@ function extractJsonCandidate(
   value: string
 ): string {
   const cleaned =
-    stripMarkdownCodeFence(
-      value
-    );
+    stripMarkdownCodeFence(value);
 
   if (
-    cleaned.startsWith(
-      "{"
-    ) &&
-    cleaned.endsWith(
-      "}"
-    )
+    cleaned.startsWith("{") &&
+    cleaned.endsWith("}")
   ) {
     return cleaned;
   }
@@ -601,14 +663,11 @@ function extractJsonCandidate(
     cleaned.indexOf("{");
 
   const lastBrace =
-    cleaned.lastIndexOf(
-      "}"
-    );
+    cleaned.lastIndexOf("}");
 
   if (
     firstBrace >= 0 &&
-    lastBrace >
-      firstBrace
+    lastBrace > firstBrace
   ) {
     return cleaned.slice(
       firstBrace,
@@ -627,15 +686,12 @@ function parseStructuredOutput<T>(
     return null;
   }
 
-  let json:
-    unknown;
+  let json: unknown;
 
   try {
     json =
       JSON.parse(
-        extractJsonCandidate(
-          text
-        )
+        extractJsonCandidate(text)
       );
   } catch (error) {
     console.error(
@@ -647,13 +703,9 @@ function parseStructuredOutput<T>(
   }
 
   const validation =
-    schema.safeParse(
-      json
-    );
+    schema.safeParse(json);
 
-  if (
-    !validation.success
-  ) {
+  if (!validation.success) {
     console.error(
       "AI structured output failed local schema validation:",
       validation.error.flatten()
@@ -671,20 +723,17 @@ function buildUsage(
   return {
     inputTokens:
       safeNumber(
-        body.usage
-          ?.input_tokens
+        body.usage?.input_tokens
       ),
 
     outputTokens:
       safeNumber(
-        body.usage
-          ?.output_tokens
+        body.usage?.output_tokens
       ),
 
     totalTokens:
       safeNumber(
-        body.usage
-          ?.total_tokens
+        body.usage?.total_tokens
       ),
 
     cachedInputTokens:
@@ -707,7 +756,8 @@ function buildOpenAIError(
   body:
     | OpenAIResponseBody
     | null,
-  httpStatus: number
+  httpStatus: number,
+  requestId: string | null
 ): AICoreError {
   const message =
     cleanString(
@@ -739,20 +789,232 @@ function buildOpenAIError(
         http_status:
           httpStatus,
 
+        request_id:
+          requestId,
+
         parameter:
           cleanString(
             body?.error?.param,
             200
-          ) || null,
+          ) ||
+          null,
       },
     }
   );
 }
 
+function shouldRetryStatus(
+  status: number
+): boolean {
+  return RETRYABLE_HTTP_STATUSES.has(
+    status
+  );
+}
+
+function getRetryDelayMs(
+  attempt: number,
+  retryAfterHeader:
+    | string
+    | null
+): number {
+  if (retryAfterHeader) {
+    const seconds =
+      Number(retryAfterHeader);
+
+    if (
+      Number.isFinite(seconds) &&
+      seconds >= 0
+    ) {
+      return Math.min(
+        10_000,
+        Math.round(
+          seconds * 1_000
+        )
+      );
+    }
+
+    const retryDate =
+      Date.parse(
+        retryAfterHeader
+      );
+
+    if (
+      Number.isFinite(retryDate)
+    ) {
+      return Math.min(
+        10_000,
+        Math.max(
+          0,
+          retryDate - Date.now()
+        )
+      );
+    }
+  }
+
+  const exponential =
+    500 * 2 ** attempt;
+
+  const jitter =
+    Math.floor(
+      Math.random() * 250
+    );
+
+  return Math.min(
+    8_000,
+    exponential + jitter
+  );
+}
+
+async function executeRequest(
+  requestBody:
+    Record<string, unknown>,
+  apiKey: string,
+  controller: AbortController,
+  maxRetries: number
+): Promise<{
+  body: OpenAIResponseBody;
+  requestId: string | null;
+}> {
+  let attempt = 0;
+
+  while (true) {
+    let response: Response;
+
+    try {
+      response =
+        await fetch(
+          OPENAI_RESPONSES_URL,
+          {
+            method: "POST",
+
+            headers: {
+              Authorization:
+                `Bearer ${apiKey}`,
+
+              "Content-Type":
+                "application/json",
+            },
+
+            signal:
+              controller.signal,
+
+            body:
+              JSON.stringify(
+                requestBody
+              ),
+          }
+        );
+    } catch (error) {
+      if (
+        controller.signal.aborted
+      ) {
+        throw error;
+      }
+
+      if (
+        attempt >= maxRetries
+      ) {
+        throw error;
+      }
+
+      await sleep(
+        getRetryDelayMs(
+          attempt,
+          null
+        )
+      );
+
+      attempt += 1;
+
+      continue;
+    }
+
+    const requestId =
+      cleanString(
+        response.headers.get(
+          "x-request-id"
+        ),
+        200
+      ) ||
+      null;
+
+    const raw =
+      await response.text();
+
+    let body:
+      | OpenAIResponseBody
+      | null = null;
+
+    try {
+      body =
+        JSON.parse(
+          raw
+        ) as OpenAIResponseBody;
+    } catch {
+      body = null;
+    }
+
+    if (
+      !response.ok &&
+      shouldRetryStatus(
+        response.status
+      ) &&
+      attempt < maxRetries
+    ) {
+      const retryAfter =
+        response.headers.get(
+          "retry-after"
+        );
+
+      await sleep(
+        getRetryDelayMs(
+          attempt,
+          retryAfter
+        )
+      );
+
+      attempt += 1;
+
+      continue;
+    }
+
+    if (!response.ok) {
+      throw buildOpenAIError(
+        body,
+        response.status,
+        requestId
+      );
+    }
+
+    if (!body) {
+      throw new AICoreError(
+        "OpenAI returned an invalid JSON response envelope.",
+        {
+          status: 502,
+
+          code:
+            "INVALID_OPENAI_RESPONSE",
+
+          details: {
+            request_id:
+              requestId,
+          },
+        }
+      );
+    }
+
+    return {
+      body,
+      requestId,
+    };
+  }
+}
+
 export async function runAI<
   T = never
 >(
-  options: AIRequestOptions<T>
+  options:
+    AIRequestOptions<T>
 ): Promise<AIResult<T>> {
   const startedAt =
     Date.now();
@@ -769,7 +1031,7 @@ export async function runAI<
     clampInteger(
       options.timeoutMs ??
         DEFAULT_TIMEOUT_MS,
-      1_000,
+      MIN_TIMEOUT_MS,
       MAX_TIMEOUT_MS
     );
 
@@ -781,20 +1043,42 @@ export async function runAI<
       MAX_OUTPUT_TOKENS
     );
 
+  const maxRetries =
+    clampInteger(
+      options.maxRetries ??
+        DEFAULT_MAX_RETRIES,
+      0,
+      MAX_RETRIES
+    );
+
   const input =
     buildInput(
       options.messages
     );
 
-  if (
-    input.length === 0
-  ) {
+  if (input.length === 0) {
     throw new AICoreError(
       "AI request contains no messages.",
       {
         status: 400,
+
         code:
           "EMPTY_AI_INPUT",
+      }
+    );
+  }
+
+  if (
+    options.structuredOutput &&
+    !options.structuredOutput.schema
+  ) {
+    throw new AICoreError(
+      "Structured output requires a JSON schema.",
+      {
+        status: 400,
+
+        code:
+          "MISSING_JSON_SCHEMA",
       }
     );
   }
@@ -802,6 +1086,11 @@ export async function runAI<
   const textConfiguration =
     buildTextConfiguration(
       options.structuredOutput
+    );
+
+  const metadata =
+    sanitizeMetadata(
+      options.metadata
     );
 
   const controller =
@@ -815,98 +1104,57 @@ export async function runAI<
     );
 
   try {
-    const response =
-      await fetch(
-        OPENAI_RESPONSES_URL,
-        {
-          method: "POST",
+    const requestBody:
+      Record<string, unknown> = {
+      model,
 
-          headers: {
-            Authorization:
-              `Bearer ${apiKey}`,
+      input,
 
-            "Content-Type":
-              "application/json",
-          },
+      store:
+        options.store ??
+        false,
 
-          signal:
-            controller.signal,
+      max_output_tokens:
+        maxOutputTokens,
 
-          body:
-            JSON.stringify({
-              model,
+      ...(typeof options.temperature ===
+      "number"
+        ? {
+            temperature:
+              Math.max(
+                0,
+                Math.min(
+                  2,
+                  options.temperature
+                )
+              ),
+          }
+        : {}),
 
-              input,
+      ...(textConfiguration
+        ? {
+            text:
+              textConfiguration,
+          }
+        : {}),
 
-              max_output_tokens:
-                maxOutputTokens,
+      ...(metadata
+        ? {
+            metadata,
+          }
+        : {}),
+    };
 
-              ...(typeof options.temperature ===
-              "number"
-                ? {
-                    temperature:
-                      Math.max(
-                        0,
-                        Math.min(
-                          2,
-                          options.temperature
-                        )
-                      ),
-                  }
-                : {}),
-
-              ...(textConfiguration
-                ? {
-                    text:
-                      textConfiguration,
-                  }
-                : {}),
-
-              ...(options.metadata
-                ? {
-                    metadata:
-                      options.metadata,
-                  }
-                : {}),
-            }),
-        }
+    const {
+      body,
+      requestId,
+    } =
+      await executeRequest(
+        requestBody,
+        apiKey,
+        controller,
+        maxRetries
       );
-
-    const raw =
-      await response.text();
-
-    let body:
-      | OpenAIResponseBody
-      | null = null;
-
-    try {
-      body =
-        JSON.parse(
-          raw
-        ) as
-          OpenAIResponseBody;
-    } catch {
-      body = null;
-    }
-
-    if (!response.ok) {
-      throw buildOpenAIError(
-        body,
-        response.status
-      );
-    }
-
-    if (!body) {
-      throw new AICoreError(
-        "OpenAI returned an invalid JSON response envelope.",
-        {
-          status: 502,
-
-          code:
-            "INVALID_OPENAI_RESPONSE",
-        }
-      );
-    }
 
     const refusal =
       extractRefusal(body);
@@ -919,6 +1167,11 @@ export async function runAI<
 
           code:
             "AI_REFUSAL",
+
+          details: {
+            request_id:
+              requestId,
+          },
         }
       );
     }
@@ -940,6 +1193,11 @@ export async function runAI<
 
           code:
             "OPENAI_RESPONSE_FAILED",
+
+          details: {
+            request_id:
+              requestId,
+          },
         }
       );
     }
@@ -965,14 +1223,20 @@ export async function runAI<
 
           code:
             "OPENAI_RESPONSE_INCOMPLETE",
+
+          details: {
+            request_id:
+              requestId,
+
+            reason:
+              reason || null,
+          },
         }
       );
     }
 
     const text =
-      extractOutputText(
-        body
-      );
+      extractOutputText(body);
 
     if (!text) {
       throw new AICoreError(
@@ -982,6 +1246,11 @@ export async function runAI<
 
           code:
             "EMPTY_OPENAI_OUTPUT",
+
+          details: {
+            request_id:
+              requestId,
+          },
         }
       );
     }
@@ -992,11 +1261,6 @@ export async function runAI<
         options.schema
       );
 
-    /**
-     * When the caller explicitly requested both strict Structured Outputs
-     * and local Zod validation, a validation failure should not silently
-     * fall back to untrusted model text.
-     */
     if (
       options.structuredOutput &&
       options.schema &&
@@ -1011,17 +1275,22 @@ export async function runAI<
             "AI_SCHEMA_VALIDATION_FAILED",
 
           details: {
+            request_id:
+              requestId,
+
             response_id:
               cleanString(
                 body.id,
                 200
-              ) || null,
+              ) ||
+              null,
 
             model:
               cleanString(
                 body.model,
                 120
-              ) || model,
+              ) ||
+              model,
           },
         }
       );
@@ -1051,10 +1320,10 @@ export async function runAI<
         ) ||
         null,
 
+      requestId,
+
       usage:
-        buildUsage(
-          body
-        ),
+        buildUsage(body),
 
       durationMs:
         Date.now() -
@@ -1069,10 +1338,13 @@ export async function runAI<
     }
 
     if (
-      error instanceof
-        Error &&
-      error.name ===
-        "AbortError"
+      error instanceof Error &&
+      (
+        error.name ===
+          "AbortError" ||
+        controller.signal
+          .aborted
+      )
     ) {
       throw new AICoreError(
         `AI request timed out after ${timeoutMs}ms.`,
@@ -1081,6 +1353,11 @@ export async function runAI<
 
           code:
             "AI_TIMEOUT",
+
+          details: {
+            timeout_ms:
+              timeoutMs,
+          },
         }
       );
     }

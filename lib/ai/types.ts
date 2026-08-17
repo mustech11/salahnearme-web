@@ -1,5 +1,31 @@
 import { z } from "zod";
 
+/**
+ * Shared primitive constraints.
+ */
+
+const SHORT_TEXT_MAX = 300;
+const SUMMARY_MAX = 2_500;
+const ACTION_MAX = 2_000;
+const EVIDENCE_MAX = 1_000;
+
+const MAX_RECOMMENDATIONS = 8;
+const MAX_PREDICTIONS = 6;
+const MAX_CAUSES = 8;
+const MAX_CHANGE_ITEMS = 12;
+const MAX_WATCH_ITEMS = 12;
+const MAX_POSITIVE_SIGNALS = 12;
+const MAX_CAUSE_EVIDENCE = 8;
+
+const boundedText = (
+  maxLength: number
+) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(maxLength);
+
 export const OperationsRiskLevelSchema =
   z.enum([
     "none",
@@ -15,28 +41,106 @@ export type OperationsRiskLevel =
   >;
 
 export const OperationsConfidenceSchema =
-  z.number().min(0).max(100);
+  z
+    .number()
+    .finite()
+    .min(0)
+    .max(100);
+
+export const OperationsScoreSchema =
+  z
+    .number()
+    .finite()
+    .min(0)
+    .max(100);
+
+export const OperationsPrioritySchema =
+  z.enum([
+    "monitor",
+    "low",
+    "medium",
+    "high",
+    "urgent",
+  ]);
+
+export type OperationsPriority =
+  z.infer<
+    typeof OperationsPrioritySchema
+  >;
+
+export const OperationsAreaStatusSchema =
+  z.enum([
+    "excellent",
+    "healthy",
+    "attention",
+    "degraded",
+    "critical",
+    "unknown",
+  ]);
+
+export type OperationsAreaStatus =
+  z.infer<
+    typeof OperationsAreaStatusSchema
+  >;
+
+export const OperationsPlatformStatusSchema =
+  z.enum([
+    "excellent",
+    "healthy",
+    "attention",
+    "degraded",
+    "critical",
+  ]);
+
+export type OperationsPlatformStatus =
+  z.infer<
+    typeof OperationsPlatformStatusSchema
+  >;
+
+export const OperationsTrendDirectionSchema =
+  z.enum([
+    "improving",
+    "stable",
+    "increasing",
+    "decreasing",
+    "uncertain",
+  ]);
+
+export type OperationsTrendDirection =
+  z.infer<
+    typeof OperationsTrendDirectionSchema
+  >;
 
 export const OperationsRecommendationSchema =
-  z.object({
-    priority: z.enum([
-      "monitor",
-      "low",
-      "medium",
-      "high",
-      "urgent",
-    ]),
+  z
+    .object({
+      priority:
+        OperationsPrioritySchema,
 
-    title: z.string(),
+      title:
+        boundedText(
+          SHORT_TEXT_MAX
+        ),
 
-    action: z.string(),
+      action:
+        boundedText(
+          ACTION_MAX
+        ),
 
-    reason: z.string(),
+      reason:
+        boundedText(
+          ACTION_MAX
+        ),
 
-    affected_area: z.string(),
+      affected_area:
+        boundedText(
+          160
+        ),
 
-    confidence: OperationsConfidenceSchema,
-  });
+      confidence:
+        OperationsConfidenceSchema,
+    })
+    .strict();
 
 export type OperationsRecommendation =
   z.infer<
@@ -44,25 +148,33 @@ export type OperationsRecommendation =
   >;
 
 export const OperationsPredictionSchema =
-  z.object({
-    metric: z.string(),
+  z
+    .object({
+      metric:
+        boundedText(
+          200
+        ),
 
-    direction: z.enum([
-      "improving",
-      "stable",
-      "increasing",
-      "decreasing",
-      "uncertain",
-    ]),
+      direction:
+        OperationsTrendDirectionSchema,
 
-    summary: z.string(),
+      summary:
+        boundedText(
+          SUMMARY_MAX
+        ),
 
-    projected_risk: OperationsRiskLevelSchema,
+      projected_risk:
+        OperationsRiskLevelSchema,
 
-    confidence: OperationsConfidenceSchema,
+      confidence:
+        OperationsConfidenceSchema,
 
-    horizon: z.string(),
-  });
+      horizon:
+        boundedText(
+          200
+        ),
+    })
+    .strict();
 
 export type OperationsPrediction =
   z.infer<
@@ -70,15 +182,28 @@ export type OperationsPrediction =
   >;
 
 export const OperationsCauseSchema =
-  z.object({
-    cause: z.string(),
+  z
+    .object({
+      cause:
+        boundedText(
+          SUMMARY_MAX
+        ),
 
-    confidence: OperationsConfidenceSchema,
+      confidence:
+        OperationsConfidenceSchema,
 
-    evidence: z.array(
-      z.string()
-    ),
-  });
+      evidence:
+        z
+          .array(
+            boundedText(
+              EVIDENCE_MAX
+            )
+          )
+          .max(
+            MAX_CAUSE_EVIDENCE
+          ),
+    })
+    .strict();
 
 export type OperationsCause =
   z.infer<
@@ -86,101 +211,165 @@ export type OperationsCause =
   >;
 
 export const OperationsAreaAssessmentSchema =
-  z.object({
-    status: z.enum([
-      "excellent",
-      "healthy",
-      "attention",
-      "degraded",
-      "critical",
-      "unknown",
-    ]),
+  z
+    .object({
+      status:
+        OperationsAreaStatusSchema,
 
-    score: z.number().min(0).max(100),
+      score:
+        OperationsScoreSchema,
 
-    summary: z.string(),
-  });
+      summary:
+        boundedText(
+          SUMMARY_MAX
+        ),
+    })
+    .strict();
+
+export type OperationsAreaAssessment =
+  z.infer<
+    typeof OperationsAreaAssessmentSchema
+  >;
 
 export const AIOperationsAssessmentSchema =
-  z.object({
-    executive_summary: z.string(),
+  z
+    .object({
+      executive_summary:
+        boundedText(
+          4_000
+        ),
 
-    platform_status: z.enum([
-      "excellent",
-      "healthy",
-      "attention",
-      "degraded",
-      "critical",
-    ]),
+      platform_status:
+        OperationsPlatformStatusSchema,
 
-    risk_level: OperationsRiskLevelSchema,
+      risk_level:
+        OperationsRiskLevelSchema,
 
-    confidence: OperationsConfidenceSchema,
+      confidence:
+        OperationsConfidenceSchema,
 
-    action_required: z.boolean(),
+      action_required:
+        z.boolean(),
 
-    immediate_action: z.string(),
+      immediate_action:
+        boundedText(
+          ACTION_MAX
+        ),
 
-    infrastructure:
-      OperationsAreaAssessmentSchema,
+      infrastructure:
+        OperationsAreaAssessmentSchema,
 
-    performance:
-      OperationsAreaAssessmentSchema,
+      performance:
+        OperationsAreaAssessmentSchema,
 
-    database:
-      OperationsAreaAssessmentSchema,
+      database:
+        OperationsAreaAssessmentSchema,
 
-    quota:
-      OperationsAreaAssessmentSchema,
+      quota:
+        OperationsAreaAssessmentSchema,
 
-    application:
-      OperationsAreaAssessmentSchema,
+      application:
+        OperationsAreaAssessmentSchema,
 
-    what_changed: z.array(
-      z.string()
-    ),
+      what_changed:
+        z
+          .array(
+            boundedText(
+              SUMMARY_MAX
+            )
+          )
+          .max(
+            MAX_CHANGE_ITEMS
+          ),
 
-    likely_causes: z.array(
-      OperationsCauseSchema
-    ),
+      likely_causes:
+        z
+          .array(
+            OperationsCauseSchema
+          )
+          .max(
+            MAX_CAUSES
+          ),
 
-    recommendations: z.array(
-      OperationsRecommendationSchema
-    ),
+      recommendations:
+        z
+          .array(
+            OperationsRecommendationSchema
+          )
+          .max(
+            MAX_RECOMMENDATIONS
+          ),
 
-    predictions: z.array(
-      OperationsPredictionSchema
-    ),
+      predictions:
+        z
+          .array(
+            OperationsPredictionSchema
+          )
+          .max(
+            MAX_PREDICTIONS
+          ),
 
-    watch_list: z.array(
-      z.string()
-    ),
+      watch_list:
+        z
+          .array(
+            boundedText(
+              SUMMARY_MAX
+            )
+          )
+          .max(
+            MAX_WATCH_ITEMS
+          ),
 
-    positive_signals: z.array(
-      z.string()
-    ),
-  });
+      positive_signals:
+        z
+          .array(
+            boundedText(
+              SUMMARY_MAX
+            )
+          )
+          .max(
+            MAX_POSITIVE_SIGNALS
+          ),
+    })
+    .strict();
 
 export type AIOperationsAssessment =
   z.infer<
     typeof AIOperationsAssessmentSchema
   >;
 
+export type AIOperationsSource =
+  | "openai"
+  | "deterministic_fallback";
+
 export type AIOperationsResult = {
   ok: boolean;
 
   source:
-    | "openai"
-    | "deterministic_fallback";
+    AIOperationsSource;
 
   assessment:
     AIOperationsAssessment;
 
-  model: string | null;
+  model:
+    string | null;
 
-  generated_at: string;
+  generated_at:
+    string;
 
-  response_id: string | null;
+  response_id:
+    string | null;
 
-  error?: string;
+  /**
+   * OpenAI request identifier where available.
+   * Useful when investigating provider-side API errors.
+   */
+  request_id?:
+    string | null;
+
+  duration_ms?:
+    number | null;
+
+  error?:
+    string;
 };
