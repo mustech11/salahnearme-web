@@ -58,34 +58,34 @@ export async function GET() {
       },
 
       environment: {
-        supabase_project_ref:
+        original_supabase_project_ref:
           inspectEnv(
             process.env
               .SUPABASE_PROJECT_REF
           ),
 
-        supabase_management_access_token:
+        test_supabase_project_ref:
+          inspectEnv(
+            process.env
+              .SNM_TEST_PROJECT_REF
+          ),
+
+        original_supabase_management_token:
           inspectEnv(
             process.env
               .SUPABASE_MANAGEMENT_ACCESS_TOKEN
+          ),
+
+        test_supabase_management_token:
+          inspectEnv(
+            process.env
+              .SNM_TEST_MANAGEMENT_TOKEN
           ),
 
         supabase_service_role_key:
           inspectEnv(
             process.env
               .SUPABASE_SERVICE_ROLE_KEY
-          ),
-
-        next_public_supabase_url:
-          inspectEnv(
-            process.env
-              .NEXT_PUBLIC_SUPABASE_URL
-          ),
-
-        next_public_supabase_anon_key:
-          inspectEnv(
-            process.env
-              .NEXT_PUBLIC_SUPABASE_ANON_KEY
           ),
 
         openai_api_key:
