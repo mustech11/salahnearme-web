@@ -5,8 +5,28 @@ import { requireAdmin } from "@/lib/adminAuth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type EnvDiagnostic = {
+  present: boolean;
+  length: number;
+};
+
+function inspectEnv(
+  value: string | undefined
+): EnvDiagnostic {
+  const cleaned =
+    typeof value === "string"
+      ? value.trim()
+      : "";
+
+  return {
+    present: cleaned.length > 0,
+    length: cleaned.length,
+  };
+}
+
 export async function GET() {
-  const permission = await requireAdmin();
+  const permission =
+    await requireAdmin();
 
   if (!permission.ok) {
     return NextResponse.json(
@@ -20,34 +40,65 @@ export async function GET() {
     );
   }
 
-  const projectRef =
-    process.env.SUPABASE_PROJECT_REF?.trim() ?? "";
-
-  const managementToken =
-    process.env.SUPABASE_MANAGEMENT_ACCESS_TOKEN?.trim() ?? "";
-
   return NextResponse.json(
     {
       ok: true,
 
       runtime: {
-        vercel: process.env.VERCEL ?? null,
-        vercel_env: process.env.VERCEL_ENV ?? null,
-        node_env: process.env.NODE_ENV ?? null,
+        vercel:
+          process.env.VERCEL ?? null,
+
+        vercel_env:
+          process.env.VERCEL_ENV ??
+          null,
+
+        node_env:
+          process.env.NODE_ENV ??
+          null,
       },
 
       environment: {
-        project_ref_present:
-          projectRef.length > 0,
+        supabase_project_ref:
+          inspectEnv(
+            process.env
+              .SUPABASE_PROJECT_REF
+          ),
 
-        project_ref_length:
-          projectRef.length,
+        supabase_management_access_token:
+          inspectEnv(
+            process.env
+              .SUPABASE_MANAGEMENT_ACCESS_TOKEN
+          ),
 
-        management_token_present:
-          managementToken.length > 0,
+        supabase_service_role_key:
+          inspectEnv(
+            process.env
+              .SUPABASE_SERVICE_ROLE_KEY
+          ),
 
-        management_token_length:
-          managementToken.length,
+        next_public_supabase_url:
+          inspectEnv(
+            process.env
+              .NEXT_PUBLIC_SUPABASE_URL
+          ),
+
+        next_public_supabase_anon_key:
+          inspectEnv(
+            process.env
+              .NEXT_PUBLIC_SUPABASE_ANON_KEY
+          ),
+
+        openai_api_key:
+          inspectEnv(
+            process.env
+              .OPENAI_API_KEY
+          ),
+
+        cron_secret:
+          inspectEnv(
+            process.env
+              .CRON_SECRET
+          ),
       },
 
       checked_at:
